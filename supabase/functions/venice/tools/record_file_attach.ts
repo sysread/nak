@@ -1,11 +1,12 @@
 // record_file_attach (function-side port)
 //
-// Promote a file the conversation already holds (a user upload OR a
-// generate_image output - both are message_attachments rows) onto a wiki
+// Promote a file the conversation already holds (a user upload OR an
+// image-op output: generate_image, edit_image, upscale_image,
+// remove_background - all are message_attachments rows) onto a wiki
 // record. The model can't upload bytes of its own; it names a file by its
 // filename in the current thread and this copies those bytes into the
-// PERSISTENT wiki-record-files bucket so they outlive the chat
-// attachment's ~30-day expiry. Wire schema lives in
+// PERSISTENT wiki-record-files bucket so they survive the chat
+// attachment's manual-deletion lifecycle. Wire schema lives in
 // src/lib/tools/record_file_attach.schema.ts.
 //
 // Auth: b-strict. The record is ownership-checked (getOwnedRecord), and

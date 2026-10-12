@@ -1,8 +1,8 @@
 // Shared contract for handing a freshly generated image from the
-// generate_image tool up to the orchestrator (getStreamingResponse),
-// which attaches it to the terminal assistant message as a
-// message_attachments row. Mirror of src/lib/tools/generated-image.ts
-// on the function side.
+// generate_image tool (and the image-op tools: edit_image,
+// upscale_image, remove_background) up to the orchestrator
+// (getStreamingResponse), which attaches it to the terminal assistant
+// message as a message_attachments row.
 //
 // Why the indirection rather than returning the base64 in the tool
 // result the model reads: a 1024px webp is roughly 700KB of base64.

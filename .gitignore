@@ -82,8 +82,16 @@ yarn-error.log*
 .mcp.json
 
 # opencode
+# Track .opencode/ contents (commands/, skills/) in the repo like any other
+# source, and ignore only the dependency/vendor files opencode itself writes
+# into the directory. The inner .opencode/.gitignore covers the same files
+# but ignores itself, so these root entries keep them ignored in fresh
+# clones where the inner file does not exist.
 opencode.json
-.opencode/
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json
+.opencode/bun.lock
 
 # agent instructions (cross-tool convention)
 AGENTS.local.md

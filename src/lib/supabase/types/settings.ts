@@ -63,6 +63,15 @@ export interface UserSettings {
    */
   imageModel?: string;
   /**
+   * Venice image-EDIT model the edit_image tool uses, e.g.
+   * 'firered-image-edit'. Absent means fall back to
+   * DEFAULT_EDIT_IMAGE_MODEL. Same shape and consumer pattern as
+   * imageModel above: a bare id read server-side by the edit_image tool
+   * at edit time. The catalog slice is `?type=inpaint` (see
+   * edit-image-catalog.ts).
+   */
+  editImageModel?: string;
+  /**
    * The user's live one-at-a-time activities, keyed by session kind:
    * the grocery shopping trip (`shopping`) and any in-progress
    * recipe cooking sessions (`cooking:<recipe id>`, several may be
@@ -285,6 +294,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (modelProfiles) out.modelProfiles = modelProfiles;
   if (typeof r.imageModel === 'string' && r.imageModel.length > 0) {
     out.imageModel = r.imageModel;
+  }
+  if (typeof r.editImageModel === 'string' && r.editImageModel.length > 0) {
+    out.editImageModel = r.editImageModel;
   }
   // activeSessions is the canonical session-map key. A legacy
   // `groceryShoppingStartedAt` (pre-map blob) seeds the shopping

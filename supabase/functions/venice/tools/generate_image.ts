@@ -1,8 +1,10 @@
-// generate_image (function-side port)
+// generate_image (function-side)
 //
 // One Venice text-to-image generation, handed up to the orchestrator
 // which attaches the result to the assistant's reply as a
-// message_attachments row. Mirror of src/lib/tools/generate_image.ts.
+// message_attachments row. There is no browser-side mirror - the
+// browser ToolDef is schema-only (see the wire schema in
+// src/lib/tools/generate_image.schema.ts); dispatch happens here.
 //
 // The base64 image does NOT go into the model-visible tool result. It
 // rides under GENERATED_IMAGE_RESULT_KEY so the orchestrator can

@@ -19,6 +19,7 @@ import type { AppConfig } from './config';
 import type { ThinkingLevel, Verbosity } from './models';
 import type { CatalogModel } from './models/catalog';
 import type { ImageCatalogModel } from './models/image-catalog';
+import type { EditCatalogModel } from './models/edit-image-catalog';
 import type { ModelPriceCaps } from './models/price-caps';
 import type { SerializableLogEntry } from './logger.svelte';
 import type { OpenAIToolCall } from './tools/types';
@@ -350,6 +351,10 @@ export class SupabaseService {
 
   async fetchImageModels(): Promise<ImageCatalogModel[]> {
     return veniceProxyApi.fetchImageModels(this.client);
+  }
+
+  async fetchEditModels(): Promise<EditCatalogModel[]> {
+    return veniceProxyApi.fetchEditModels(this.client);
   }
 
   async embed(req: EmbeddingRequest): Promise<EmbeddingResponse> {

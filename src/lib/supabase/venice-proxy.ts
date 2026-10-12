@@ -36,6 +36,7 @@ import {
 } from '../venice';
 import { coerceCatalog, type CatalogModel } from '../models/catalog';
 import { coerceImageCatalog, type ImageCatalogModel } from '../models/image-catalog';
+import { coerceEditCatalog, type EditCatalogModel } from '../models/edit-image-catalog';
 import {
   coerceUsageAnalytics,
   coerceKeyUsage,
@@ -216,6 +217,24 @@ export async function fetchImageModels(
   });
   if (error) throw await veniceFunctionError(error);
   return coerceImageCatalog(data);
+}
+
+/**
+ * Fetch the live Venice image-EDIT-model catalog through the same /models
+ * route, passing `type: 'inpaint'` so Venice returns the edit slice
+ * (per-edit pricing + prompt limits + the privacy tier). Coerced into the
+ * flat EditCatalogModel shape the Settings edit-model picker reads; same
+ * degrade-on-malformed-row contract and same VeniceError surface as
+ * fetchImageModels.
+ */
+export async function fetchEditModels(
+  client: SupabaseClient
+): Promise<EditCatalogModel[]> {
+  const { data, error } = await client.functions.invoke('venice/models', {
+    body: { type: 'inpaint' },
+  });
+  if (error) throw await veniceFunctionError(error);
+  return coerceEditCatalog(data);
 }
 
 /**

@@ -83,6 +83,14 @@ describe('coerceSettings', () => {
     expect(coerceSettings({ imageModel: 123 })).toEqual({});
   });
 
+  it('passes through a non-empty editImageModel string and drops bad values', () => {
+    expect(coerceSettings({ editImageModel: 'nano-banana-2-edit' })).toEqual({
+      editImageModel: 'nano-banana-2-edit',
+    });
+    expect(coerceSettings({ editImageModel: '' })).toEqual({});
+    expect(coerceSettings({ editImageModel: 123 })).toEqual({});
+  });
+
   it('tolerates an empty object', () => {
     expect(coerceSettings({})).toEqual({});
   });

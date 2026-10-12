@@ -79,6 +79,19 @@ landing tab move together.
   `persistImageModel`. See
   [generate_image](./tools.md) for the server-side resolution + the
   one-dimension-table size assumption.
+
+  The **Image editing** subsection is the edit-tool twin: it points the
+  `edit_image` tool at a Venice edit model via the same `ImageModelSelect`
+  component, fed from the `?type=inpaint` catalog slice
+  (`edit-image-models-catalog.svelte.ts` + `edit-image-catalog.ts`,
+  coerced to `EditCatalogModel`). Rows add a **privacy badge** - lock =
+  Private (served on Venice infrastructure), mask = Anonymized (proxied
+  to a third party with the prompt body) - because this tool ships the
+  user's own photos. The shared `max_image_usd` cap filters the list
+  (`filterEditCatalogByCap`); picking the built-in default
+  (`DEFAULT_EDIT_IMAGE_MODEL`, `firered-image-edit`) clears the override
+  via `persistEditImageModel`. `upscale_image` and `remove_background`
+  use fixed models and have no picker.
 - **Model profiles** - the user-defined named model configurations
   (`profiles.settings.modelProfiles`, a `ModelProfile[]`). Each card
   is a grip handle + name input + Default radio + delete button, a
@@ -261,12 +274,16 @@ every update) so it's covered here rather than in its own file.
   `coerceImageCatalog`, the defensive flatten of Venice's
   `GET /models?type=image` response (per-image pricing + beta/deprecation,
   no context/reasoning). Pure, unit-tested offline.
-- `src/lib/image-models-catalog.svelte.ts` — reactive cache for the live
-  image-model catalog backing the AI pane's Image generation dropdown.
-  Mirror of `models-catalog.svelte.ts`; exposes `imageCatalog`,
-  `refreshImageCatalog`, `resetImageCatalog`,
-  `shouldAutoRefreshImageCatalog`, `isImageCatalogStale`,
-  `IMAGE_CATALOG_STALE_MS`.
+- `src/lib/models/edit-image-catalog.ts` — `EditCatalogModel` type +
+  `coerceEditCatalog`, the defensive flatten of the `?type=inpaint`
+  slice (per-edit pricing + the privacy tier). Pure, unit-tested
+  offline.
+- `src/lib/edit-image-models-catalog.svelte.ts` — reactive cache for the
+  live edit-model catalog backing the AI pane's Image editing dropdown.
+  Mirror of `image-models-catalog.svelte.ts`; exposes
+  `editImageCatalog`, `refreshEditImageCatalog`, `resetEditImageCatalog`,
+  `shouldAutoRefreshEditImageCatalog`, `isEditImageCatalogStale`, and
+  `EDIT_IMAGE_CATALOG_STALE_MS`.
 - `src/lib/ui/image-model-picker.ts` — pure UI primitives for the Image
   generation picker: `buildImageModelOptions` (structured
   `ImageModelOption` rows - name, price-pill label, badges),
@@ -274,6 +291,12 @@ every update) so it's covered here rather than in its own file.
   name w/ bare-id fallback), and `imageModelOverrideFor` (the
   default-id-to-absence persistence rule). Unit-tested in
   `tests/image-model-picker.test.ts`.
+- `src/lib/ui/edit-image-picker.ts` — the edit-picker twin:
+  `buildEditModelOptions`, `editModelOption` (privacy badge glyphs from
+  the text pickers' `privacyChip`: lock = private, mask = anonymized),
+  `formatEditPrice`, `editImageModelLabel`, and
+  `editImageModelOverrideFor`. Unit-tested in
+  `tests/edit-image-picker.test.ts`.
 - `src/components/ImageModelSelect.svelte` — the custom button + popover
   listbox the Image generation subsection renders (name-left / price-pill-
   right rows). See `./components.md`.

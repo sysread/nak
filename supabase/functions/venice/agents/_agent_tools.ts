@@ -341,7 +341,7 @@ export async function loadThreadAttachmentsNote(
   const lines = ['<thread_attachments>'];
   if (images.length > 0) {
     lines.push(
-      `Live images the user posted: ${images.join(', ')}. You CANNOT see images directly - ` +
+      `Live images posted or produced in this thread: ${images.join(', ')}. You CANNOT see images directly - ` +
         'call analyze_image(filename, query) to learn what one shows before deciding it ' +
         'documents a record, then record_file_attach(record_id, filename) to hang it on the record.',
     );

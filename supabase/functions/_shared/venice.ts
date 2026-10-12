@@ -430,6 +430,268 @@ export async function veniceGenerateImage(
   return { imageBase64: first, mimeType: `image/${format}` };
 }
 
+// --- Image editing ----------------------------------------------------------
+//
+// Three helpers against Venice's image-edit family. Unlike /image/generate,
+// these endpoints return the image as RAW BYTES (the Content-Type header
+// carries the format, there is no JSON envelope and no return_binary flag),
+// so each returns base64 ready to drop into the __generated_image payload.
+//
+// Wall-clock bound: every helper composes its own per-attempt timer (~180s)
+// with the caller's abort signal. A hung upstream then degrades to a clean
+// timeout error instead of eating the turn's 380s wall deadline
+// (getStreamingResponse.ts WALL_DEADLINE_MS) - the same house pattern as the
+// vision sub-calls in venice/tools/_vision.ts. 180s covers the slowest
+// legitimate image op (a 4x upscale) with headroom.
+const IMAGE_OP_TIMEOUT_MS = 180_000;
+
+/**
+ * Compose the helper's own timeout with an optional caller signal. The
+ * caller signal (ctx.signal, the turn's abort path) forwards to the
+ * controller; the timer aborts independently. Returns the controller's
+ * signal plus a cleanup the caller MUST run in a finally block so the
+ * timer never holds the isolate awake.
+ */
+function imageOpSignal(signal?: AbortSignal): {
+  ctl: AbortController;
+  cleanup: () => void;
+} {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), IMAGE_OP_TIMEOUT_MS);
+  const forward = () => ctl.abort();
+  signal?.addEventListener('abort', forward, { once: true });
+  return {
+    ctl,
+    cleanup: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', forward);
+    },
+  };
+}
+
+/**
+ * Shared response handling for the three edit-family endpoints: non-OK
+ * mapping (422 content policy, 429 rate limit, everything else http) and
+ * binary-to-base64 conversion. Venice can also flag a content violation
+ * via header on a 200 like /image/generate does - undocumented for these
+ * endpoints, checked defensively since the check is free.
+ */
+async function imageOpResponseToBase64(
+  res: Response,
+  endpoint: string
+): Promise<{ imageBase64: string; mimeType: string }> {
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    // 422 is a content-policy rejection ("Your prompt violates the content
+    // policy of Venice.ai or the model provider"). A distinct message the
+    // model can relay; not charged unless Venice's own moderation blocked
+    // the image after the provider generated it.
+    if (res.status === 422) {
+      throw new VeniceError(
+        'Venice rejected the image operation for a content-policy violation. ' +
+          'Rephrase the request or tell the user it was not allowed.',
+        'http',
+        422
+      );
+    }
+    throw new VeniceError(
+      `Venice ${endpoint} ${res.status}: ${body.slice(0, 200)}`,
+      res.status === 429 ? 'rate_limit' : 'http',
+      res.status
+    );
+  }
+  if (res.headers.get('x-venice-is-content-violation') === 'true') {
+    throw new VeniceError(
+      'Venice rejected the image operation for a content-policy violation. ' +
+        'Rephrase the request or tell the user it was not allowed.',
+      'http',
+      res.status
+    );
+  }
+
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.length === 0) {
+    throw new VeniceError(
+      `Venice ${endpoint} response contained no image data.`,
+      'parse'
+    );
+  }
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return {
+    imageBase64: btoa(binary),
+    // Detected from the output bytes by the endpoint; fall back to png,
+    // the response format of the fixed-model endpoints.
+    mimeType: res.headers.get('Content-Type')?.split(';')[0] ?? 'image/png',
+  };
+}
+
+export interface VeniceEditImageOptions {
+  apiKey: string;
+  /** Model id from the ?type=inpaint catalog. */
+  model: string;
+  /** Short, specific edit instruction. */
+  prompt: string;
+  /**
+   * The source image: raw base64 or a data URI (Venice accepts both here;
+   * URLs are also allowed but the function always inlines - the same
+   * environmental reasoning as attachmentObjectAsDataUrl).
+   */
+  image: string;
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+}
+
+/**
+ * POST /image/edit against Venice: prompt-driven edit of one image. Wire
+ * shape per the vendored venice-image-edit skill (2026-10): `model` (NOT
+ * `modelId` - that is the deprecated alias and multi-edit's field name),
+ * `prompt`, `image`; only fields the caller supplied are forwarded. Aspect
+ * ratio is deliberately omitted - Venice infers it from the input image,
+ * which is what the tool wants. Strict-body endpoint: an unknown field is a
+ * 400, so nothing speculative goes on the wire.
+ */
+export async function veniceEditImage(
+  opts: VeniceEditImageOptions
+): Promise<{ imageBase64: string; mimeType: string }> {
+  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const { ctl, cleanup } = imageOpSignal(opts.signal);
+
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    prompt: opts.prompt,
+    image: opts.image,
+    // Smaller attachments than the endpoint's PNG default (which can run
+    // ~1MB at 1024px); webp renders everywhere the app targets.
+    output_format: 'webp',
+    safe_mode: true,
+  };
+
+  let res: Response;
+  try {
+    res = await fetchImpl(`${baseUrl}/image/edit`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${opts.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+  } catch (err) {
+    throw new VeniceError(
+      `Network error contacting Venice: ${(err as Error).message}`,
+      'network'
+    );
+  } finally {
+    cleanup();
+  }
+  return imageOpResponseToBase64(res, 'image/edit');
+}
+
+export interface VeniceUpscaleImageOptions {
+  apiKey: string;
+  /**
+   * The source image as RAW base64 - no `data:` prefix. The upscale
+   * endpoint is the one edit-family route that rejects data URIs.
+   */
+  image: string;
+  /** 2-4. Venice auto-reduces past its 16MP output cap. */
+  scale: number;
+  /** 0-0.02 detail/texture budget; Venice clamps further. */
+  creativity?: number;
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+}
+
+/**
+ * POST /image/upscale against Venice with the fixed `upscaler` model (no
+ * `model` field exists on this endpoint). Response is PNG bytes, always.
+ */
+export async function veniceUpscaleImage(
+  opts: VeniceUpscaleImageOptions
+): Promise<{ imageBase64: string; mimeType: string }> {
+  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const { ctl, cleanup } = imageOpSignal(opts.signal);
+
+  const body: Record<string, unknown> = {
+    image: opts.image,
+    scale: opts.scale,
+  };
+  if (typeof opts.creativity === 'number') body.creativity = opts.creativity;
+
+  let res: Response;
+  try {
+    res = await fetchImpl(`${baseUrl}/image/upscale`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${opts.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+  } catch (err) {
+    throw new VeniceError(
+      `Network error contacting Venice: ${(err as Error).message}`,
+      'network'
+    );
+  } finally {
+    cleanup();
+  }
+  return imageOpResponseToBase64(res, 'image/upscale');
+}
+
+export interface VeniceRemoveBackgroundOptions {
+  apiKey: string;
+  /** Raw base64 or a data URI. (URLs are accepted too; we always inline.) */
+  image: string;
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+}
+
+/**
+ * POST /image/background-remove against Venice with the fixed
+ * `bria-bg-remover` model. Response is PNG bytes with an alpha channel.
+ * Unlike upscale, this endpoint accepts data URIs; we forward whatever the
+ * caller built.
+ */
+export async function veniceRemoveBackground(
+  opts: VeniceRemoveBackgroundOptions
+): Promise<{ imageBase64: string; mimeType: string }> {
+  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const { ctl, cleanup } = imageOpSignal(opts.signal);
+
+  let res: Response;
+  try {
+    res = await fetchImpl(`${baseUrl}/image/background-remove`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${opts.apiKey}`,
+      },
+      body: JSON.stringify({ image: opts.image }),
+      signal: ctl.signal,
+    });
+  } catch (err) {
+    throw new VeniceError(
+      `Network error contacting Venice: ${(err as Error).message}`,
+      'network'
+    );
+  } finally {
+    cleanup();
+  }
+  return imageOpResponseToBase64(res, 'image/background-remove');
+}
+
 export interface VeniceExtractTextOptions {
   apiKey: string;
   file: Blob;
@@ -774,8 +1036,8 @@ export async function veniceFetchKeyUsage(
   return selectKeyUsage(payload, opts.apiKey.slice(-6));
 }
 
-/** Venice `/models?type=` filters nak offers a picker for. */
-export type VeniceModelType = 'text' | 'image';
+/** Venice `/models?type=` filters nak offers a picker or a price cap for. */
+export type VeniceModelType = 'text' | 'image' | 'inpaint' | 'upscale';
 
 export interface VeniceModelsOptions {
   apiKey: string;

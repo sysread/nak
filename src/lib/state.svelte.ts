@@ -23,6 +23,7 @@ export {
   setTheme,
   persistModelProfiles,
   persistImageModel,
+  persistEditImageModel,
   persistDefaultLogLevel,
   persistEmphasisMarkdown,
   persistNotifyOnComplete,

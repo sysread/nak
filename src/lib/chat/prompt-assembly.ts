@@ -83,8 +83,11 @@ export function buildThreadAttachmentsBlock(
   // De-duplicate by filename within each bucket so a re-attached file
   // appears once. Sorted by created_at ascending in the supabase query,
   // so the last write wins on category collisions (e.g. live then later
-  // expired - we trust expired_at on the most recent row).
-  const liveImages = new Map<string, true>();
+  // expired - we trust expired_at on the most recent row). liveImages
+  // carries the winning row's role: only user-posted images ride inline
+  // into the turn (toVeniceMessage inlines user rows), so a vision model
+  // must be told which images it can actually see.
+  const liveImages = new Map<string, 'user' | 'assistant'>();
   const liveDocs = new Map<string, true>();
   // Documents with rasterized pages, mapped to the document's page count so
   // the block can name it. Tracked separately from liveDocs because these
@@ -104,7 +107,7 @@ export function buildThreadAttachmentsBlock(
       expired.delete(s.filename);
       liveDocs.delete(s.filename);
       viewableDocs.delete(s.filename);
-      liveImages.set(s.filename, true);
+      liveImages.set(s.filename, s.posted_by);
     } else {
       expired.delete(s.filename);
       liveImages.delete(s.filename);
@@ -117,14 +120,33 @@ export function buildThreadAttachmentsBlock(
     }
   }
 
+  // Split the live images by who posted them. The distinction exists for
+  // vision models: an assistant-minted image (generate_image, edit_image,
+  // upscale_image, remove_background output) hangs on an earlier reply and
+  // is never inlined into the turn, so telling the model it is "directly
+  // visible" would push it to fabricate edits from the filename instead of
+  // calling analyze_image first.
+  const userImages: string[] = [];
+  const assistantImages: string[] = [];
+  for (const [filename, poster] of liveImages) {
+    (poster === 'user' ? userImages : assistantImages).push(filename);
+  }
+
   const lines: string[] = ['<thread_attachments>'];
-  if (liveImages.size > 0) {
+  if (userImages.length > 0) {
     lines.push(
       modelSupportsVision
-        ? `Live images: ${[...liveImages.keys()].join(', ')}. These are inlined in the ` +
+        ? `Live images: ${userImages.join(', ')}. These are inlined in the ` +
           'conversation and directly visible to you - answer from what you see. Call ' +
           'analyze_image(filename, query) only if you cannot actually see one of them.'
-        : `Live images: ${[...liveImages.keys()].join(', ')}. Call analyze_image(filename, query) to inspect any of them.`
+        : `Live images: ${userImages.join(', ')}. Call analyze_image(filename, query) to inspect any of them.`
+    );
+  }
+  if (assistantImages.length > 0) {
+    lines.push(
+      `Images produced by you in earlier replies: ${assistantImages.join(', ')}. ` +
+        'These are attached to earlier assistant messages and are NOT visible inline. ' +
+        'Call analyze_image(filename, query) to look at one before describing or editing it.'
     );
   }
   if (liveDocs.size > 0) {

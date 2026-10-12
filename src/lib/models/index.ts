@@ -671,6 +671,16 @@ export const VENICE_EMBEDDING_MODEL = 'gte-small';
 export const VENICE_DEFAULT_IMAGE_MODEL = 'venice-sd35';
 
 /**
+ * Default image-EDIT model for the edit_image tool. Same shape as
+ * VENICE_DEFAULT_IMAGE_MODEL above: the user's choice lives in
+ * `profiles.settings.editImageModel`, the server-side tool falls back to
+ * this id, and the edge tool keeps its own mirrored copy (it can't import
+ * from src/lib) - keep the two in sync. Created atomically with the edge
+ * copy per the mirror pattern's one historical failure mode.
+ */
+export const DEFAULT_EDIT_IMAGE_MODEL = 'firered-image-edit';
+
+/**
  * Native output dimension of VENICE_EMBEDDING_MODEL - the length of each
  * `embedding` array returned by the edge function's /embed route.
  * gte-small emits 384.

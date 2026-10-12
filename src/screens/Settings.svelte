@@ -67,6 +67,7 @@
     activate,
     persistModelProfiles,
     persistImageModel,
+    persistEditImageModel,
     persistDefaultLogLevel,
     persistEmphasisMarkdown,
     persistNotifyOnComplete,
@@ -92,6 +93,7 @@
     VERBOSITIES,
     VERBOSITY_LABELS,
     VENICE_DEFAULT_IMAGE_MODEL,
+    DEFAULT_EDIT_IMAGE_MODEL,
     type ModelProfile,
     type ThinkingLevel,
     type Verbosity,
@@ -103,6 +105,11 @@
     imageModelLabel,
     imageModelOverrideFor,
   } from '$lib/ui/image-model-picker';
+  import {
+    buildEditModelOptions,
+    editImageModelLabel,
+    editImageModelOverrideFor,
+  } from '$lib/ui/edit-image-picker';
   import {
     aboutActionLabel,
     authPasswordError,
@@ -124,7 +131,16 @@
     shouldAutoRefreshImageCatalog,
     refreshImageCatalog,
   } from '$lib/image-models-catalog.svelte';
-  import { filterCatalogByCaps, filterImageCatalogByCap } from '$lib/models/price-caps';
+  import {
+    editImageCatalog,
+    shouldAutoRefreshEditImageCatalog,
+    refreshEditImageCatalog,
+  } from '$lib/edit-image-models-catalog.svelte';
+  import {
+    filterCatalogByCaps,
+    filterImageCatalogByCap,
+    filterEditCatalogByCap,
+  } from '$lib/models/price-caps';
   import type { SystemPrompt, McpIntegration } from '$lib/supabase';
   import * as prompts from '$lib/ui/prompts';
   import {
@@ -296,6 +312,9 @@
   // built-in default when unset. Drives the picker's selected value and
   // the synthetic "current" option when the id isn't in the live catalog.
   const effectiveImageModel = $derived(app.imageModel ?? VENICE_DEFAULT_IMAGE_MODEL);
+
+  // Effective image-EDIT model: same shape as the generation picker above.
+  const effectiveEditImageModel = $derived(app.editImageModel ?? DEFAULT_EDIT_IMAGE_MODEL);
 
   // --- Wiki pane ---
   // Toggle for the autonomous wiki agent. The toggle pushes through
@@ -857,12 +876,19 @@
   );
 
   // Same treatment for the image-generation picker, against the per-image
-  // cap (app.priceCaps.maxImageUsd).
+  // cap (app.priceCaps.maxImageUsd) - and for the edit-model picker,
+  // which shares the cap ("max USD per image op").
   const visibleImageModels = $derived(
     filterImageCatalogByCap(imageCatalog.data ?? [], app.priceCaps)
   );
   const hiddenImageModelNote = $derived(
     priceCapHiddenNote((imageCatalog.data?.length ?? 0) - visibleImageModels.length)
+  );
+  const visibleEditModels = $derived(
+    filterEditCatalogByCap(editImageCatalog.data ?? [], app.priceCaps)
+  );
+  const hiddenEditModelNote = $derived(
+    priceCapHiddenNote((editImageCatalog.data?.length ?? 0) - visibleEditModels.length)
   );
 
   const usageData = $derived(
@@ -921,10 +947,17 @@
   // Same lazy-on-open fetch for the image-model catalog, which backs the
   // Image generation picker. Separate from the text catalog above because
   // Venice serves the two slices independently (different model_spec
-  // shapes); same stale/in-flight/error guard.
+  // shapes); same stale/in-flight/error guard. The edit-model catalog
+  // gets the same treatment against the ?type=inpaint slice.
   $effect(() => {
     if (group === 'ai' && shouldAutoRefreshImageCatalog() && app.supabase) {
       void refreshImageCatalog(app.supabase);
+    }
+  });
+
+  $effect(() => {
+    if (group === 'ai' && shouldAutoRefreshEditImageCatalog() && app.supabase) {
+      void refreshEditImageCatalog(app.supabase);
     }
   });
 
@@ -1318,6 +1351,19 @@
       await persistImageModel(imageModelOverrideFor(modelId));
       const label = imageModelLabel(imageCatalog.data ?? [], modelId);
       modelInfo = `Image generation now uses ${label}.`;
+    } catch (err) {
+      modelError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // Image-EDIT model: same shape as the generation pick above.
+  async function onPickEditImageModel(modelId: string): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    try {
+      await persistEditImageModel(editImageModelOverrideFor(modelId));
+      const label = editImageModelLabel(editImageCatalog.data ?? [], modelId);
+      modelInfo = `Image edits now use ${label}.`;
     } catch (err) {
       modelError = err instanceof Error ? err.message : String(err);
     }
@@ -1823,6 +1869,43 @@
         {/if}
         {#if hiddenImageModelNote}
           <p class="subtle">{hiddenImageModelNote}</p>
+        {/if}
+
+        <h3 class="pane-section">Image editing</h3>
+        <p class="subtle">
+          The model the assistant uses when you ask it to
+          <strong>edit an existing picture</strong> - change something in
+          a photo, upscale it, or cut the subject out. The
+          <strong>price</strong> is per edit. The badge on each row tells
+          you where the image goes: <strong>lock = Private</strong> stays
+          on Venice's infrastructure, <strong>mask = Anonymized</strong>
+          is proxied to a third-party provider with the instruction
+          attached.
+        </p>
+        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+          <ImageModelSelect
+            options={buildEditModelOptions(visibleEditModels, effectiveEditImageModel)}
+            value={effectiveEditImageModel}
+            disabled={editImageCatalog.data === null}
+            ariaLabel="Image editing model"
+            onSelect={onPickEditImageModel}
+          />
+        </div>
+        {#if editImageCatalog.loading}
+          <p class="subtle">Loading edit models from Venice…</p>
+        {/if}
+        {#if editImageCatalog.error}
+          <p class="error">
+            Couldn't load the edit-model catalog: {editImageCatalog.error}
+            <button
+              type="button"
+              class="tier-reset"
+              onclick={() => app.supabase && refreshEditImageCatalog(app.supabase)}
+            >Retry</button>
+          </p>
+        {/if}
+        {#if hiddenEditModelNote}
+          <p class="subtle">{hiddenEditModelNote}</p>
         {/if}
 
         <h3 class="pane-section">Emphasis markdown</h3>

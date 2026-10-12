@@ -13,6 +13,8 @@ import {
   filterCatalogByCaps,
   isImageModelOverCap,
   filterImageCatalogByCap,
+  isEditModelOverCap,
+  filterEditCatalogByCap,
   NO_PRICE_CAPS,
 } from '../src/lib/models/price-caps';
 
@@ -133,5 +135,28 @@ describe('image cap', () => {
       'img-cheap',
       'img-spendy',
     ]);
+  });
+});
+
+describe('edit cap', () => {
+  // Same ceiling as generation ("max USD per image op"); the edit rows
+  // price per edit instead of per image.
+  const caps = { maxInputUsdPerM: null, maxOutputUsdPerM: null, maxImageUsd: 0.1 };
+  const editCatalog = [
+    { id: 'edit-cheap', name: 'cheap', usdPerEdit: 0.04, privacy: 'private', beta: false, deprecated: false },
+    { id: 'edit-spendy', name: 'spendy', usdPerEdit: 0.34, privacy: 'anonymized', beta: false, deprecated: false },
+  ] as const;
+
+  it('isEditModelOverCap flags only a priced model over the cap', () => {
+    expect(isEditModelOverCap({ usdPerEdit: 0.04 }, caps)).toBe(false);
+    expect(isEditModelOverCap({ usdPerEdit: 0.34 }, caps)).toBe(true);
+    expect(isEditModelOverCap({ usdPerEdit: 0.1 }, caps)).toBe(false);
+  });
+
+  it('filterEditCatalogByCap drops over-cap models, no-op when uncapped', () => {
+    expect(filterEditCatalogByCap(editCatalog as never, caps).map((m) => m.id)).toEqual([
+      'edit-cheap',
+    ]);
+    expect(filterEditCatalogByCap(editCatalog as never, NO_PRICE_CAPS)).toHaveLength(2);
   });
 });

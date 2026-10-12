@@ -6,12 +6,16 @@
 import { assertEquals, assertRejects } from '@std/assert';
 import {
   __test,
+  assertEditModelWithinCap,
   assertImageModelWithinCap,
   assertModelWithinCap,
+  assertUpscaleModelWithinCap,
   capsConfigured,
   coercePriceCaps,
   extractImageModelPrices,
+  extractInpaintModelPrices,
   extractModelPrices,
+  extractUpscalePrices,
   overCapReason,
 } from '../_shared/price-cap.ts';
 import { VeniceError } from '../_shared/venice.ts';
@@ -252,4 +256,148 @@ Deno.test('assertImageModelWithinCap throws 403 over cap, allows within / unpric
     fetchImpl,
   });
   assertEquals(fetched, false);
+});
+
+// --- Image-edit cap checks (M2 of the image-editing plan) ------------------
+
+// Venice /models?type=inpaint envelope: flat per-edit pricing on every
+// live edit model (verified 2026-10-12), plus an unpriced straggler.
+const INPAINT_CATALOG = {
+  object: 'list',
+  type: 'inpaint',
+  data: [
+    { id: 'edit-cheap', model_spec: { pricing: { inpaint: { usd: 0.04 } } } },
+    { id: 'edit-spendy', model_spec: { pricing: { inpaint: { usd: 0.34 } } } },
+    { id: 'edit-unpriced', model_spec: { pricing: {} } },
+  ],
+};
+
+// Venice /models?type=upscale envelope: the fixed upscaler with tiered
+// pricing (2x $0.02 / 4x $0.08, live-probed 2026-10-12).
+const UPSCALE_CATALOG = {
+  object: 'list',
+  type: 'upscale',
+  data: [
+    {
+      id: 'upscaler',
+      model_spec: {
+        pricing: { upscale: { '2x': { usd: 0.02 }, '4x': { usd: 0.08 } } },
+      },
+    },
+  ],
+};
+
+Deno.test('extractInpaintModelPrices reads per-edit USD from pricing.inpaint', () => {
+  const prices = extractInpaintModelPrices(INPAINT_CATALOG);
+  assertEquals(prices.get('edit-cheap'), 0.04);
+  assertEquals(prices.get('edit-spendy'), 0.34);
+  assertEquals(prices.get('edit-unpriced'), null);
+});
+
+Deno.test('extractUpscalePrices reads the 2x/4x tiers off the upscaler row', () => {
+  const prices = extractUpscalePrices(UPSCALE_CATALOG);
+  assertEquals(prices.get(2), 0.02);
+  assertEquals(prices.get(4), 0.08);
+  // Missing a tier just leaves it unmapped (the consumer fails open).
+  assertEquals(
+    extractUpscalePrices({ data: [{ id: 'upscaler', model_spec: { pricing: { upscale: { '2x': { usd: 0.02 } } } } }] }).get(4),
+    undefined,
+  );
+});
+
+Deno.test('assertEditModelWithinCap throws 403 over cap, allows within / unpriced / uncapped', async () => {
+  const caps = { maxInputUsdPerM: null, maxOutputUsdPerM: null, maxImageUsd: 0.1 };
+  __test.resetCache();
+  const err = await assertRejects(
+    () =>
+      assertEditModelWithinCap({
+        model: 'edit-spendy',
+        apiKey: 'k',
+        caps,
+        fetchImpl: fetchReturning(INPAINT_CATALOG),
+      }),
+    VeniceError,
+  );
+  assertEquals(err.status, 403);
+
+  __test.resetCache();
+  await assertEditModelWithinCap({
+    model: 'edit-cheap',
+    apiKey: 'k',
+    caps,
+    fetchImpl: fetchReturning(INPAINT_CATALOG),
+  });
+
+  __test.resetCache();
+  // Unpriced edit model can't breach.
+  await assertEditModelWithinCap({
+    model: 'edit-unpriced',
+    apiKey: 'k',
+    caps,
+    fetchImpl: fetchReturning(INPAINT_CATALOG),
+  });
+
+  // No image cap -> inert (never fetches).
+  let fetched = false;
+  const fetchImpl = (() => {
+    fetched = true;
+    return Promise.resolve(new Response('{}'));
+  }) as typeof fetch;
+  await assertEditModelWithinCap({
+    model: 'edit-spendy',
+    apiKey: 'k',
+    caps: { maxInputUsdPerM: null, maxOutputUsdPerM: null, maxImageUsd: null },
+    fetchImpl,
+  });
+  assertEquals(fetched, false);
+
+  // Catalog hiccup -> fail open.
+  __test.resetCache();
+  await assertEditModelWithinCap({
+    model: 'edit-spendy',
+    apiKey: 'k',
+    caps,
+    fetchImpl: fetchThrowing(),
+  });
+});
+
+Deno.test('assertUpscaleModelWithinCap bills by tier: 2x at the 2x rate, 3x+ at 4x', async () => {
+  const caps = { maxInputUsdPerM: null, maxOutputUsdPerM: null, maxImageUsd: 0.05 };
+  __test.resetCache();
+  // 2x at $0.02 passes a $0.05 cap.
+  await assertUpscaleModelWithinCap({ scale: 2, apiKey: 'k', caps, fetchImpl: fetchReturning(UPSCALE_CATALOG) });
+
+  __test.resetCache();
+  // 3x bills at the 4x rate ($0.08) -> over the cap.
+  const err = await assertRejects(
+    () => assertUpscaleModelWithinCap({ scale: 3, apiKey: 'k', caps, fetchImpl: fetchReturning(UPSCALE_CATALOG) }),
+    VeniceError,
+  );
+  assertEquals(err.status, 403);
+
+  __test.resetCache();
+  // 4x at $0.08 -> over the cap.
+  const err4 = await assertRejects(
+    () => assertUpscaleModelWithinCap({ scale: 4, apiKey: 'k', caps, fetchImpl: fetchReturning(UPSCALE_CATALOG) }),
+    VeniceError,
+  );
+  assertEquals(err4.status, 403);
+
+  __test.resetCache();
+  // No cap -> inert.
+  await assertUpscaleModelWithinCap({
+    scale: 4,
+    apiKey: 'k',
+    caps: { maxInputUsdPerM: null, maxOutputUsdPerM: null, maxImageUsd: null },
+    fetchImpl: fetchReturning(UPSCALE_CATALOG),
+  });
+
+  __test.resetCache();
+  // Catalog hiccup -> fail open.
+  await assertUpscaleModelWithinCap({
+    scale: 4,
+    apiKey: 'k',
+    caps,
+    fetchImpl: fetchThrowing(),
+  });
 });

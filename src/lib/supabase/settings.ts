@@ -155,6 +155,19 @@ export async function updateSettings(
       toRemove.push('imageModel');
     }
   }
+  if ('editImageModel' in patch) {
+    // Same contract as imageModel: non-empty string sets the override;
+    // undefined / empty clears it so the server falls back to
+    // DEFAULT_EDIT_IMAGE_MODEL.
+    if (
+      typeof patch.editImageModel === 'string' &&
+      patch.editImageModel.length > 0
+    ) {
+      toSet.editImageModel = patch.editImageModel;
+    } else {
+      toRemove.push('editImageModel');
+    }
+  }
   if ('activeSessions' in patch) {
     if (patch.activeSessions === undefined) {
       toRemove.push('activeSessions');

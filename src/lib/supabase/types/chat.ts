@@ -285,6 +285,13 @@ export interface ThreadAttachmentSummary {
   page_count: number | null;
   /** Insert timestamp, used by the block formatter for stable ordering. */
   created_at: string;
+  /**
+   * Which message role the attachment hangs on: 'user' for uploads and
+   * 'assistant' for image-tool outputs. The block formatter uses it to
+   * split what the model can see inline (user rows only - see
+   * toVeniceMessage in prompt-assembly) from what needs analyze_image.
+   */
+  posted_by: 'user' | 'assistant';
 }
 
 export interface Message {

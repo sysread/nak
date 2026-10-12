@@ -438,7 +438,7 @@ export async function listAttachmentSummariesForThread(
   const { data, error } = await client
     .from('message_attachments')
     .select(
-      'filename, mime_type, expired_at, page_count, created_at, messages!inner(thread_id)'
+      'filename, mime_type, expired_at, page_count, created_at, messages!inner(thread_id, role)'
     )
     .eq('messages.thread_id', threadId)
     .order('created_at', { ascending: true });
@@ -449,6 +449,9 @@ export async function listAttachmentSummariesForThread(
     expired_at: string | null;
     page_count: number | null;
     created_at: string;
+    // PostgREST embeds the related messages row(s) as an array even
+    // through the !inner join - there is exactly one, the parent.
+    messages: Array<{ role: string }>;
   }>).map((row) => ({
     filename: row.filename,
     mime_type: row.mime_type,
@@ -460,6 +463,11 @@ export async function listAttachmentSummariesForThread(
     // analyze_pdf_page on a document whose bytes are gone.
     page_count: row.expired_at !== null ? null : row.page_count,
     created_at: row.created_at,
+    // Role of the message the attachment hangs on. The block uses this to
+    // tell the model which images it can actually see: user-posted ones
+    // ride inline into the turn, assistant-minted ones (generate_image /
+    // edit_image / upscale_image / remove_background outputs) do not.
+    posted_by: row.messages?.[0]?.role === 'user' ? 'user' : 'assistant',
   }));
 }
 

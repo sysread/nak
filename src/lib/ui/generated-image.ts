@@ -79,7 +79,23 @@ export function aspectRatioCss(width: number, height: number): string {
 
 /**
  * Walk an assistant tool-group row's tool_calls and emit one
- * descriptor per successful generate_image call. A call with no
+/**
+ * The image tools whose dedicated card resolves by filename: the creator
+ * plus the three editors. Every image-op tool attaches server-side via
+ * the same __generated_image contract, so all four render through this
+ * card; the per-tool name lives here and in
+ * src/components/GeneratedImageCard.svelte's doc.
+ */
+export const IMAGE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  GENERATE_IMAGE_TOOL_NAME,
+  'edit_image',
+  'upscale_image',
+  'remove_background',
+]);
+
+/**
+ * Emit one image-card descriptor per successful image-op call. A call
+ * with no
  * result row yet, or a failed/unparseable result, is skipped - the
  * card appears once the descriptor is known (filename + dims), which
  * is exactly when the tool-result row lands. Order follows the
@@ -92,7 +108,7 @@ export function generatedImagesForGroup(
 ): GeneratedImageDescriptor[] {
   const out: GeneratedImageDescriptor[] = [];
   for (const call of calls) {
-    if (call.function.name !== GENERATE_IMAGE_TOOL_NAME) continue;
+    if (!IMAGE_TOOL_NAMES.has(call.function.name)) continue;
     const result = resultsByCallId[call.id];
     if (!result) continue;
     const parsed = parseGeneratedImageResult(result.content);

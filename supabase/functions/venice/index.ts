@@ -426,7 +426,9 @@ async function handleModels(req: Request): Promise<Response> {
   let type: VeniceModelType = 'text';
   try {
     const body = (await req.json()) as { type?: unknown };
-    if (body?.type === 'image') type = 'image';
+    if (body?.type === 'image' || body?.type === 'inpaint' || body?.type === 'upscale') {
+      type = body.type;
+    }
   } catch {
     // No JSON body posted; keep the 'text' default.
   }

@@ -40,6 +40,13 @@ function setImageModel(modelId: string | undefined): void {
   app.imageModel = modelId && modelId.length > 0 ? modelId : undefined;
 }
 
+// Same contract as setImageModel, for the edit-model picker: empty
+// string / undefined is "not set" - the server falls back to
+// DEFAULT_EDIT_IMAGE_MODEL.
+function setEditImageModel(modelId: string | undefined): void {
+  app.editImageModel = modelId && modelId.length > 0 ? modelId : undefined;
+}
+
 /**
  * Apply the project-global price caps in memory. Exported (unlike the
  * other `set*` helpers) because there is no `persist*` counterpart: the
@@ -253,6 +260,23 @@ export async function persistImageModel(modelId: string | undefined): Promise<vo
     await app.supabase.updateSettings({ imageModel: modelId });
   } catch (err) {
     setImageModel(prev);
+    throw err;
+  }
+}
+
+/**
+ * Persist the image-EDIT model id. Same shape as persistImageModel: a
+ * bare string (or undefined to clear), since the server-side edit_image
+ * tool needs only the id. Optimistic with rollback.
+ */
+export async function persistEditImageModel(modelId: string | undefined): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.editImageModel;
+  setEditImageModel(modelId);
+  try {
+    await app.supabase.updateSettings({ editImageModel: modelId });
+  } catch (err) {
+    setEditImageModel(prev);
     throw err;
   }
 }
@@ -475,6 +499,7 @@ export function applyServerSettings(s: UserSettings): void {
   setModelProfiles(s.modelProfiles ?? seedModelProfiles());
   // Always assign so clearing the override on another tab drops it here too.
   setImageModel(s.imageModel);
+  setEditImageModel(s.editImageModel);
   if (s.defaultLogLevel) setDefaultLogLevel(s.defaultLogLevel);
   // Boolean toggles default to false in the seed; `?? false` makes
   // an absent key explicitly false rather than passing `undefined`

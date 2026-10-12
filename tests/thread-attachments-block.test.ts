@@ -19,6 +19,7 @@ function summary(over: Partial<ThreadAttachmentSummary> = {}): ThreadAttachmentS
     expired: false,
     page_count: null,
     created_at: '2026-01-01T00:00:00Z',
+    posted_by: 'user',
     ...over,
   };
 }
@@ -76,6 +77,65 @@ describe('buildThreadAttachmentsBlock', () => {
     ], false);
     expect(block).toContain('Live documents: plain.pdf');
     expect(block).not.toContain('Viewable pages');
+  });
+
+  it('splits assistant-minted images into their own not-visible line (vision tier)', () => {
+    // A user upload is inlined (visible); a generate_image / edit_image
+    // output hangs on an assistant row and is never inlined. Telling the
+    // vision model both are "directly visible" pushes it to fabricate
+    // edits from the filename - the split exists so it analyzes first.
+    const block = buildThreadAttachmentsBlock(
+      [
+        summary({ filename: 'shot.png', mime_type: 'image/png', is_image: true, posted_by: 'user' }),
+        summary({
+          filename: 'edited-1730000000000-ab12.webp',
+          mime_type: 'image/webp',
+          is_image: true,
+          posted_by: 'assistant',
+        }),
+      ],
+      true
+    );
+    expect(block).toContain('Live images: shot.png');
+    expect(block).toContain('directly visible to you');
+    expect(block).toContain(
+      'Images produced by you in earlier replies: edited-1730000000000-ab12.webp'
+    );
+    expect(block).toContain('NOT visible inline');
+  });
+
+  it('routes an assistant-posted image away from the visible line on a non-vision tier too', () => {
+    const block = buildThreadAttachmentsBlock(
+      [
+        summary({
+          filename: 'gen-1.png',
+          mime_type: 'image/png',
+          is_image: true,
+          posted_by: 'assistant',
+        }),
+      ],
+      false
+    );
+    expect(block).not.toContain('Live images');
+    expect(block).toContain('produced by you in earlier replies: gen-1.png');
+  });
+
+  it('classifies by ROLE, not filename, on a collision between the two', () => {
+    // A user upload legitimately named "edited-*.png" must not be
+    // misfiled as assistant-minted - role provenance is the point.
+    const block = buildThreadAttachmentsBlock(
+      [
+        summary({
+          filename: 'edited-photo.png',
+          mime_type: 'image/png',
+          is_image: true,
+          posted_by: 'user',
+        }),
+      ],
+      true
+    );
+    expect(block).toContain('Live images: edited-photo.png');
+    expect(block).not.toContain('produced by you');
   });
 
   it('drops an expired PDF out of every live section', () => {

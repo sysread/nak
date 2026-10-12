@@ -112,6 +112,9 @@ import { docGrepSchema } from './doc_grep.schema';
 import { docReadSchema } from './doc_read.schema';
 import { docDeleteSchema } from './doc_delete.schema';
 import { generateImageSchema } from './generate_image.schema';
+import { editImageSchema } from './edit_image.schema';
+import { upscaleImageSchema } from './upscale_image.schema';
+import { removeBackgroundSchema } from './remove_background.schema';
 
 // `serverSideTool` wraps a schema into a ToolDef whose execute() throws
 // - the browser ships catalog metadata only; every dispatch happens in
@@ -182,6 +185,9 @@ const docRead = serverSideTool(docReadSchema);
 const docSave = serverSideTool(docSaveSchema);
 const docDelete = serverSideTool(docDeleteSchema);
 const generateImage = serverSideTool(generateImageSchema);
+const editImage = serverSideTool(editImageSchema);
+const upscaleImage = serverSideTool(upscaleImageSchema);
+const removeBackground = serverSideTool(removeBackgroundSchema);
 
 /**
  * Always-on toolbox. The read-only surfaces every request carries.
@@ -427,18 +433,21 @@ export const followupsToolbox: Toolbox = {
 };
 
 /**
- * Image-generation toolbox. Generating an image spends Venice credits
- * and writes a persistent attachment row. The generated image is
- * attached to the assistant's reply and rides the same 30-day
- * retention as user uploads.
+ * Image toolbox. Every tool here spends Venice credits per call and
+ * writes a persistent attachment row: generate_image creates a new
+ * picture; edit_image, upscale_image, and remove_background operate on
+ * an image already in the thread (an upload, a generation, or a
+ * previous edit).
  */
 export const imagesToolbox: Toolbox = {
   name: 'images',
   description:
-    'Generate an image from a text prompt and attach it to the reply. ' +
-    'Stored under the same 30-day retention as user uploads; reachable ' +
-    'afterward by analyze_image via its filename.',
-  tools: [generateImage],
+    'Create an image from a text prompt (generate_image), or change an ' +
+    'existing one in the conversation: edit it with an instruction ' +
+    '(edit_image), upscale it (upscale_image), or cut its subject out ' +
+    '(remove_background). Every result attaches to the reply and stays ' +
+    'reachable by filename through analyze_image.',
+  tools: [generateImage, editImage, upscaleImage, removeBackground],
 };
 
 /**

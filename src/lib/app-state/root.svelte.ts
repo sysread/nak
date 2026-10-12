@@ -72,6 +72,15 @@ interface AppState {
    */
   imageModel?: string;
   /**
+   * Venice image-EDIT model id for edit_image, from
+   * `profiles.settings.editImageModel`. Undefined on activate() and
+   * whenever the user hasn't overridden it - the server-side tool falls
+   * back to DEFAULT_EDIT_IMAGE_MODEL. Same browser posture as imageModel:
+   * only the Settings edit picker reads it here; edit-model resolution
+   * happens server-side at edit time.
+   */
+  editImageModel?: string;
+  /**
    * Project-global model price caps from the app_config row, hydrated by
    * Chat's refreshSettings after sign-in (seeded to NO_PRICE_CAPS on
    * activate()). Read by the Settings model picker to hide over-cap
@@ -246,6 +255,7 @@ export const app = $state<AppState>({
   venice: null,
   modelProfiles: seedModelProfiles(),
   imageModel: undefined,
+  editImageModel: undefined,
   priceCaps: NO_PRICE_CAPS,
   modelFeatureRejections: {},
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,

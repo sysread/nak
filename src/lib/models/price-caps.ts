@@ -17,6 +17,7 @@
 
 import type { CatalogModel } from './catalog';
 import type { ImageCatalogModel } from './image-catalog';
+import type { EditCatalogModel } from './edit-image-catalog';
 
 /**
  * Project-global price ceilings. The text caps are USD per 1M tokens; the
@@ -128,4 +129,29 @@ export function filterImageCatalogByCap(
 ): ImageCatalogModel[] {
   if (caps.maxImageUsd === null) return [...catalog];
   return catalog.filter((m) => !isImageModelOverCap(m, caps));
+}
+
+/**
+ * True when an edit model's per-edit price exceeds the image cap. Same
+ * ceiling as generation on purpose - `maxImageUsd` is "max USD per image
+ * op" and the edit price bands overlap generation's.
+ */
+export function isEditModelOverCap(
+  model: Pick<EditCatalogModel, 'usdPerEdit'>,
+  caps: ModelPriceCaps
+): boolean {
+  return caps.maxImageUsd !== null && model.usdPerEdit > caps.maxImageUsd;
+}
+
+/**
+ * Drop over-cap edit models from the edit catalog so the edit-model
+ * picker never offers a model the server would reject. A no-op when no
+ * image cap is configured.
+ */
+export function filterEditCatalogByCap(
+  catalog: readonly EditCatalogModel[],
+  caps: ModelPriceCaps
+): EditCatalogModel[] {
+  if (caps.maxImageUsd === null) return [...catalog];
+  return catalog.filter((m) => !isEditModelOverCap(m, caps));
 }

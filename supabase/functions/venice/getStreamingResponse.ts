@@ -992,10 +992,14 @@ export async function getStreamingResponse(
 
       // Publish tool_call_response events on the channel so the UI
       // can update its tool-call panel as each lands. Summary only;
-      // the full payload lives on the persisted tool-result row.
+      // the full payload lives on the persisted tool-result row. Strip
+      // image payloads BEFORE stringifying: the summary is sliced to
+      // 200 chars anyway, and stringify on an unstripped result walks
+      // the whole ~700KB base64 (tens of MB for an upscale) per
+      // published event for characters that are immediately discarded.
       for (const o of outcomes) {
         const summaryPayload = o.ok
-          ? { ok: true, value: o.result }
+          ? { ok: true, value: stripGeneratedImage(o.result) }
           : { ok: false, error: { message: o.errorMessage } };
         let summary: string;
         try {

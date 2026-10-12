@@ -1,10 +1,12 @@
 /**
- * Schema-only export for generate_image. Impl lives in `./generate_image`.
+ * Schema-only export for generate_image. The implementation lives
+ * function-side (supabase/functions/venice/tools/generate_image.ts) -
+ * the browser ToolDef here is the wire shape only.
  *
- * Kept separate from the impl so the registry can ship the tool's
- * wire shape eagerly while the implementation (which pulls the Venice
- * image endpoint) loads lazily on first dispatch - same split every
- * gated tool uses.
+ * Kept as a separate module from the barrel so the registry can ship
+ * the tool's wire shape eagerly while the implementation (which pulls
+ * the Venice image endpoint) runs server-side - the same split every
+ * image tool uses.
  */
 export const generateImageSchema = {
   name: 'generate_image',
