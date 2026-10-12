@@ -4,6 +4,9 @@ Guidance for Claude Code / Claude sessions working in this repo. See
 `README.md` for the project-level overview, `docs/user/README.md` for
 the end-user manual (also rendered in-app via the **Help** button),
 and `docs/dev/README.md` for architecture + per-feature dev notes.
+Agent sessions on any harness: `AGENTS.md` holds the plan-workflow
+rules (commit the plan first, refine with fresh-context reviewers
+before building) - they apply here too.
 
 ## Start with the dev docs
 
