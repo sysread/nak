@@ -78,13 +78,16 @@ journey layer)"), with `recipe_id` in place of `article_id`:
   one date are a normal case).
 - `content text not null` (Markdown) - what happened: the iteration,
   observations, what went right and wrong.
+- `tags jsonb not null default '[]'` - freeform keyword array for
+  filtering ("variation", "rye", "less-salt"); GIN-indexed below.
+- `created_at` / `updated_at timestamptz not null default now()` -
+  `updated_at` is trigger-stamped, never client-set.
 - `outcome text null` - optional enum `success | mixed | failure`
   with a check constraint, null meaning "not classified". This is
   the one deliberate divergence from wiki records: "historical
   success and failures" is a stated purpose of the feature, and a
   filterable outcome column ("show me my failures") beats parsing
-  prose for it. Tags remain freeform for everything else
-  ("variation", "rye", "less-salt").
+  prose for it.
 - `source_conversation_id uuid references threads on delete set
   null` - provenance: which discussion produced the record. The
   chat tools stamp it from the thread the tool call runs in; hand
@@ -238,10 +241,13 @@ history, then its log" is the narrative.
 - **Search scope: cross-recipe, decided.** The search box searches
   every recipe's records (mirroring `recipe_record_search`), not
   just the open recipe's log; a hit on another recipe is annotated
-  (the "(other article)" pattern in `WikiRecords.svelte`) and
-  clicking it navigates the detail pane to that recipe through the
-  modal's routed-recipe resolution (`route.recipe` from
-  `src/lib/routing.svelte.ts`). Navigation resets the search and
+  with that recipe's title (resolved from the cookbook store's
+  loaded sets, with the by-id fallback fetch the routed-recipe
+  path already uses - the twin's bare "(other article)" label is
+  not enough once hits are clickable) and clicking it navigates
+  the detail pane to that recipe through the modal's routed-recipe
+  resolution (`route.recipe` from `src/lib/routing.svelte.ts`).
+  Navigation resets the search and
   filters (the twin's remount-on-switch pattern), landing at the
   top of that recipe's log; a scroll-highlight of the hit row is a
   cheap follow-on if the landing feels blind. Searching the whole
@@ -254,13 +260,17 @@ history, then its log" is the narrative.
   The export helpers live in a new recipe-typed
   `src/lib/recipe-records-export.ts` (a sibling of
   `src/lib/wiki-export.ts`, which is article-typed), reusing the
-  twin's filename-collision dedup (it appends `-1` for same-date
-  records).
+  twin's filename-collision dedup (it appends a numeric suffix,
+  starting at `-2`, for same-date records).
 - **Offline**: records stay online-only, but reads degrade soft:
   offline, the section keeps rendering its last fetch (a mid-cook
   "what did I note last time" still works on the open recipe) and
   disables only the add/edit/delete controls with copy, the way
-  the bookmark controls degrade.
+  the bookmark controls degrade. A fresh load with nothing yet
+  fetched (no cached rows) shows a distinct offline-no-data line,
+  keyed off the offline status Cookbook.svelte already computes -
+  never the "no records yet" empty state, which would lie about
+  the log being empty.
 
 Supporting moves:
 
@@ -268,10 +278,13 @@ Supporting moves:
   the detail pane (it already computes the offline state the
   bookmark controls use, and already hosts the History panel
   Records sits below).
-- Recipe delete confirm names the log cost: "This deletes the
-  recipe and its N records." With no changelog (decision 2), the
-  cascade delete of the log is silent everywhere else - the confirm
-  strip is the one place it is announced.
+- Recipe delete names the log cost. The cookbook's delete
+  confirmation is a `window.confirm` (not an inline strip); its
+  message gains "This deletes the recipe and its N records", with
+  N from a head-count query at confirm time (the section's loaded
+  row count can be filtered or stale). With no changelog
+  (decision 2), the cascade delete of the log is silent everywhere
+  else - this is the one place it is announced.
 - Data layer: `src/lib/supabase/recipe-records.ts`, plain async
   functions taking the shared client (the `wiki-records.ts` shape:
   no class, no state), one-for-one delegation from the
@@ -292,10 +305,14 @@ Supporting moves:
 
 ## Milestones
 
-- **M1 - Schema + data layer.** Table, triggers, RLS, embedding
-  RPCs, `EMBED_SOURCES` entry, `_shared/recipe-record-limits.ts`,
-  types, SupabaseService slice. Gate: `mise run sync` green, the
-  backfill embeds a seeded record, unit tests pass.
+- **M1 - Schema + data layer.** Table, triggers, RLS, the two
+  realtime deliverables (publication membership + the
+  `(id, user_id)` replica-identity index - omit either and M2's
+  relay silently receives nothing, the exact failure the wiki
+  gotcha documents), embedding RPCs, `EMBED_SOURCES` entry,
+  `_shared/recipe-record-limits.ts`, types, SupabaseService slice.
+  Gate: `mise run sync` green, the backfill embeds a seeded record,
+  unit tests pass.
 - **M2 - UI.** The Records section in the detail pane (mounted by
   Cookbook.svelte): add / edit / delete, filters, cross-recipe
   search with navigation, export module, realtime refresh.
@@ -303,8 +320,11 @@ Supporting moves:
   registered in the edge tool barrel
   (`supabase/functions/venice/tools/index.ts`), formatArgs, the
   capture trigger + dedup/merge guards in the descriptions, the
-  two toolbox description strings (they enumerate members), docs,
-  QA use-case run end to end.
+  two toolbox description strings (they enumerate members), the
+  edge tools' b-strict specifics carried from the twin (explicit
+  `user_id` on insert, and a parent-ownership pre-check so a
+  record can only be written to a recipe the calling user owns),
+  docs, QA use-case run end to end.
 
 ## Testing
 
@@ -319,10 +339,10 @@ Supporting moves:
   no edge test file to mirror - `wiki.test.ts` covers toolbox
   composition and prompt invariants only): create/update/delete
   handlers, argument validation, `source_conversation_id` stamping.
-- `tests/schema-dml-columns.test.ts` floors: adding a table may trip
-  the floor assertions (>= 40 tables). Bumping a floor is expected
-  and mechanical; a test failing DOWNWARD is a scanner regression,
-  not this change.
+- `tests/schema-dml-columns.test.ts`: the floor assertions are
+  `>=` comparisons, so adding a table cannot trip them upward -
+  the suite should simply stay green over the new DML. A floor
+  failing DOWNWARD is a scanner regression, not this change.
 - QA use-case: `docs/qa/use-cases/recipe-records.md`, mirroring
   `wiki-records.md` minus the sweep step (manual CRUD, filters,
   search, export, embedding backfill, realtime relay).
