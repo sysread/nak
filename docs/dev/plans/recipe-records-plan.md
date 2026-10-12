@@ -374,12 +374,14 @@ inheriting it.)
   "(deleted recipe)" with a no-op click, and the title batch is
   not re-run for the whole set. Offline-uncached hits open onto
   the pane's offline-no-data state. The label consults offline
-  status first (`getRecipeCached` returns null for
-  offline-uncached, fetch errors, and truly-gone): offline
-  or errored shows the offline/no-data treatment, errored shows
-  a "couldn't load" label (a network blip must not read as
-  deletion), and "(deleted recipe)" only for a resolved null
-  while online.
+  status first (`getRecipeCached` collapses offline-uncached,
+  fetch errors, and truly-gone into one null, so the label does
+  NOT consult it): the errored state comes from the TITLE BATCH
+  instead - the batched title query either succeeds (a miss is
+  then genuinely "(deleted recipe)") or fails as a whole (every
+  row renders "couldn't load"; a network blip must not read as
+  deletion). Click-time read-through stays as-is: a blip at
+  click navigates honestly onto the offline-no-data pane.
   Clicking a hit on the OPEN recipe (navigation is a no-op)
   still fires the scroll-into-view + highlight. The scroll pins
   to after the pane's resolution settles and the log refetch
@@ -407,6 +409,16 @@ inheriting it.)
   live-search losses are accepted and match the twin: entering
   the edit pane, deselecting back to the list pane, and leaving
   the Cookbook view all unmount the section and clear the query.
+The reset/filter state matrix, since the rules live across
+several bullets:
+
+| State | On recipe-id change | On search start | On search cleared |
+|---|---|---|---|
+| date/tag filters | reset (every path) | hidden | restored, reset |
+| outcome dropdown | reset (browse) | stays set, filters the search | reset |
+| draft + expanded row | reset (browse rows) | kept | kept; search-result expansion survives until here |
+| query + results | kept | - | cleared |
+
 - **Export**: single record to `yyyy-mm-dd-<slug>.md` with
   date/tags/outcome front matter, and Export all to a zip holding
   `recipe.md` plus one `records/` entry per record (wiki's Export
@@ -544,7 +556,9 @@ away from it.
   and `subscribeToRecipeRecordChanges` in `realtime.ts` (data-layer
   work, so M2's wiring has something to call), plus the head-count
   query the delete confirm needs (`countRecipeRecords(recipe_id)`
-  in the data layer), and a pointer comment in
+  in the data layer), the batched title lookup the cross-recipe
+  hit labels need (`fetchRecipeTitles(ids)` - M2's search UI
+  consumes it), and a pointer comment in
   `src/lib/recipe-limits.ts` toward the new
   `_shared/recipe-record-limits.ts` (the two neighboring
   "recipe limits" homes have opposite canonical directions - the
@@ -735,6 +749,10 @@ away from it.
   browse filter enumerates only success/mixed/failure - "show me
   my unclassified bakes" is not promised; an IS NULL filter mode
   is the follow-on if it's missed.
+- **No cached titles on offline hit rows.** Offline, hits whose
+  recipes are in the IndexedDB mirror could resolve their titles
+  through `getRecipeCached`; v1 shows the offline treatment
+  instead. Cheap follow-on if it's missed.
 
 ## Decisions (resolved 2026-10-12)
 
