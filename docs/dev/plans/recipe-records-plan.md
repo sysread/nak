@@ -193,7 +193,15 @@ unreliable.
   same date - if the event is already logged, `recipe_record_update`
   it instead of stacking a duplicate; two cooks on one day are
   separate records (the wiki twin learned this distinction in
-  production).
+  production). The guard is prompt-only (there is no cleanup agent
+  - see decision 3), and the wiki's measured leak rate under
+  prompt-only discipline was real; a mechanical backstop comes
+  free in the tool result: on both the create and the
+  duplicate-refusal paths, the edge impl includes the recipe's
+  same-date sibling records, so the model sees the potential
+  duplicate in the same turn without a second call. The plan
+  accepts a higher duplicate rate than the wiki's (no sweep, no
+  librarian) as the price of no sweep.
 - **Merge, don't duplicate, on update** (carried in
   `recipe_record_update`'s description): details arrive piecemeal
   ("the crumb was actually fine on day two"). `recipe_record_get`
@@ -267,23 +275,30 @@ history, then its log" is the narrative.
 - **Search scope: cross-recipe, decided.** The search box searches
   every recipe's records (mirroring `recipe_record_search`), not
   just the open recipe's log; a hit on another recipe is annotated
-  with that recipe's title (resolved from the cookbook store's
-  loaded sets, with the by-id fallback fetch the routed-recipe
-  path already uses - the twin's bare "(other article)" label is
-  not enough once hits are clickable) and clicking it navigates
+  with that recipe's title (resolved with one batched
+  `.in('id', hitRecipeIds)` title query per result set, falling
+  back to the by-id fetch for misses - not one read-through call
+  per hit; the twin's bare "(other article)" label is not enough
+  once hits are clickable) and clicking it navigates
   the detail pane to that recipe through the modal's routed-recipe
   resolution (`route.recipe` from `src/lib/routing.svelte.ts`).
-  Navigation resets the search and
-  filters (the twin's remount-on-switch pattern), and the target
-  row is scroll-highlighted on arrival (promoted into M2 by the
-  round-4 review: without it the user clicks a specific hit and
-  lands blind at the top of another recipe's log). Searching the
-  whole cooking log from any recipe is the point; per-recipe
-  narrowing is the filters' job.
+  Navigation KEEPS the query and its results (a cross-recipe
+  search lives to survive its first click - "failed rye bakes
+  across everything" is a multi-hit journey, and clearing the
+  query on navigation would turn it into search, click, re-type,
+  click, re-type); only the date/tag filters reset (they are
+  per-recipe narrowing, meaningless once another recipe is open).
+  The scroll-highlight marks the clicked hit inside the
+  still-visible results list - "you are here" (promoted into M2
+  by the round-4 review: without it the user lands blind).
+  Searching the whole cooking log from any recipe is the point;
+  per-recipe narrowing is the filters' job.
 - **Export**: single record to `yyyy-mm-dd-<slug>.md` with
   date/tags/outcome front matter, and Export all to a zip holding
   `recipe.md` plus one `records/` entry per record (wiki's Export
-  all shape; the recipe itself has only single-file exports today).
+  all shape; the recipe itself has only single-file exports
+  today). Export all ignores the active filters/search - the full
+  log always, matching the twin's behavior.
   The export helpers live in a new recipe-typed
   `src/lib/recipe-records-export.ts` (a sibling of
   `src/lib/wiki-export.ts`, which is article-typed), reusing the
@@ -315,9 +330,11 @@ Supporting moves:
   confirmation is a `window.confirm` (not an inline strip); its
   message gains "This deletes the recipe and its N records", with
   N from a head-count query at confirm time (the section's loaded
-  row count can be filtered or stale). With no changelog
-  (decision 2), the cascade delete of the log is silent everywhere
-  else - this is the one place it is announced.
+  row count can be filtered or stale); if the count query fails,
+  the confirm shows without the count clause rather than blocking
+  the delete. With no changelog (decision 2), the cascade delete
+  of the log is silent everywhere else - this is the one place it
+  is announced.
 - Data layer: `src/lib/supabase/recipe-records.ts`, plain async
   functions taking the shared client (the `wiki-records.ts` shape:
   no class, no state), one-for-one delegation from the
@@ -381,8 +398,10 @@ Supporting moves:
 ## Testing
 
 - `tests/recipe-records.test.ts`: coercers, filters, chip labels,
-  export filenames (plain vitest, stubbed client, mirroring the
-  wiki-records tests).
+  export filenames, and the search merge (dedup by id, cap,
+  empty-query short-circuit, outcome pass-through - stubbed
+  client, plain vitest; the twin has no merge test, so this is a
+  deliberate improvement on it).
 - `tests/tools.test.ts`: three loops updated for the six new
   tools - the cookingToolbox membership array (writes), the
   always-on read list (`toContain`), and the no-writes-leak loop
@@ -422,7 +441,16 @@ Supporting moves:
   PR, not optional); `docs/dev/offline-cache.md`'s Interactions
   ledger gains the "recipe records are online-only, degrade soft"
   line (the dev-docs rule: a feature coupling to another feature's
-  ledger must update it).
+  ledger must update it); `docs/dev/tools.md`'s write-toolbox
+  section re-enumerates the cooking toolbox;
+  `docs/dev/components.md`'s inventory gains the RecipeRecords
+  entry; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
+  description gains the `recipe-records` source.
+- Existing QA use-case delta: `cookbook-recipe-lifecycle.md`
+  step 12 pins the delete confirm's copy, which this feature
+  changes - update that expectation and re-execute the use-case
+  before/after in the same PR (the QA discipline's baseline
+  rule).
 
 ## Scoped out (deliberately)
 
@@ -488,10 +516,13 @@ Jeff; recorded so a future session does not re-litigate them.
    recipe's log, annotates hits from other recipes, and navigates
    the detail pane on click. The per-recipe narrowing job belongs
    to the date/tag/outcome filters.
-6. **Refinement resolutions (round 2):** capture logs directly and
-   says so in the reply (no confirmation round-trip; ask only when
-   the cook report is ambiguous), matching how Jeff described
-   using it; a cross-recipe hit click navigates and resets
-   search/filters (the twin's remount pattern); offline keeps reads
-   on the last fetch and disables writes (cooking is the most
-   offline-prone context in the app).
+6. **Refinement resolutions (rounds 2-6):** capture logs directly
+   and says so in the reply (no confirmation round-trip; ask only
+   when the cook report is ambiguous), matching how Jeff described
+   using it; a cross-recipe hit click navigates while the query
+   and results stay live (round 6: reset-on-navigate would defeat
+   the multi-hit search the cross-recipe scope exists for), with
+   the date/tag filters resetting and the scroll-highlight marking
+   the clicked hit; offline keeps reads on the last fetch and
+   disables writes (cooking is the most offline-prone context in
+   the app).
