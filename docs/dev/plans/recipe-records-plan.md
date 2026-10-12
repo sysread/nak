@@ -150,6 +150,14 @@ caps never re-duplicate.
   (`recipe_save` rejects it today). A record may *mention* an
   outcome in prose and carry the `outcome` enum; the stars on the
   recipe card move only through the UI.
+- **Not touched by revert.** A recipe revert is a normal update
+  whose patch comes from a past version row; it writes a new
+  version and never reads or writes records. The log survives a
+  content revert by construction.
+- **Not topic-tagged.** Recipes carry a curated `topics text[]`
+  maintained by the server-side topics unit, which reads only
+  title/cooklang and never looks at child tables. Records keep
+  freeform tags; the drawer's topic filter does not reach them.
 
 ### Chat tools (six new)
 
@@ -160,17 +168,25 @@ Capture is manual by design: the model logs records during cooking
 discussions (the tool call IS the capture path - there is no
 background sweep), and the user can add records by hand in the UI.
 That moves the discipline the wiki puts in its sweep prompts into
-the write tools' descriptions - including the trigger the sweep
-used to own. `recipe_record_create`'s description tells the model
-WHEN to log, not just how: when the user reports having cooked the
-recipe and how it went, log the record and say so in the reply
-(use the day it happened, not today); when it is unclear which
-recipe is meant or whether a real cook happened, ask instead of
-guessing. After logging, fold any resulting recipe change (a tweak
-to the cooklang) into a separate `recipe_save` edit so the History
-panel keeps the two apart. There is deliberately no UI nudge for
-this yet ("Done cooking" offering to log is a natural follow-on;
-see Scoped out).
+prompt surfaces - including the trigger the sweep used to own.
+`recipe_record_create`'s description tells the model WHEN to log,
+not just how: when the user reports having cooked the recipe and
+how it went, log the record and say so in the reply (use the day
+it happened, not today); when it is unclear which recipe is meant
+or whether a real cook happened, ask instead of guessing. The
+same trigger sentence rides the `cookingToolbox` description,
+which IS catalog-visible (the catalog renders only toolbox
+descriptions and per-tool short descriptions, never full tool
+descriptions). After logging, fold any resulting recipe change (a
+tweak to the cooklang) into a separate `recipe_save` edit so the
+History panel keeps the two apart. There is deliberately no
+cookbook narrative block in the system prompt (none exists today;
+wiki has a curated WIKI_BLOCK, recipes have never had one) - the
+toolbox + tool descriptions carry capture instead, the same shape
+the followups toolbox uses for its proactive capture. And no UI
+nudge yet ("Done cooking" offering to log is a natural follow-on;
+see Scoped out). Revisit both if capture-by-discussion proves
+unreliable.
 
 - **Dedup guard on create**: before `recipe_record_create`, check
   `recipe_record_list` on the recipe for the same EVENT, not the
@@ -283,7 +299,11 @@ history, then its log" is the narrative.
   fetched (no cached rows) shows a distinct offline-no-data line,
   keyed off the offline status Cookbook.svelte already computes -
   never the "no records yet" empty state, which would lie about
-  the log being empty.
+  the log being empty. This is a deliberate improvement over the
+  twin, whose Records section simply renders empty offline (the
+  divergence is stated per the non-conforming-code rule). The
+  records relay does NOT call `syncOfflineCache` - records join no
+  IndexedDB mirror.
 
 Supporting moves:
 
@@ -351,8 +371,12 @@ Supporting moves:
   `validateToolArgs` handles the mechanical schema checks the
   browser-declared schemas already carry; per-tool semantic checks
   - date format, outcome enum, update's at-least-one-of - use the
-  `ArgErrors` accumulator, never a first-fail throw), docs, QA
-  use-case run end to end.
+  `ArgErrors` accumulator, never a first-fail throw), the capture
+  trigger on the `cookingToolbox` description (catalog-visible;
+  see "Chat tools"), one stale-comment fix while in the barrel:
+  `recipe_delete.ts`'s header comment enumerates the cascade
+  children and gains `recipe_records`, docs, QA use-case run end
+  to end.
 
 ## Testing
 
@@ -393,11 +417,12 @@ Supporting moves:
   controls disabled, offline-no-data line on a fresh load). Index
   it in `docs/qa/README.md`'s use-case list.
 - Docs: `../cookbook.md` gains a Records section; the user-facing
-  doc gains the "why records vs History panel" story;
-  `docs/dev/offline-cache.md`'s Interactions ledger gains the
-  "recipe records are online-only, degrade soft" line (the
-  dev-docs rule: a feature coupling to another feature's ledger
-  must update it).
+  doc `docs/user/cookbook.md` gains the "why records vs History
+  panel" story (the `docs/user/` update is mandatory in the same
+  PR, not optional); `docs/dev/offline-cache.md`'s Interactions
+  ledger gains the "recipe records are online-only, degrade soft"
+  line (the dev-docs rule: a feature coupling to another feature's
+  ledger must update it).
 
 ## Scoped out (deliberately)
 
