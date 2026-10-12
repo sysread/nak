@@ -402,7 +402,8 @@ inheriting it.)
   active search when one is live (the twin just refetches the
   log and lets its results go stale; with results this
   long-lived, staleness would show records deleted by a tool
-  turn). Sidebar navigation with a live search keeps the results
+  turn). SEARCH-hit clicks ALWAYS navigate (browse rows expand -
+  the Rows bullet owns that); sidebar navigation with a live search keeps the results
   replacing the newly opened recipe's log (the same
   query-survival rule, named as accepted: the exit is clearing
   the search; the QA use-case pins it). Clicks ALWAYS navigate -
@@ -418,7 +419,10 @@ inheriting it.)
   distinguishes them): the batched title query either succeeds
   (a miss is then genuinely "(deleted recipe)") or fails as a
   whole (every row renders "couldn't load"; a network blip must
-  not read as deletion). Render precedence when offline: a live
+  not read as deletion). Clearing the search clears an
+  expandedId that is no longer in the rendered set. A relay
+  re-search clears the scroll-highlight (it marks one specific
+  result; the new result set is a new story). Render precedence when offline: a live
   search
   ALWAYS renders the results list (the offline-no-data line
   governs the log area, add form, and Export all, never the
@@ -522,7 +526,12 @@ several bullets:
   id changed lands in the map under ITS OWN recipe id (retained,
   not dropped - the retention promise holds in the race corner
   too) while the view keeps reading `map[openId]` - the
-  late-response race dies by construction.
+  late-response race dies by construction. The map's fetches
+  always read the POST-reset browse filter state (resets apply
+  before the refetch reads the filters - the live-search
+  dropdown value never seeds the map), and online map hits
+  revalidate in the background, so a filter-scoped entry cannot
+  persist as the unfiltered view.
   Online, an
   id with no cached fetch renders the loading state - never
   another recipe's rows. Offline, navigating to a recipe whose
@@ -541,7 +550,9 @@ several bullets:
   results stay rendered when the network drops - the disabled
   controls gate new queries, they do not clear results. An
   online log fetch that FAILS (transient) renders the twin's
-  load-error banner, not the empty state. Export stays enabled (it
+  load-error banner keyed by recipe id (the map holds
+  `rows | 'error'` per id; a failed A fetch never shows its
+  banner under B), cleared on refetch. Export stays enabled (it
   reads already-fetched rows) and exports the last fetch; Export
   all hides at zero fetched rows (the twin's rule). A fresh load with nothing yet
   fetched (no cached rows) shows that same offline-no-data line,
@@ -684,8 +695,10 @@ away from it.
   Cookbook.svelte behavior changes the spec commits to (the
   pane's `missingRecordMessage` placeholder states and the
   delete-confirm "N records" line) and their doc updates landing
-  with the code (cookbook.md's Records section, the user-doc
-  delete-confirm copy, the components.md entries, the
+  with the code (cookbook.md's Records section AND its
+  stale-inventory fixes listed under Testing/Docs, the user-doc
+  Records section + delete-confirm copy, the components.md
+  entries, the
   cookbook-recipe-lifecycle.md step-12 delta).
 - **M3 - Chat tools.** Six tools wired into the two toolboxes and
   registered in the edge tool barrel
@@ -798,10 +811,12 @@ away from it.
   realtime-relays.md, offline-cache.md, embeddings.md, and
   architecture.md ride M1's schema/relay work);
   the user-facing
-  doc `docs/user/cookbook.md` gains the "why records vs History
-  panel" story AND its delete-confirmation description gains the
-  "N records" copy (the `docs/user/` update is mandatory in the
-  same PR, not optional); `docs/dev/offline-cache.md`'s Interactions
+  doc `docs/user/cookbook.md` gains a Records section (the
+  add form, filters, cross-recipe search, export, offline
+  degradation are all new observable behavior under the
+  same-PR user-doc rule), including the "why records vs History
+  panel" story AND its delete-confirmation description gaining the
+  "N records" copy; `docs/dev/offline-cache.md`'s Interactions
   ledger gains the "recipe records are online-only, degrade soft"
   line (the dev-docs rule: a feature coupling to another feature's
   ledger must update it); `docs/dev/tools.md`'s write-toolbox
