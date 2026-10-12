@@ -331,8 +331,10 @@ inheriting it.)
   recipe). Foreign rows
   render Export only - Edit/Delete belong to the open recipe's
   records (the retention-map rows), and the retention-map
-  reducer (fetch lands vs open-id-changed) is a pure function in
-  `src/lib/ui/recipe-records.ts`, unit-tested DOM-free.
+  reducer (fetch lands vs open-id-changed vs error, per-id) is a
+  pure function in
+  `src/lib/ui/recipe-records.ts`, unit-tested DOM-free (named in
+  the test list below so it is not dropped).
 - **Filters**: from/to date range, tag dropdown, outcome dropdown,
   and a semantic search box (debounce + abort-controller supersede
   wired like RecipeList's search; the merge itself is
@@ -419,7 +421,8 @@ inheriting it.)
   distinguishes them): the batched title query either succeeds
   (a miss is then genuinely "(deleted recipe)") or fails as a
   whole (every row renders "couldn't load"; a network blip must
-  not read as deletion). Clearing the search clears an
+  not read as deletion - such rows stay clickable, and cached
+  ones still open; narrow race, stated). Clearing the search clears an
   expandedId that is no longer in the rendered set. A relay
   re-search clears the scroll-highlight (it marks one specific
   result; the new result set is a new story). Render precedence when offline: a live
@@ -531,7 +534,11 @@ several bullets:
   before the refetch reads the filters - the live-search
   dropdown value never seeds the map), and online map hits
   revalidate in the background, so a filter-scoped entry cannot
-  persist as the unfiltered view.
+  persist as the unfiltered view. A FAILED revalidation keeps
+  the rendered entry (optional non-blocking error line) - only
+  a cold fetch (no map entry) lands `'error'`; a blip during an
+  ordinary online revisit must not vanish rows the user is
+  reading.
   Online, an
   id with no cached fetch renders the loading state - never
   another recipe's rows. Offline, navigating to a recipe whose
@@ -756,8 +763,12 @@ away from it.
   ctx.userId)` b-strict filter, and the limit clamp named after
   the twin's 1..30), plus a prompt-invariant assertion that the
   capture trigger and the check-list-first dedup guard survive
-  in create's description (the `wiki_records.test.ts` style;
-  both files are the pointed-at templates).
+  in create's description AND that the cookingToolbox
+  description line carries the trigger (the catalog-visible
+  surface is the one that makes capture work; the
+  `wiki_records.test.ts` style; both files are the pointed-at
+  templates). The twin's ILIKE one-line fix lands in M1 beside
+  the merge test that pins its pattern shape.
 - `tests/schema-dml-columns.test.ts`: the floor assertions are
   `>=` comparisons, so adding a table cannot trip them upward -
   the suite should simply stay green over the new DML. A floor
