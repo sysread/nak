@@ -278,11 +278,13 @@ today - the plan fixes that wording in cookbook.md rather than
 inheriting it.)
 
 - **Add form**: date, content (Markdown), comma-separated tags,
-  outcome selector. The compose/edit draft RESETS when the open
-  recipe id changes (a kept draft would silently retarget to the
-  newly opened recipe and save a record against the wrong recipe
+  outcome selector. The compose/edit draft AND the expanded-row
+  state RESET when the open recipe id changes (a kept draft
+  would silently retarget to the newly opened recipe and save a
+  record against the wrong recipe
   - the one-keystroke retype is the cheap loss; the
-  misattribution is not).
+  misattribution is not; the expanded row the twin cleared for
+  free via its keyed remount).
 - **Rows**: date ("Mon D, YYYY"), outcome chip, tag chips, truncated
   preview; a row expands to the full content with Edit / Delete.
 - **Filters**: from/to date range, tag dropdown, outcome dropdown,
@@ -293,7 +295,10 @@ inheriting it.)
   modes (a set outcome dropdown is passed into the search call as
   its `outcome` param, so "failures about X" works in the UI,
   not just via the tools); date/tag apply to browse only - search
-  results bypass them by design (the twin's behavior).
+  results bypass them by design (the twin's behavior). Relay
+  events re-run a live search through the same
+  debounce/abort controller as the keystroke path, so a record-
+  writing chat turn cannot thrash the search.
 - **Search scope: cross-recipe, decided.** The search box searches
   every recipe's records (mirroring `recipe_record_search`), not
   just the open recipe's log; a hit on another recipe is annotated
@@ -338,12 +343,15 @@ inheriting it.)
   renders "(deleted recipe)" with a no-op click. Searching the
   whole cooking log from any recipe is the point; per-recipe
   narrowing is the filters' job. During the resolution window the
-  pane's own "Recipe not found." placeholder would render above
-  the mounted section - and on this hot path (a hit on a recipe
-  outside the loaded drawer window) that is a recurring lie, so
-  the by-id fetch gets a distinguishing in-flight state: the pane
-  renders "Loading recipe..." while the fetch resolves and
-  "Recipe not found." only on a resolved null. Neither moves the
+  pane's placeholder would lie ("Recipe not found." for a recipe
+  that exists), and on this hot path (a hit on a recipe outside
+  the loaded drawer window) it lies often - so the pane placeholder
+  becomes the existing unit-tested primitive
+  `missingRecordMessage({ fetching, online, noun: 'recipe' })`
+  (`src/lib/ui/offline-status.ts`, already consumed by the wiki
+  pane): a loading state while the by-id fetch resolves, an
+  offline-cache-miss state, and "Recipe not found." only on a
+  resolved null. None of the three moves the
   section, so the round-8 unmount bug stays fixed. The known
   live-search losses are accepted and match the twin: entering
   the edit pane, deselecting back to the list pane, and leaving
@@ -369,14 +377,13 @@ inheriting it.)
   starting at `-2`, for same-date records).
 - **Offline**: records stay online-only, but reads degrade soft:
   offline, the section keeps rendering its last fetch FOR THE SAME
-  recipe (the retained rows are keyed by the recipe id they were
-  fetched for - and that keying governs online navigation too:
-  an id with no cached fetch renders the loading state, never
-  another recipe's rows; a mid-cook "what did I note last time"
-  still works on the open recipe, but navigating to another
-  recipe while
-  offline must NOT render the previous recipe's log under the new
-  title - it shows the offline-no-data line instead). The
+  recipe. The rows are keyed by the recipe id they were fetched
+  for, and that keying governs navigation everywhere: online, an
+  id with no cached fetch renders the loading state - never
+  another recipe's rows. Offline, navigating to another recipe
+  shows the offline-no-data line, not the previous recipe's log
+  under a new title. A mid-cook "what did I note last time" on
+  the open recipe still works. The
   add/edit/delete controls disable with copy, the way the
   bookmark controls degrade. The filter and search controls
   disable too - both are server queries, and a failed refetch
@@ -464,7 +471,10 @@ away from it.
   search with navigation + scroll-highlight of the clicked hit
   (including the `searchRecipeRecordsSemantic` wrapper), export
   module, offline degradation, realtime refresh wired through
-  `Chat.svelte` + `cookbook-events.ts`.
+  `Chat.svelte` + `cookbook-events.ts`, plus the two
+  Cookbook.svelte behavior changes the spec commits to: the
+  pane's `missingRecordMessage` placeholder states and the
+  delete-confirm "N records" line.
 - **M3 - Chat tools.** Six tools wired into the two toolboxes and
   registered in the edge tool barrel
   (`supabase/functions/venice/tools/index.ts`), shared edge helpers
@@ -534,13 +544,16 @@ away from it.
   "N records" count, export, embedding backfill, and the offline
   degradation (stale rows visible on the same recipe, writes and
   filter/search controls disabled, offline-no-data line on a
-  fresh load AND on an offline recipe switch). Index it in
-  `docs/qa/README.md`'s use-case list.
+  fresh load AND on an offline recipe switch, and the
+  offline-uncached-recipe placeholder on the deep-link path). Index
+  it in `docs/qa/README.md`'s use-case list.
 - Docs: `../cookbook.md` gains a Records section (and fixes its
-  stale tool inventory in passing: "nine LLM tools" and "five
-  recipe tools registered" predate the photo tools, its
-  `recipe_search` mention names a tool that does not exist, the
-  same paragraph's `GATED_TOOLS` reference is a removed
+  stale inventory in passing: "nine LLM tools" and "five
+  recipe tools registered" predate the photo tools, the
+  `recipe_search` ghost appears twice (:24 and :601), the
+  backfill line's "alongside the other six sources" is a
+  hardcoded count that is already wrong, the same paragraph's
+  `GATED_TOOLS` reference is a removed
   mechanism, and the "modal" wording - the component renders
   inline now);
   the user-facing
@@ -611,6 +624,17 @@ away from it.
   and recipe records join neither either - records are surfaced
   through their own tools and the Records section. Stated so a
   future session does not relitigate it.
+- **No ToC jump link to the section.** The wiki twin surfaces a
+  Records link with a live count in the article ToC; the recipe
+  TOC stays Ingredients/Instructions-only, so reaching the
+  section on a long recipe is scroll (or a hit-click, which
+  scrolls there). A "Records (N)" link is a cheap follow-on if
+  the scroll annoys.
+- **No "unclassified" mode on the outcome filter.** The
+  form/`recipe_record_update` can set outcome to null, but the
+  browse filter enumerates only success/mixed/failure - "show me
+  my unclassified bakes" is not promised; an IS NULL filter mode
+  is the follow-on if it's missed.
 
 ## Decisions (resolved 2026-10-12)
 
