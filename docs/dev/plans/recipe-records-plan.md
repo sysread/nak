@@ -265,7 +265,11 @@ Writes - join `cookingToolbox`:
   `content`, `tags`, `outcome`; omitted fields unchanged, `tags`
   replaces the whole array (the `record_update` patch shape).
   Passing `outcome: null` counts as the one-required-field and
-  clears the classification; the UI's outcome selector gets an
+  clears the classification - a spurious-null HAZARD the schema
+  description must name explicitly ("omit this field unless
+  setting or clearing the outcome; null clears it"), since the
+  twin has no nullable field and the models' null-echo habit is
+  untested here; the UI's outcome selector gets an
   "unclassified" option to match.
 - `recipe_record_delete` - `id`.
 
@@ -383,11 +387,11 @@ inheriting it.)
   "(deleted recipe)" with a no-op click, and the title batch is
   not re-run for the whole set. Offline-uncached hits open onto
   the pane's offline-no-data state. The label consults offline
-  status first (`getRecipeCached` collapses offline-uncached,
-  fetch errors, and truly-gone into one null, so the label does
-  NOT consult it): the errored state comes from the TITLE BATCH
-  instead - the batched title query either succeeds (a miss is
-  then genuinely "(deleted recipe)") or fails as a whole (every
+  status first. Hit labels come from the title batch, NEVER from
+  `getRecipeCached` (which collapses offline-uncached, fetch
+  errors, and truly-gone into one null): the batched title query
+  either succeeds (a miss is then genuinely "(deleted recipe)")
+  or fails as a whole (every
   row renders "couldn't load"; a network blip must not read as
   deletion). Render precedence when offline: a live search
   ALWAYS renders the results list (the offline-no-data line
@@ -402,7 +406,13 @@ inheriting it.)
   lands - a scroll issued at click time would land on a section
   that the body render then pushes out of view. Searching the
   whole cooking log from any recipe is the point; per-recipe
-  narrowing is the filters' job. Outcome survives navigation
+  narrowing is the filters' job. The general render rule: a live
+  search's results list REPLACES the log area (the twin's
+  `visible = searchResults ?? records` anatomy) - the log's
+  loading/empty/offline states apply only in browse mode; an
+  open compose form stays mounted but hidden with its draft
+  kept, and reappears when the search clears. Outcome survives
+  navigation
   ONLY while a search is live (resetting it then would desync
   the dropdown from the displayed results); in browse mode it
   resets with date/tag on any recipe-id change - a surviving
@@ -451,9 +461,11 @@ several bullets:
   the divergence per the non-conforming rule so nobody "fixes" it
   back after reading the twin. Like the twin, Export all hides at
   zero records. MECHANISM: online, Export all issues a fresh
-  UNFILTERED `listRecipeRecords(recipeId)` at export time (the
-  retention map cannot satisfy "ignores the filters" - its rows
-  are whatever the fetch-time filters scoped); offline, it
+  UNFILTERED `listRecipeRecords(recipeId)` at export time - a
+  separate call site that BYPASSES the retention map (the map
+  holds whatever the fetch-time filters scoped, so routing the
+  export fetch through it would silently un-filter the visible
+  log); offline, it
   exports the retained rows as-is, and if that fetch was
   filter-scoped the zip is a partial diary - accepted and stated
   here rather than silently shipped as whole. The section
@@ -515,7 +527,10 @@ Supporting moves:
   mount-void case is scoped to BROWSE mode: no live search +
   resolution failed = the section renders nothing (an empty log
   under a not-found pane would read as "no records yet"; another
-  device may have deleted the open recipe). With a live search
+  device may have deleted the open recipe; a websocket-down
+  window means no relay fires either, so a live search can show
+  records a concurrent tool turn deleted until the next
+  re-search - same posture as the twin, accepted). With a live search
   the section stays mounted and renders the results list -
   dead hits get their "(deleted recipe)" label - and only the
   per-recipe log, add form, and Export all void. Cookbook.svelte
@@ -528,11 +543,17 @@ Supporting moves:
   row count can be filtered or stale); the count/copy logic is a
   pure helper in `src/lib/ui/cookbook-screen.ts` (covered by
   `tests/cookbook-screen.test.ts`); the Delete handler awaits
-  the count and then opens the dialog - an async confirm is fine
-  at this scale, but the count is never cached at section-load
-  (stale) and a failed count shows the confirm without the count
-  clause rather than blocking the delete, and the Delete button
-  disables while the count is in flight (kills the double-click
+  the count and then opens the dialog. PLATFORM RISK: this is
+  the codebase's first async `window.confirm` (every existing
+  dialog is sync), and WebKit heuristically suppresses
+  confirm() in async contexts off the user gesture - the
+  failure mode is "Delete does nothing" with no error. The
+  fallback is the wiki's inline confirm-strip pattern
+  (`Wiki.svelte`), adopted if the async confirm proves
+  unreliable; either way the count is never cached at
+  section-load (stale), a failed count shows the confirm
+  without the count clause, and the Delete button disables
+  while the count is in flight (kills the double-click
   window). With no changelog (decision 2), the cascade delete
   of the log is silent everywhere else - this is the one place it
   is announced.
@@ -807,7 +828,8 @@ away from it.
 ## Decisions (resolved 2026-10-12)
 
 The four scope questions this plan started with, resolved with
-Jeff; recorded so a future session does not re-litigate them.
+Jeff (decisions 1-4), plus two resolved during refinement
+(5-6); recorded so a future session does not re-litigate them.
 
 1. **Outcome column: YES.** Nullable `success | mixed | failure`
    enum, check-constrained, filterable in the UI, optional param on
