@@ -232,7 +232,10 @@ ride always-on:
   down. The `recipe_id` scope and `outcome` filter are further
   deltas: the outcome param is what makes "show me my failed
   bakes across everything" a filter and not prose parsing - the
-  cross-recipe journey the outcome column exists for.
+  cross-recipe journey the outcome column exists for. With an
+  empty `query` the edge tool throws (matching the twin; the
+  empty-query short-circuit lives in the data-layer merge the UI
+  search box uses).
 
 Writes - join `cookingToolbox`:
 
@@ -251,9 +254,8 @@ Writes - join `cookingToolbox`:
 Wire schemas: `src/lib/tools/recipe_record_*.schema.ts` (schema-only
 exports, with `formatArgs` overrides mirroring `record_create`'s so
 the tool-call pill renders date/outcome as a header and the Markdown
-body as a section, and a `shortDescription` on each - the catalog
-renders it verbatim, and an omission puts `undefined` in the
-prompt). Edge impls:
+body as a section, and a `shortDescription` on each - the ToolDef
+type requires it and the catalog renders it verbatim). Edge impls:
 `supabase/functions/venice/tools/recipe_record_*.ts`. Toolbox
 membership is asserted in `tests/tools.test.ts` (the existing
 tripwire).
@@ -268,7 +270,11 @@ Records at the bottom too, and the reading order "recipe, then its
 history, then its log" is the narrative.
 
 - **Add form**: date, content (Markdown), comma-separated tags,
-  outcome selector.
+  outcome selector. The compose/edit draft RESETS when the open
+  recipe id changes (a kept draft would silently retarget to the
+  newly opened recipe and save a record against the wrong recipe
+  - the one-keystroke retype is the cheap loss; the
+  misattribution is not).
 - **Rows**: date ("Mon D, YYYY"), outcome chip, tag chips, truncated
   preview; a row expands to the full content with Edit / Delete.
 - **Filters**: from/to date range, tag dropdown, outcome dropdown,
@@ -296,11 +302,21 @@ history, then its log" is the narrative.
   query on navigation would turn it into search, click, re-type,
   click, re-type); only the date/tag filters reset (they are
   per-recipe narrowing, meaningless once another recipe is open).
-  The kept query is safe because RecipeRecords stays mounted
-  across navigation - Cookbook.svelte has no `{#key}` on the
-  recipe id and must not grow one; only the per-recipe log
-  refetches. Because the Records section sits below History, the
-  navigation also scrolls the section into view, and the
+  Keeping the query needs the section MOUNTED across navigation,
+  which is a real design constraint, not a freebie: the detail
+  pane gates on `{#if activeRecipe}`, and `activeRecipe` is
+  undefined while the by-id fallback fetch resolves a recipe
+  outside the loaded drawer window - the common case for
+  cross-recipe hits in a multi-page cookbook. RecipeRecords
+  therefore mounts on "detail pane open AND a recipe id
+  selected", NOT inside that gate: the section needs only the id
+  to fetch its log (the recipe title for the export zip arrives
+  as a nullable prop). It also must not be keyed by recipe id;
+  only the per-recipe log refetches. (Found in round 8: inside
+  the gate, the first hit on an old recipe would unmount the
+  section mid-navigation and silently kill query, results, and
+  highlight.) Because the Records section sits below History,
+  the navigation also scrolls the section into view, and the
   scroll-highlight marks the clicked hit inside the
   still-visible results list - "you are here" (promoted into M2
   by the round-4 review: without both, the user lands at the top
@@ -317,42 +333,53 @@ history, then its log" is the narrative.
   `recipe.md` plus one `records/` entry per record (wiki's Export
   all shape; recipes have no file downloads at all today -
   copy-to-clipboard only - so this is the cookbook's first).
-  Export all ignores the active filters/search - the full
-  log always, matching the twin's behavior.
+  Export all ignores the active filters/search and exports the
+  full log - a DIVERGENCE from the twin, which exports the
+  date/tag-filtered set and ignores only the search; stated per
+  the non-conforming rule, because a log is a diary and export is
+  its backup path while filters are transient views.
   The export helpers live in a new recipe-typed
   `src/lib/recipe-records-export.ts` (a sibling of
   `src/lib/wiki-export.ts`, which is article-typed), reusing the
   twin's filename-collision dedup (it appends a numeric suffix,
   starting at `-2`, for same-date records).
 - **Offline**: records stay online-only, but reads degrade soft:
-  offline, the section keeps rendering its last fetch (a mid-cook
-  "what did I note last time" still works on the open recipe) and
-  disables the add/edit/delete controls with copy, the way the
+  offline, the section keeps rendering its last fetch FOR THE SAME
+  recipe (the retained rows are keyed by the recipe id they were
+  fetched for; a mid-cook "what did I note last time" still works
+  on the open recipe, but navigating to another recipe while
+  offline must NOT render the previous recipe's log under the new
+  title - it shows the offline-no-data line instead). The
+  add/edit/delete controls disable with copy, the way the
   bookmark controls degrade. The filter and search controls
   disable too - both are server queries, and a failed refetch
   must not look like an empty log. A fresh load with nothing yet
-  fetched (no cached rows) shows a distinct offline-no-data line,
+  fetched (no cached rows) shows that same offline-no-data line,
   keyed off the offline status Cookbook.svelte already computes -
   never the "no records yet" empty state, which would lie about
   the log being empty. This is a deliberate improvement over the
-  twin, whose Records section simply renders empty offline (the
-  divergence is stated per the non-conforming-code rule). The
+  twin, which surfaces a load error on a failed records fetch
+  (the divergence is stated per the non-conforming-code rule). The
   records relay does NOT call `syncOfflineCache` - records join no
   IndexedDB mirror.
 
 Supporting moves:
 
 - Mount point: `src/screens/Cookbook.svelte` renders the section in
-  the detail pane (it already computes the offline state the
-  bookmark controls use, and already hosts the History panel
-  Records sits below).
+  the detail pane, gated on pane + selected id so it survives
+  routed-recipe resolution windows (see the search-scope bullet)
+  rather than on the `{#if activeRecipe}` content gate (it already
+  computes the offline state the bookmark controls use, and
+  already hosts the History panel Records sits below).
 - Recipe delete names the log cost. The cookbook's delete
   confirmation is a `window.confirm` (not an inline strip); its
   message gains "This deletes the recipe and its N records", with
   N from a head-count query at confirm time (the section's loaded
-  row count can be filtered or stale); if the count query fails,
-  the confirm shows without the count clause rather than blocking
-  the delete. With no changelog (decision 2), the cascade delete
+  row count can be filtered or stale); the Delete handler awaits
+  the count and then opens the dialog - an async confirm is fine
+  at this scale, but the count is never cached at section-load
+  (stale) and a failed count shows the confirm without the count
+  clause rather than blocking the delete. With no changelog (decision 2), the cascade delete
   of the log is silent everywhere else - this is the one place it
   is announced.
 - Data layer: `src/lib/supabase/recipe-records.ts`, plain async
@@ -457,12 +484,20 @@ away from it.
   detail correction exercises the get-then-merge update), the
   outcome filter end to end (set via tool and via the dropdown,
   including the failure-across-recipes search), cross-recipe
-  search click-through + scroll-highlight, the delete confirm's
+  search click-through + scroll-highlight INCLUDING the
+  resolution-window case (click a hit on a recipe not in the
+  loaded drawer window; query, results, and highlight must
+  survive the by-id fallback fetch), the delete confirm's
   "N records" count, export, embedding backfill, and the offline
-  degradation (stale rows visible, writes and filter/search
-  controls disabled, offline-no-data line on a fresh load). Index
-  it in `docs/qa/README.md`'s use-case list.
-- Docs: `../cookbook.md` gains a Records section; the user-facing
+  degradation (stale rows visible on the same recipe, writes and
+  filter/search controls disabled, offline-no-data line on a
+  fresh load AND on an offline recipe switch). Index it in
+  `docs/qa/README.md`'s use-case list.
+- Docs: `../cookbook.md` gains a Records section (and fixes its
+  stale tool inventory in passing: "nine LLM tools" and "five
+  recipe tools registered" predate the photo tools, and its
+  `recipe_search` mention names a tool that does not exist);
+  the user-facing
   doc `docs/user/cookbook.md` gains the "why records vs History
   panel" story (the `docs/user/` update is mandatory in the same
   PR, not optional); `docs/dev/offline-cache.md`'s Interactions
