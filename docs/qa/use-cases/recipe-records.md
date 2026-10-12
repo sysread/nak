@@ -161,4 +161,6 @@ offline posture.
 
 | Date | Env | Commit | (1) | (2) | (3) | (4) | (5) | (6) | (7) | (8) | (9) | (10) | (11) | (12) | (13) | (14) | Notes |
 |------|-----|--------|-----|-----|-----|-----|-----|-----|-----|-----|-----|------|------|------|------|------|-------|
+| 2026-10-12 | local (recipe-records wt) | 4fa77e60 | P | P | F(tag) | P | P | P | P | P | P | P | P | P | P | P | Run 1: (3) failed - tags=cs.{a} Postgres-array literal vs jsonb 400; (5)/(6) passed with deviations (model merged/answered from context, no tool calls); (12) via cron shim, no drawer [embeddings] line (expectation fixed). |
+| 2026-10-12 | local (recipe-records wt) | 0dcca4e6 | - | - | P | - | - | - | P | - | - | - | - | - | - | - | Run 2 (focused): tag filter fixed (200 + narrows + combines with outcome); cross-recipe search with outcome both legs re-verified. |
 | *pending* | | | | | | | | | | | | | | | | | first run after feature lands |
