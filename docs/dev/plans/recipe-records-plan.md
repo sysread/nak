@@ -304,7 +304,9 @@ inheriting it.)
   not just via the tools); date/tag apply to browse only - search
   results bypass them by design (the twin's behavior), so the
   twin's hide-filters-while-searching block gets SPLIT: date/tag
-  controls hide (or render inert) during a live search, the
+  controls hide during a live search (the twin's mechanism; the
+  search box's clear-on-empty is the only exit needed, matching
+  RecipeList), the
   outcome dropdown renders and stays live in BOTH modes. An empty
   search box clears results back to browse (RecipeList's
   clear-on-empty); the search result cap is a named tunable next
@@ -358,11 +360,14 @@ inheriting it.)
   log and lets its results go stale; with results this
   long-lived, staleness would show records deleted by a tool
   turn). A hit whose recipe was deleted after the search saved
-  resolves at CLICK time: the routed-recipe by-id fetch comes
-  back null, the hit row re-renders "(deleted recipe)" with a
-  no-op click, and the title batch is not re-run for the whole
-  set. The label consults offline status first (`getRecipeCached`
-  returns null for offline-uncached and fetch errors too): offline
+  resolves at CLICK time: a hit on an offline-cached recipe
+  still opens (the read-through decides - clicks always
+  navigate); a resolved null while online re-renders the hit row
+  "(deleted recipe)" with a no-op click, and the title batch is
+  not re-run for the whole set. Offline-uncached hits open onto
+  the pane's offline-no-data state. The label consults offline
+  status first (`getRecipeCached` returns null for
+  offline-uncached and fetch errors too): offline
   or errored shows the offline/no-data treatment, and
   "(deleted recipe)" only for a resolved null while online.
   Clicking a hit on the OPEN recipe (navigation is a no-op)
@@ -371,11 +376,14 @@ inheriting it.)
   lands - a scroll issued at click time would land on a section
   that the body render then pushes out of view. Searching the
   whole cooking log from any recipe is the point; per-recipe
-  narrowing is the filters' job. (Outcome survives navigation
-  while date/tag reset not because it is cross-recipe - it is
-  not - but because resetting it while the query and results
-  stay live would desync the dropdown from the displayed
-  results.) During the resolution window the
+  narrowing is the filters' job. Outcome survives navigation
+  ONLY while a search is live (resetting it then would desync
+  the dropdown from the displayed results); in browse mode it
+  resets with date/tag on any recipe-id change - a surviving
+  failure-filter would read as "recipe B has almost no
+  history". Date/tag reset on EVERY navigation path (hit click
+  or sidebar click), keyed on the open recipe id changing.
+  During the resolution window the
   pane's placeholder would lie ("Recipe not found." for a recipe
   that exists), and on this hot path (a hit on a recipe outside
   the loaded drawer window) it lies often - so the pane placeholder
@@ -444,14 +452,16 @@ Supporting moves:
   passes its resolution state down (a `'resolving' | 'found' |
   'missing'` union or an equivalent fetching flag -
   `resolveActiveRecipe` returns null for BOTH still-fetching and
-  gone, so the section cannot distinguish them without it); the
-  section derives its mount-void case and the dead-hit-row
-  re-render from that state, and
-  rendering nothing when the pane's resolution failed outright
-  (another device deleted the open recipe - an empty log under a
-  not-found pane would read as "no records yet"; Cookbook.svelte
+  gone, so the section cannot distinguish them without it). The
+  mount-void case is scoped to BROWSE mode: no live search +
+  resolution failed = the section renders nothing (an empty log
+  under a not-found pane would read as "no records yet"; another
+  device may have deleted the open recipe). With a live search
+  the section stays mounted and renders the results list -
+  dead hits get their "(deleted recipe)" label - and only the
+  per-recipe log, add form, and Export all void. Cookbook.svelte
   already computes the offline state the bookmark controls use,
-  and already hosts the History panel Records sits below).
+  and already hosts the History panel Records sits below.
 - Recipe delete names the log cost. The cookbook's delete
   confirmation is a `window.confirm` (not an inline strip); its
   message gains "This deletes the recipe and its N records", with
@@ -492,11 +502,15 @@ Supporting moves:
   (filter predicates, outcome chip labels and colors, export
   filename slugs), unit-tested next door. The search chain's
   query-embedding step gets a named home too -
-  `searchRecipeRecordsSemantic({ query, limit, outcome })` in
+  `searchRecipeRecordsSemantic({ query, limit, outcome, supabase,
+  signal })` in
   `src/lib/recipe-records-search.ts` (a new `$lib` sibling; the
   options-object signature is a deliberate divergence from the
-  twin's positional `(query, limit, deps)` - outcome threading
-  made it readable; the `src/lib/wiki.ts` analog of
+  twin's positional `(query, limit, deps)`, but the deps are
+  load-bearing either way: the service and abort signal are
+  injected (no `app` import), so the .svelte file stays
+  embed-free AND supersede-able; outcome threading
+  made the options shape readable; the `src/lib/wiki.ts` analog of
   `searchWikiRecordsSemantic`: it calls the embedder itself - no
   embedding parameter, the twin embeds internally too - then the
   facade, then the data-layer merge; `outcome` threads through
@@ -625,8 +639,9 @@ away from it.
   inline now);
   the user-facing
   doc `docs/user/cookbook.md` gains the "why records vs History
-  panel" story (the `docs/user/` update is mandatory in the same
-  PR, not optional); `docs/dev/offline-cache.md`'s Interactions
+  panel" story AND its delete-confirmation description gains the
+  "N records" copy (the `docs/user/` update is mandatory in the
+  same PR, not optional); `docs/dev/offline-cache.md`'s Interactions
   ledger gains the "recipe records are online-only, degrade soft"
   line (the dev-docs rule: a feature coupling to another feature's
   ledger must update it); `docs/dev/tools.md`'s write-toolbox
@@ -634,7 +649,8 @@ away from it.
   pre-existing `recipe_update` ghost mention on that same line -
   no such tool exists in the registry);
   `docs/dev/components.md`'s inventory gains the RecipeRecords
-  entry; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
+  entry; `docs/dev/architecture.md`'s facade-slice list gains
+  `recipe-records`; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
   description gains the `recipe-records` source (and its source
   count stops being a hardcoded number); `docs/dev/tools.md`'s
   always-on section names the three record reads;
