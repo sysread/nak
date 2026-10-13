@@ -629,11 +629,15 @@
 
   // When the user (or a popstate pop) lands on `?drawer=recipes`
   // without having gone through onPickRecipesTab, still make sure the
-  // recipe list is fetched so the drawer isn't blank.
+  // recipe list is fetched so the drawer isn't blank. `loaded`-gate
+  // prevents a re-fire loop, same as the sibling stores below: an
+  // account with zero recipes would otherwise re-fire the load every
+  // time the empty result resolved (loading flips false, deps trip,
+  // effect runs, loads again, forever).
   $effect(() => {
     if (route.drawer !== 'recipes') return;
     if (!app.supabase) return;
-    if (cookbook.recipes.length !== 0 || cookbook.loading) return;
+    if (cookbook.loaded || cookbook.loading) return;
     void loadRecipes(app.supabase);
   });
 

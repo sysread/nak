@@ -57,6 +57,15 @@ interface CookbookState {
   loadingMore: boolean;
   loading: boolean;
   /**
+   * True once a first load has been attempted this session. Gates the
+   * drawer-route effect: with zero recipes, `recipes.length !== 0`
+   * never turns true and `loading` flips true -> false on every empty
+   * resolve, so without this flag the route effect re-fires the load
+   * forever (the memories/wiki/library/artifacts effects carry the
+   * same guard on their stores' `loaded` flags).
+   */
+  loaded: boolean;
+  /**
    * True when `upcoming` / `favorites` were served from the IndexedDB
    * offline mirror because the authoritative fetch couldn't reach the
    * server. The paginated "All recipes" list and search both need the
@@ -109,6 +118,7 @@ export const cookbook = $state<CookbookState>({
   offset: 0,
   hasMore: false,
   loadingMore: false,
+  loaded: false,
   loading: false,
   fromCache: false,
   error: null,
@@ -132,6 +142,9 @@ export const cookbook = $state<CookbookState>({
  */
 export async function loadRecipes(supabase: SupabaseService): Promise<void> {
   cookbook.loading = true;
+  // Mark the attempt, not the outcome: an empty or failed load must
+  // not re-arm the drawer-route effect (see the `loaded` doc comment).
+  cookbook.loaded = true;
   // Cache-first: paint the saved buckets from the IndexedDB mirror right
   // away, re-bucketed by each row's flags. Opening the tab offline or on
   // a dead link then shows the saved set immediately instead of a
