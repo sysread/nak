@@ -298,6 +298,11 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   recipe authoring in Cooklang, version log + revert, photos +
   lightbox, Upcoming / Favorites bookmarks, click-to-rate, the copy
   exports, and a model-driven recipe_save landing via the relay.
+- [recipe-records](./use-cases/recipe-records.md) - the cooking log:
+  chat-capture (create with the dedup guard, get-then-merge update),
+  the detail pane's Records section, the outcome filter end to end,
+  cross-recipe search click-through + highlight, the delete confirm's
+  record count, export, backfill, and offline degradation.
 - [grocery-list-lifecycle](./use-cases/grocery-list-lifecycle.md) -
   the Groceries tab: ingredient checkboxes on bookmarked recipes,
   the recipe-edit invalidation wipe, the needed / acquired shopping

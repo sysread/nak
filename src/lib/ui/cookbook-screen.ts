@@ -456,3 +456,19 @@ export function modifyActionTitle(
   if (action === 'edit') return online ? 'Edit recipe' : 'Reconnect to edit';
   return online ? 'Delete recipe' : 'Reconnect to delete';
 }
+
+/**
+ * Copy for the recipe-delete confirmation. Deleting a recipe cascades
+ * to its `recipe_records` cooking log, and the log's deletion is
+ * otherwise silent (no changelog) - this confirm is the one place the
+ * cost is announced. `recordCount` is a live head count fetched at
+ * confirm time (the Records section's loaded row count can be filtered
+ * or stale); null means the count query FAILED, and the confirm
+ * degrades to the plain message rather than blocking the delete. A
+ * zero count keeps the clause - honest and rare.
+ */
+export function recipeDeleteConfirmMessage(recordCount: number | null): string {
+  if (recordCount === null) return 'Delete this recipe? This cannot be undone.';
+  const noun = recordCount === 1 ? 'record' : 'records';
+  return `This deletes the recipe and its ${recordCount} ${noun}. This cannot be undone.`;
+}

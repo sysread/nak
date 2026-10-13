@@ -804,10 +804,11 @@ Consumers: drawer tabs in `Chat.svelte`.
 
 File: `src/components/WikiRecords.svelte`.
 
-Detail view of wiki article records: the article body, metadata,
-and revision history.
+Records section at the bottom of a wiki article view: the dated
+record list with its filters, cross-article search, expand/collapse,
+files, cross-links, and the inline compose/edit form.
 
-Consumers: `WikiList.svelte`.
+Consumers: `Wiki.svelte`.
 
 ## `<WikiChangelogPanel>`
 
@@ -816,7 +817,7 @@ File: `src/components/WikiChangelogPanel.svelte`.
 Slide-down panel for a wiki article showing its revision history
 and changelog entries.
 
-Consumers: `WikiRecords.svelte`.
+Consumers: `Wiki.svelte`.
 
 ## `<WikiSkippedPanel>`
 
@@ -843,7 +844,20 @@ File: `src/components/RecipeRating.svelte`.
 Interactive star-rating control for recipes. Click a star to
 set the rating; rendered inline in recipe detail cards.
 
-Consumers: `RecipeList.svelte`.
+Consumers: `Cookbook.svelte`.
+
+## `<RecipeRecords>`
+
+File: `src/components/RecipeRecords.svelte`.
+
+Records section at the bottom of the Cookbook detail pane, below
+History: the recipe's dated cooking log with an add/edit form,
+date/tag/outcome filters, cross-recipe semantic search whose hit
+clicks navigate the detail pane (with scroll-highlight), single and
+zip export, and the offline degradation over a per-recipe retention
+map.
+
+Consumers: `Cookbook.svelte`.
 
 ## `<SamskaraBrowseList>`
 

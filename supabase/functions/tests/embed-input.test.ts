@@ -9,6 +9,7 @@ import {
   EMBED_SOURCES,
   buildMemoryEmbedInput,
   buildRecipeEmbedInput,
+  buildRecipeRecordEmbedInput,
   buildWikiEmbedInput,
   buildSubstrateEmbedInput,
 } from '../_shared/embed-input.ts';
@@ -69,6 +70,7 @@ Deno.test('every embeddable table is registered, samskara predictions included',
     [
       'followups',
       'memories',
+      'recipe-records',
       'recipes',
       'samskara-predictions',
       'samskara-substrate',
@@ -77,6 +79,10 @@ Deno.test('every embeddable table is registered, samskara predictions included',
       'wiki-records',
     ],
   );
+});
+
+Deno.test('buildRecipeRecordEmbedInput leads with the date and a blank line', () => {
+  assertEquals(buildRecipeRecordEmbedInput('2026-10-04', 'gummy crumb'), '2026-10-04\n\ngummy crumb');
 });
 
 Deno.test('samskara predictions embed the bare prediction text', () => {

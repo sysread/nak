@@ -126,4 +126,5 @@ backfill for records, and the `wikiRecordExtractionEnabled` toggle.
 
 | Date | Env | Commit | (1) | (2) | (3) | (4) | (5) | (6) | (7) | (8) | (9) | Notes |
 |------|-----|--------|-----|-----|-----|-----|-----|-----|-----|-----|-----|-------|
+| 2026-10-12 | local (recipe-records wt) | recipe-records@0dcca4e6+ | P | P | P | P | - | - | - | - | - | Partial re-run (steps 1-4) as the twin-fix QA: the jsonb tag-filter fix (`ilikeFilterPattern`-style serialization fix, tags=cs.["..."] now 200) and the revived ILIKE leg (proved by a null-embedding row returning through the standalone ilike). Steps 5-9 unaffected by the two fixes; full first run still pending. |
 | *pending* | | | | | | | | | | | | first run after feature lands |

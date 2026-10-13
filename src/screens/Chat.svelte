@@ -162,7 +162,11 @@
     cookbook,
     loadRecipes,
   } from '$lib/cookbook-store.svelte';
-  import { onCookbookChange, emitCookbookChange } from '$lib/cookbook-events';
+  import {
+    onCookbookChange,
+    emitCookbookChange,
+    emitRecipeRecordChange,
+  } from '$lib/cookbook-events';
   import { emitGroceryChange } from '$lib/grocery-events';
   import {
     memoriesStore,
@@ -625,11 +629,15 @@
 
   // When the user (or a popstate pop) lands on `?drawer=recipes`
   // without having gone through onPickRecipesTab, still make sure the
-  // recipe list is fetched so the drawer isn't blank.
+  // recipe list is fetched so the drawer isn't blank. `loaded`-gate
+  // prevents a re-fire loop, same as the sibling stores below: an
+  // account with zero recipes would otherwise re-fire the load every
+  // time the empty result resolved (loading flips false, deps trip,
+  // effect runs, loads again, forever).
   $effect(() => {
     if (route.drawer !== 'recipes') return;
     if (!app.supabase) return;
-    if (cookbook.recipes.length !== 0 || cookbook.loading) return;
+    if (cookbook.loaded || cookbook.loading) return;
     void loadRecipes(app.supabase);
   });
 
@@ -692,9 +700,11 @@
   }
 
   function onCookbookStoreChanged(): void {
-    // Any recipe_* tool call or modal write invalidates the list —
-    // reload if we've ever loaded it, so the Recipes drawer tab and
-    // the modal (if still open) both reflect the new state.
+    // Any recipe-content tool call or cookbook write (save/delete/
+    // photos) invalidates the list — reload if we've ever loaded it,
+    // so the Recipes drawer tab and the open pane both reflect the
+    // new state. Record writes fire their own event instead: they
+    // touch no recipe row, so the recipe list stays put.
     if (!app.supabase) return;
     if (cookbook.recipes.length === 0 && !cookbook.loading) return;
     void loadRecipes(app.supabase);
@@ -2108,6 +2118,20 @@
   $effect(() => {
     if (!app.supabase || !sessionUserId) return;
     return app.supabase.subscribeToWikiRecordChanges(sessionUserId, emitWikiRecordChange);
+  });
+
+  // Realtime: the recipe-records leg of the same family. The
+  // recipe_record_* chat tools dispatch in the venice function, where
+  // emitRecipeRecordChange is unreachable, so the open Cookbook detail
+  // pane's Records section learns about agent-side log writes through
+  // this relay. Records join no offline mirror, so unlike the article
+  // and recipes relays there is no syncOfflineCache reconcile here.
+  $effect(() => {
+    if (!app.supabase || !sessionUserId) return;
+    return app.supabase.subscribeToRecipeRecordChanges(
+      sessionUserId,
+      emitRecipeRecordChange
+    );
   });
 
   // Watch the wiki-librarian in-flight lease so every client knows when a

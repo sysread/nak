@@ -70,13 +70,16 @@ result naming why the call was refused. That failure the model can
 see and recover from. (The empty-completion re-roll in `./chat.md`
 stays as the safety net for any other empty completion.)
 
-Cost, measured 2026-09-07: the full declared set is ~72k chars
-(~18k tokens) for 60 tools after the activity-parameter trim. The
-gate's always-on set shipped ~32.6k chars (~8k), so the delta is
-about +10k tokens per request - and prompt caching (Venice reports
-`cached_tokens`, ~95% on the second request of a turn) absorbs the
-repeat within a conversation, since the array is byte-stable
-turn-to-turn now that no toggle can reshape it.
+Cost, measured 2026-09-07: the full declared set was ~72k chars
+(~18k tokens) at a then-60-tool catalog after the
+activity-parameter trim. The registry has grown since (count
+`TOOLS` rather than trusting this figure); the point of the
+measurement stands: the gate's always-on set shipped ~32.6k chars
+(~8k), so the write-toolbox delta is on the order of +10k tokens
+per request - and prompt caching (Venice reports `cached_tokens`,
+~95% on the second request of a turn) absorbs the repeat within a
+conversation, since the array is byte-stable turn-to-turn now that
+no toggle can reshape it.
 
 ### The always-on toolbox
 
@@ -94,10 +97,13 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   drill-down tier above the deterministic `context` survey.
 - Direct reads across every store: `memory_search` / `memory_get`,
   `conversation_search` / `conversation_get`, `wiki_search` /
-  `wiki_list` / `wiki_get`, `recipe_list` / `recipe_get`,
-  `doc_list` / `doc_get` / `doc_grep` / `doc_read`. The `*_get` trio
-  (`memory_get` / `conversation_get` / `wiki_get`) is the by-id
-  drill-down behind the recall block's `^N^` citations.
+  `wiki_list` / `wiki_get` plus the wiki record reads `record_list` /
+  `record_get` / `record_search`, `recipe_list` / `recipe_get` plus
+  the cooking-log reads `recipe_record_list` / `recipe_record_get` /
+  `recipe_record_search`, and `doc_list` / `doc_get` / `doc_grep` /
+  `doc_read`. The `*_get` trio (`memory_get` / `conversation_get` /
+  `wiki_get`) is the by-id drill-down behind the recall block's
+  `^N^` citations.
 - `research_docs` - one-shot sub-completion whose system prompt
   bundles the user-facing doc corpus (`docs/user/`), answering
   meta-questions about Nak itself; returns `{answer, sources}`.
@@ -161,9 +167,13 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
 Each of these groups only tools that mutate user data; every read
 surface lives in the always-on set above.
 
-- **`cooking`** - recipe writes: `recipe_save` / `recipe_update` /
-  `recipe_delete` plus the photo tools (`recipe_photos_attach` /
-  `_remove` / `_reorder`, `recipe_photo_label_set`). See
+- **`cooking`** - recipe writes: `recipe_save` / `recipe_delete`,
+  the photo tools (`recipe_photos_attach` / `_remove` / `_reorder`,
+  `recipe_photo_label_set`), and the cooking-log record writes
+  (`recipe_record_create` / `recipe_record_update` /
+  `recipe_record_delete` - dated entries for what happened when the
+  user cooked a recipe; the capture trigger rides this toolbox's
+  description, which is the catalog-visible surface). See
   `./cookbook.md`.
 - **`memories`** - memory writes: `memory_save` (create, or edit by
   id) / `memory_delete` plus the volitional levers (`memory_reaffirm`

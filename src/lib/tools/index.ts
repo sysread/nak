@@ -83,6 +83,12 @@ import { recipePhotosAttachSchema } from './recipe_photos_attach.schema';
 import { recipePhotosRemoveSchema } from './recipe_photos_remove.schema';
 import { recipePhotosReorderSchema } from './recipe_photos_reorder.schema';
 import { recipePhotoLabelSetSchema } from './recipe_photo_label_set.schema';
+import { recipeRecordCreateSchema } from './recipe_record_create.schema';
+import { recipeRecordUpdateSchema } from './recipe_record_update.schema';
+import { recipeRecordDeleteSchema } from './recipe_record_delete.schema';
+import { recipeRecordListSchema } from './recipe_record_list.schema';
+import { recipeRecordGetSchema } from './recipe_record_get.schema';
+import { recipeRecordSearchSchema } from './recipe_record_search.schema';
 import { researchDocsSchema } from './research_docs.schema';
 import { wikiSearchSchema } from './wiki_search.schema';
 import { wikiListSchema } from './wiki_list.schema';
@@ -157,6 +163,12 @@ const recipePhotosAttach = serverSideTool(recipePhotosAttachSchema);
 const recipePhotosRemove = serverSideTool(recipePhotosRemoveSchema);
 const recipePhotosReorder = serverSideTool(recipePhotosReorderSchema);
 const recipePhotoLabelSet = serverSideTool(recipePhotoLabelSetSchema);
+const recipeRecordCreate = serverSideTool(recipeRecordCreateSchema);
+const recipeRecordUpdate = serverSideTool(recipeRecordUpdateSchema);
+const recipeRecordDelete = serverSideTool(recipeRecordDeleteSchema);
+const recipeRecordList = serverSideTool(recipeRecordListSchema);
+const recipeRecordGet = serverSideTool(recipeRecordGetSchema);
+const recipeRecordSearch = serverSideTool(recipeRecordSearchSchema);
 const researchDocs = serverSideTool(researchDocsSchema);
 const wikiSearch = serverSideTool(wikiSearchSchema);
 const wikiList = serverSideTool(wikiListSchema);
@@ -240,6 +252,15 @@ const removeBackground = serverSideTool(removeBackgroundSchema);
  *     alongside the article writes.
  *   - `recipe_list` / `recipe_get` - browse and fetch the user's
  *     saved recipes.
+ *   - `recipe_record_list` / `recipe_record_get` /
+ *     `recipe_record_search` - read paths for the cooking log (dated
+ *     records attached to a recipe: what happened when the user
+ *     cooked it, vs the recipe's cooklang current state).
+ *     `recipe_record_list` walks one recipe's timeline,
+ *     `recipe_record_get` fetches one by id, `recipe_record_search`
+ *     runs semantic search across every recipe's records. Reads ride
+ *     always-on like the recipe reads; the record writes ride the
+ *     `cooking` toolbox alongside the recipe writes.
  *   - `research_docs` - bounded sub-agent that answers
  *     meta-questions about Nak itself by reading the bundled
  *     in-app help corpus.
@@ -265,7 +286,8 @@ export const alwaysOnToolbox: Toolbox = {
     'The umbrella `context` recall, the three per-layer ' +
     'recall tools, and read-only surfaces (search across ' +
     'memories / conversations / wiki / cookbook / app docs; ' +
-    'plus get for memories, conversations, and wiki, and list/get for cookbook) ' +
+    'plus get for memories, conversations, and wiki, list/get for ' +
+    'cookbook, and list/get/search for cookbook cooking records) ' +
     'plus web search, ' +
     'update_title, analyze_image, analyze_pdf_page, and ask_user.',
   tools: [
@@ -286,6 +308,9 @@ export const alwaysOnToolbox: Toolbox = {
     followupList,
     recipeList,
     recipeGet,
+    recipeRecordList,
+    recipeRecordGet,
+    recipeRecordSearch,
     docList,
     docGet,
     docGrep,
@@ -300,18 +325,29 @@ export const alwaysOnToolbox: Toolbox = {
 };
 
 /**
- * Cookbook write tools. Read paths (`recipe_list`, `recipe_get`)
+ * Cookbook write tools. Read paths (`recipe_list`, `recipe_get`,
+ * `recipe_record_list`, `recipe_record_get`, `recipe_record_search`)
  * live in the always-on set; this toolbox carries the tools that
  * mutate cookbook state (saving a new recipe, editing an existing
  * one, deleting one, attaching / removing / reordering photos,
- * captioning photos).
+ * captioning photos) plus the cooking-log record writes.
+ *
+ * The toolbox description is catalog-visible (the catalog renders
+ * toolbox descriptions and per-tool short descriptions, never full
+ * tool descriptions), so it also carries the record-capture trigger:
+ * the chat model logs a record when the user reports a cook, and the
+ * short descriptions alone would not teach it when to reach for
+ * recipe_record_create.
  */
 export const cookingToolbox: Toolbox = {
   name: 'cooking',
   description:
     'Save, edit, and delete recipes in the cookbook; attach, remove, ' +
-    'reorder, and caption recipe photos. Read tools (recipe_list, ' +
-    'recipe_get) are always-on; this toolbox carries the writes.',
+    'reorder, and caption recipe photos; log cooking records. When ' +
+    'the user reports having cooked a recipe and how it went, log it ' +
+    'with recipe_record_create and say so in the reply. Read tools ' +
+    '(recipe_list, recipe_get, and the recipe_record_* reads) are ' +
+    'always-on; this toolbox carries the writes.',
   tools: [
     recipeSave,
     recipeDelete,
@@ -319,6 +355,9 @@ export const cookingToolbox: Toolbox = {
     recipePhotosRemove,
     recipePhotosReorder,
     recipePhotoLabelSet,
+    recipeRecordCreate,
+    recipeRecordUpdate,
+    recipeRecordDelete,
   ],
 };
 

@@ -2,10 +2,11 @@
  * Realtime domain slice of the Supabase data layer: every subscribe*
  * channel the UI holds open (the per-thread message echo stream, the
  * sidebar's thread relay, the coarse "something changed" relays for
- * wiki articles / records, memories and recipes, the private
- * Broadcast channels for edge-function logs, samskara mints and
- * agent-run progress, and the profiles-row relays for the in-flight
- * lease and last-run outcome), plus the point reads paired with those
+ * wiki articles / records, memories, recipes and recipe records, the
+ * private Broadcast channels for edge-function logs, samskara mints
+ * and agent-run progress, and the profiles-row relays for the
+ * in-flight lease and last-run outcome), plus the point reads paired
+ * with those
  * channels (getMessage for the end-of-turn hydration race, the
  * on-mount lease-expiry and last-run-outcome reads that recover state
  * a closed tab missed).
@@ -594,6 +595,41 @@ export function subscribeToRecipeChanges(
         event: '*',
         schema: 'public',
         table: 'recipes',
+        filter: `user_id=eq.${userId}`,
+      },
+      () => {
+        onChange();
+      }
+    )
+    .subscribe();
+  return () => {
+    void client.removeChannel(channel);
+  };
+}
+
+/**
+ * Subscribe to any change on the signed-in user's recipe records. Twin
+ * of subscribeToWikiRecordChanges - the chat record tools and the
+ * in-app Records section both write rows, so the open Cookbook detail
+ * pane refetches its Records section on a coarse "something changed"
+ * signal. Unlike the wiki twin there are no satellite tables (per-record
+ * files and links are scoped out of v1), so the channel binds one
+ * table. DELETE delivery rides the (id, user_id) replica-identity
+ * index (see schema.sql).
+ */
+export function subscribeToRecipeRecordChanges(
+  client: SupabaseClient,
+  userId: string,
+  onChange: () => void
+): () => void {
+  const channel = client
+    .channel(uniqueTopic(`recipe_records:${userId}`))
+    .on(
+      'postgres_changes' as never,
+      {
+        event: '*',
+        schema: 'public',
+        table: 'recipe_records',
         filter: `user_id=eq.${userId}`,
       },
       () => {

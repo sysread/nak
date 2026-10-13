@@ -74,6 +74,7 @@
     photoLinkPayload,
     photoPickVerdict,
     ratingChangeMessage,
+    recipeDeleteConfirmMessage,
     recipeSaveError,
     resolveActiveRecipe,
     seedDraftPhotos,
@@ -82,6 +83,8 @@
     versionRowState,
     type DraftPhoto,
   } from '$lib/ui/cookbook-screen';
+  import { missingRecordMessage } from '$lib/ui/offline-status';
+  import RecipeRecords from '../components/RecipeRecords.svelte';
   import type { ActiveSession, GroceryProductView, Recipe, RecipeVersion } from '$lib/supabase';
   import { onGroceryChange, emitGroceryChange } from '$lib/grocery-events';
   import { autoFileProducts } from '$lib/grocery-section-agent';
@@ -137,10 +140,15 @@
   // loaded row. This holds a by-id fetch for exactly that case so the
   // detail pane resolves instead of falling back to the empty state.
   let fetchedRecipe = $state<Recipe | null>(null);
+  // True while that by-id fallback fetch is in flight. resolveActiveRecipe
+  // returns null for BOTH still-fetching and gone; this flag is what lets
+  // the pane (and the Records section below it) tell the two apart.
+  let recipeResolving = $state(false);
   $effect(() => {
     const id = activeId;
     if (!id || !app.supabase) {
       fetchedRecipe = null;
+      recipeResolving = false;
       return;
     }
     // Already in memory (browse window OR a cached Upcoming / Favorites
@@ -153,6 +161,7 @@
       resolveActiveRecipe(id, cookbook.recipes, cookbook.upcoming, cookbook.favorites, null)
     ) {
       fetchedRecipe = null;
+      recipeResolving = false;
       return;
     }
     // Read-through the offline cache: online it fetches + refreshes the
@@ -162,12 +171,16 @@
     // keep the catch as a belt-and-suspenders against an IndexedDB
     // failure.
     let cancelled = false;
+    recipeResolving = true;
     void getRecipeCached(app.supabase, id)
       .then((res) => {
         if (!cancelled) fetchedRecipe = res.row;
       })
       .catch(() => {
         if (!cancelled) fetchedRecipe = null;
+      })
+      .finally(() => {
+        if (!cancelled) recipeResolving = false;
       });
     return () => {
       cancelled = true;
@@ -184,6 +197,19 @@
       cookbook.favorites,
       fetchedRecipe
     )
+  );
+
+  /**
+   * The detail pane's resolution state, passed down to the Records
+   * section (RecipeRecords). resolveActiveRecipe answers null for both
+   * "still fetching" and "gone"; only the resolving flag separates
+   * them. 'missing' + no live search is also what voids the Records
+   * section's render (an empty log under a not-found pane would read
+   * as "no records yet").
+   */
+  type PaneResolution = 'resolving' | 'found' | 'missing';
+  const paneResolution = $derived<PaneResolution>(
+    activeRecipe ? 'found' : recipeResolving ? 'resolving' : 'missing'
   );
 
   // --- edit pane draft state (shared across new + edit) ---
@@ -816,12 +842,37 @@
     }
   }
 
+  // True while the delete confirmation's head-count query is in
+  // flight; the Delete button disables so a double-click can't fire
+  // two confirms (and two deletes).
+  let deleteCountBusy = $state(false);
+
   async function onDelete(id: string): Promise<void> {
     if (!app.supabase) return;
     // Confirm before destructive action — the tool-side delete has
     // the same semantic ("remove a recipe by id") but the UI path
     // needs a user-directed confirm since a misclick is easy.
-    if (!window.confirm('Delete this recipe? This cannot be undone.')) return;
+    //
+    // The head count of the recipe's records is fetched AT CONFIRM
+    // TIME - the Records section's loaded row count can be filtered
+    // or stale. A failed count confirms without the count clause
+    // rather than blocking the delete. The count is never cached at
+    // section-load: stale counts would misstate the cost.
+    deleteCountBusy = true;
+    let recordCount: number | null = null;
+    try {
+      recordCount = await app.supabase.countRecipeRecords(id);
+    } catch {
+      recordCount = null;
+    }
+    deleteCountBusy = false;
+    // PLATFORM RISK: this is the codebase's first async window.confirm
+    // (every existing dialog is sync). WebKit heuristically suppresses
+    // confirm() in async contexts off the user gesture; the failure
+    // mode is "Delete does nothing" with no error. If that shows up on
+    // Safari, the fallback is the wiki's inline confirm-strip pattern
+    // (Wiki.svelte).
+    if (!window.confirm(recipeDeleteConfirmMessage(recordCount))) return;
     try {
       await app.supabase.deleteRecipe(id);
       await refresh();
@@ -1687,7 +1738,7 @@
                   type="button"
                   class="secondary icon-btn cookbook-action-danger"
                   onclick={() => onDelete(r!.id)}
-                  disabled={!offlineStatus.online}
+                  disabled={!offlineStatus.online || deleteCountBusy}
                   title={modifyActionTitle(offlineStatus.online, 'delete')}
                   aria-label="Delete recipe"
                 >
@@ -1888,7 +1939,32 @@
             </details>
           </div>
         {:else}
-          <p class="subtle">Recipe not found.</p>
+          <!-- The resolution window lies on this hot path (a deep link
+               or hit click on a recipe outside the loaded drawer
+               window): a bare "not found" for a recipe that is merely
+               still resolving. The three-state message primitive
+               distinguishes loading / offline-cache-miss / gone. -->
+          <p class="subtle">
+            {missingRecordMessage({
+              fetching: paneResolution === 'resolving',
+              online: offlineStatus.online,
+              noun: 'recipe',
+            })}
+          </p>
+        {/if}
+        {#if activeId}
+          <!-- Records section. Mounted on "detail pane open AND a
+               recipe id selected" - deliberately OUTSIDE the
+               {#if activeRecipe} gate above and NOT keyed by recipe id:
+               a cross-recipe search must survive its first click
+               through a by-id resolution window, and remounting here
+               would silently kill query, results, and highlight. Only
+               the per-recipe log refetches (via the retention map). -->
+          <RecipeRecords
+            recipeId={activeId}
+            recipe={activeRecipe}
+            resolution={paneResolution}
+          />
         {/if}
       {:else if pane === 'edit'}
         <form class="cookbook-edit" onsubmit={onSave}>

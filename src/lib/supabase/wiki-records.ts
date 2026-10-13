@@ -27,7 +27,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
 import { getSession } from './session';
-import { base64ToBytes, ilikeLogicTreePattern } from './query-utils';
+import { base64ToBytes, ilikeFilterPattern } from './query-utils';
 import type {
   WikiRecord,
   WikiRecordFile,
@@ -91,7 +91,14 @@ export async function listWikiRecords(
     .order('created_at', { ascending: false });
   if (filters.fromDate) query = query.gte('date', filters.fromDate);
   if (filters.toDate) query = query.lte('date', filters.toDate);
-  if (filters.tags && filters.tags.length > 0) query = query.contains('tags', filters.tags);
+  // JSON.stringify is load-bearing: `tags` is jsonb, and supabase-js
+  // serializes a raw JS array as a Postgres array literal (`cs.{a,b}`),
+  // which PostgREST rejects against jsonb with a 400 (22P02). The
+  // stringified form is the JSON-array containment `cs.["a","b"]` the
+  // column needs. (The semantic-search leg masked the dead filter -
+  // only a filtered browse query hit the 400.)
+  if (filters.tags && filters.tags.length > 0)
+    query = query.contains('tags', JSON.stringify(filters.tags));
   if (filters.limit) query = query.limit(filters.limit);
   const { data, error } = await query;
   if (error) throw new SupabaseError(error.message);
@@ -315,7 +322,13 @@ export async function searchWikiRecords(
     return (data ?? []).map((row) => coerceWikiRecord(row as Record<string, unknown>));
   }
 
-  const pattern = ilikeLogicTreePattern(query);
+  // ilikeFilterPattern, not ilikeLogicTreePattern: this is a standalone
+  // .ilike() filter, where PostgREST strips no surrounding quotes - the
+  // logic-tree builder's quoted pattern would hunt for literal quote
+  // characters and the leg would never match (see query-utils.ts).
+  // Found because the recipe-records port of this merge pinned the
+  // pattern shape in a test.
+  const pattern = ilikeFilterPattern(query);
   const ilikePromise = client
     .from('wiki_records')
     .select(

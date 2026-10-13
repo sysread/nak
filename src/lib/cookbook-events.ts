@@ -3,10 +3,10 @@
  * and the subscribe helper live here (plain .ts, no `$state`) so any
  * caller can import them without pulling runes into a non-UI bundle.
  *
- * The reactive store half lives in `cookbook-store.svelte.ts`; it
- * re-exports the symbols here so existing UI imports keep working.
- * Keep any `$state` / `$derived` / `$effect` rune code OUT of this
- * file.
+ * The reactive store half lives in `cookbook-store.svelte.ts`;
+ * Chat.svelte's listener reacts to these events by reloading the
+ * store's recipe list (onCookbookStoreChanged). Keep any `$state` /
+ * `$derived` / `$effect` rune code OUT of this file.
  *
  * The publisher is the recipes-table realtime relay in Chat.svelte
  * (SupabaseService.subscribeToRecipeChanges -> emitCookbookChange).
@@ -38,4 +38,29 @@ export function onCookbookChange(handler: () => void): () => void {
   const listener = (): void => handler();
   window.addEventListener(COOKBOOK_CHANGE_EVENT, listener);
   return () => window.removeEventListener(COOKBOOK_CHANGE_EVENT, listener);
+}
+
+/**
+ * Separate channel for recipe-record writes (the dated entries in a
+ * recipe's cooking log). Kept distinct from COOKBOOK_CHANGE_EVENT so a
+ * record write refetches only the open recipe's Records section, not
+ * the whole cookbook listing. Fired by the Records section's own
+ * compose/edit/delete writes after they succeed, and by the
+ * recipe_records realtime subscription relaying server-side writes
+ * (the recipe_record_* chat tools; see
+ * SupabaseService.subscribeToRecipeRecordChanges, wired in
+ * Chat.svelte). RecipeRecords.svelte listens and refetches.
+ */
+const RECIPE_RECORD_CHANGE_EVENT = 'nak:recipe-records:changed';
+
+export function emitRecipeRecordChange(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(RECIPE_RECORD_CHANGE_EVENT));
+}
+
+export function onRecipeRecordChange(handler: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  const listener = (): void => handler();
+  window.addEventListener(RECIPE_RECORD_CHANGE_EVENT, listener);
+  return () => window.removeEventListener(RECIPE_RECORD_CHANGE_EVENT, listener);
 }

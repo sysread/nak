@@ -42,6 +42,10 @@ import * as biasApi from './supabase/bias';
 // Cookbook domain slice (recipes, versions, photos), same delegation
 // pattern.
 import * as cookbookApi from './supabase/cookbook';
+// Recipe-records domain slice (the dated cooking log: record CRUD,
+// filtered listing, search merge, delete-confirm count, cross-recipe
+// title batch), same delegation pattern.
+import * as recipeRecordsApi from './supabase/recipe-records';
 // Conversation-digest domain slice (read-only paged listing of the
 // agent-written daily recaps), same delegation pattern.
 import * as digestsApi from './supabase/digests';
@@ -128,6 +132,7 @@ import type {
   RecipeVersion,
   RecipePhoto,
   RecipePhotoInput,
+  RecipeRecord,
   GrocerySection,
   GroceryProduct,
   GroceryProductView,
@@ -183,6 +188,7 @@ import type { FollowupInspectorRow } from './ui/followups-inspector';
  *   Cookbook                  recipes, versions, photos
  *                             (listIntents straggler lives here too)
  *                                                    -> ./supabase/cookbook.ts
+ *   Recipe records            the dated cooking log  -> ./supabase/recipe-records.ts
  *   Wiki articles             article CRUD + paging + search
  *                                                    -> ./supabase/wiki.ts
  *   wiki record files         record attachments     -> ./supabase/wiki-records.ts
@@ -713,6 +719,67 @@ export class SupabaseService {
     versionId: string
   ): Promise<RecipePhotoInput[]> {
     return cookbookApi.listRecipeVersionPhotoInputs(this.client, versionId);
+  }
+
+  // Recipe records -------------------------------------------------------
+  //
+  // Extracted domain slice: record CRUD, filtered listing, the two legs
+  // of the cross-recipe search merge, the delete-confirm head count,
+  // and the batched title lookup live in
+  // ./supabase/recipe-records.ts. These methods delegate one-for-one
+  // under the same names.
+
+  async listRecipeRecords(
+    recipeId: string,
+    filters: {
+      fromDate?: string;
+      toDate?: string;
+      tags?: string[];
+      outcome?: string | null;
+      limit?: number;
+    } = {}
+  ): Promise<RecipeRecord[]> {
+    return recipeRecordsApi.listRecipeRecords(this.client, recipeId, filters);
+  }
+
+  async createRecipeRecord(args: {
+    recipeId: string;
+    date: string;
+    content: string;
+    tags?: string[];
+    outcome?: string | null;
+    sourceConversationId?: string | null;
+  }): Promise<RecipeRecord> {
+    return recipeRecordsApi.createRecipeRecord(this.client, args);
+  }
+
+  async updateRecipeRecord(
+    id: string,
+    patch: { date?: string; content?: string; tags?: string[]; outcome?: string | null }
+  ): Promise<RecipeRecord> {
+    return recipeRecordsApi.updateRecipeRecord(this.client, id, patch);
+  }
+
+  async deleteRecipeRecord(id: string): Promise<void> {
+    return recipeRecordsApi.deleteRecipeRecord(this.client, id);
+  }
+
+  async countRecipeRecords(recipeId: string): Promise<number> {
+    return recipeRecordsApi.countRecipeRecords(this.client, recipeId);
+  }
+
+  async fetchRecipeTitles(ids: string[]): Promise<Map<string, string>> {
+    return recipeRecordsApi.fetchRecipeTitles(this.client, ids);
+  }
+
+  async searchRecipeRecords(opts: {
+    query: string;
+    queryEmbedding: number[] | null;
+    outcome?: string | null;
+    recipeId?: string | null;
+    limit?: number;
+  }): Promise<RecipeRecord[]> {
+    return recipeRecordsApi.searchRecipeRecords(this.client, opts);
   }
 
   // Grocery list -----------------------------------------------------------
@@ -1554,6 +1621,10 @@ export class SupabaseService {
 
   subscribeToRecipeChanges(userId: string, onChange: () => void): () => void {
     return realtimeApi.subscribeToRecipeChanges(this.client, userId, onChange);
+  }
+
+  subscribeToRecipeRecordChanges(userId: string, onChange: () => void): () => void {
+    return realtimeApi.subscribeToRecipeRecordChanges(this.client, userId, onChange);
   }
 
   subscribeToGroceryChanges(userId: string, onChange: () => void): () => void {

@@ -25,6 +25,7 @@ import {
   photoLinkPayload,
   photoPickVerdict,
   ratingChangeMessage,
+  recipeDeleteConfirmMessage,
   recipeSaveError,
   resolveActiveRecipe,
   seedDraftPhotos,
@@ -425,5 +426,27 @@ describe('photo upload hint cap', () => {
     // it by construction; the assertion pins the derivation, not the
     // policy.
     expect(MAX_PHOTO_UPLOAD_MB).toBe(10);
+  });
+});
+
+describe('recipeDeleteConfirmMessage', () => {
+  it('names the cascade cost with a live head count, pluralized', () => {
+    expect(recipeDeleteConfirmMessage(0)).toBe(
+      'This deletes the recipe and its 0 records. This cannot be undone.'
+    );
+    expect(recipeDeleteConfirmMessage(1)).toBe(
+      'This deletes the recipe and its 1 record. This cannot be undone.'
+    );
+    expect(recipeDeleteConfirmMessage(7)).toBe(
+      'This deletes the recipe and its 7 records. This cannot be undone.'
+    );
+  });
+
+  it('confirms without the count clause when the count failed', () => {
+    // A failed head-count query must not block the delete - it just
+    // loses the "N records" line.
+    expect(recipeDeleteConfirmMessage(null)).toBe(
+      'Delete this recipe? This cannot be undone.'
+    );
   });
 });
