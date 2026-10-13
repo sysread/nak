@@ -141,6 +141,11 @@ server at any time.
 
 ## Interactions
 
+- **Recipe records** - deliberately NOT cached: the recipe's Records
+  log is online-only and degrades soft offline (retained rows render,
+  writes and filter/search submission disable, the offline-no-data
+  line replaces a never-fetched log). See
+  [`./cookbook.md`](./cookbook.md)'s Records section.
 - **Wiki** ([`./wiki.md`](./wiki.md)) - the `favorite` flag, its
   toggle in the article header, the Favorites bucket in the sidebar,
   and `setWikiArticleFavorite` / `listFavoriteWikiArticles` /

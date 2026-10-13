@@ -2,8 +2,8 @@
 
 ## Covers
 
-The three postgres_changes relays (wiki_articles, memories,
-recipes) that let server-side writers refresh open panels, and
+The four postgres_changes relays (wiki_articles, memories,
+recipes, recipe_records) that let server-side writers refresh open panels, and
 DELETE delivery through the `(id, user_id)` replica-identity
 indexes ([dev: cookbook](../../dev/cookbook.md) gotchas,
 [dev: wiki](../../dev/wiki.md) gotchas,
@@ -28,8 +28,8 @@ indexes ([dev: cookbook](../../dev/cookbook.md) gotchas,
 
    ```sql
    select relname, relreplident from pg_class
-    where relname in ('recipes','wiki_articles','memories');
-   -- expect 'i' (index) for all three
+    where relname in ('recipes','wiki_articles','memories','recipe_records');
+   -- expect 'i' (index) for all four
    ```
 
 ## Expected

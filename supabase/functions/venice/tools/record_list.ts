@@ -36,7 +36,11 @@ export const recordList: ToolDef = {
       .limit(limit);
     if (fromDate) query = query.gte('date', fromDate);
     if (toDate) query = query.lte('date', toDate);
-    if (tags.length > 0) query = query.contains('tags', tags);
+    // JSON.stringify is load-bearing: `tags` is jsonb, and a raw JS
+    // array serializes as a Postgres array literal (`cs.{a}`), which
+    // PostgREST rejects against jsonb with a 400. Same fix as the
+    // browser data layer.
+    if (tags.length > 0) query = query.contains('tags', JSON.stringify(tags));
 
     const { data, error } = await query;
     if (error) throw new Error(`listWikiRecords failed: ${error.message}`);

@@ -66,8 +66,12 @@ export const recipeRecordUpdateSchema = {
         description: 'Optional. Replacement tag array (replaces all existing tags).',
       },
       outcome: {
-        type: 'string',
-        enum: ['success', 'mixed', 'failure'],
+        // `null` is a real value here (clears the classification) -
+        // the array-typed schema is what lets the central validator
+        // admit it (a plain type:'string' rejects null before the
+        // handler runs; house pattern: followup_save, recipe_save).
+        type: ['string', 'null'],
+        enum: ['success', 'mixed', 'failure', null],
         description:
           'Optional. Omit unless setting or clearing the outcome; ' +
           'passing null clears the classification (counts as the one ' +

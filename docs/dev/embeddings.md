@@ -84,6 +84,9 @@ call site is which client handle they hold.
   already validated the signature). It then drives `runBackfill` over
   the seven sources, bounded by a batch cap (12 rows) and a time budget
   (30s) per invocation. The schedule resumes the drain next tick.
+  (The source count is whatever `EMBED_SOURCES` holds at runtime -
+  eight as of the recipe-records addition; do not trust a number
+  quoted here.)
 - **`runBackfill(deps, opts)`** - round-robins one claim attempt per
   source per pass; embeds and saves whatever it claims; stops when a
   full pass claims nothing (queue drained), the cap or budget is

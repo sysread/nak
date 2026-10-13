@@ -138,7 +138,9 @@ offline posture.
   divergence from the wiki twin).
 - (12) The record's `embedding` populates (vector(2048)) via the
   shared backfill loop - check via PostgREST (`embedding is not
-  null`; the backfill logs server-side, not to the drawer).
+  null`). The drain also emits a transient per-user drawer line
+  ("embedded N item(s) in the background", tag `embeddings`) that is
+  easy to miss; if the drawer missed it, the function log has it.
   Search now hits it through the vector path.
 - (13) Same recipe offline: the retained rows still render, add/edit
   controls and the filter/search controls disable with copy (the

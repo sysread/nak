@@ -1,8 +1,9 @@
 /**
  * Cookbook-domain row types: recipes, their immutable version snapshots,
- * and recipe photos (render-ready, metadata-only, and wire-input
- * shapes). Re-exported through `../../supabase.ts` so consumers keep
- * importing from `$lib/supabase`.
+ * recipe photos (render-ready, metadata-only, and wire-input shapes),
+ * and recipe records (the dated cooking log). Re-exported through
+ * `../../supabase.ts` so consumers keep importing from
+ * `$lib/supabase`.
  */
 
 // --- appended verbatim from the original supabase.ts type block ---
@@ -169,11 +170,10 @@ export interface RecipeRecord {
 
 /**
  * Defensive coercion of a recipe_records row (or a search hit). `tags`
- * may arrive as a JSONB array or be absent on a search-RPC row (the
- * RPC projects it but a jsonb payload could round-trip as a string);
- * normalize to a string array. `outcome`, `source_conversation_id`,
- * and `similarity` are optional; `user_id` is absent on search-RPC
- * rows, which don't project that column.
+ * arrives as a JSONB array but a jsonb payload could round-trip as a
+ * string; normalize to a string array either way. `outcome`,
+ * `source_conversation_id`, and `similarity` are optional; `user_id`
+ * is absent on search-RPC rows, which don't project that column.
  */
 export function coerceRecipeRecord(raw: Record<string, unknown>): RecipeRecord {
   let tags: string[] = [];

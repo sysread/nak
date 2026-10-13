@@ -3,10 +3,10 @@
  * channel the UI holds open (the per-thread message echo stream, the
  * sidebar's thread relay, the coarse "something changed" relays for
  * wiki articles / records, memories, recipes and recipe records, the
- * private
- * Broadcast channels for edge-function logs, samskara mints and
- * agent-run progress, and the profiles-row relays for the in-flight
- * lease and last-run outcome), plus the point reads paired with those
+ * private Broadcast channels for edge-function logs, samskara mints
+ * and agent-run progress, and the profiles-row relays for the
+ * in-flight lease and last-run outcome), plus the point reads paired
+ * with those
  * channels (getMessage for the end-of-turn hydration race, the
  * on-mount lease-expiry and last-run-outcome reads that recover state
  * a closed tab missed).

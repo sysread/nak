@@ -95,8 +95,8 @@ export async function listWikiRecords(
   // serializes a raw JS array as a Postgres array literal (`cs.{a,b}`),
   // which PostgREST rejects against jsonb with a 400 (22P02). The
   // stringified form is the JSON-array containment `cs.["a","b"]` the
-  // column needs. (Found by the recipe-records QA run; this leg had
-  // been broken since the twin shipped - the semantic leg masked it.)
+  // column needs. (The semantic-search leg masked the dead filter -
+  // only a filtered browse query hit the 400.)
   if (filters.tags && filters.tags.length > 0)
     query = query.contains('tags', JSON.stringify(filters.tags));
   if (filters.limit) query = query.limit(filters.limit);
@@ -326,6 +326,8 @@ export async function searchWikiRecords(
   // .ilike() filter, where PostgREST strips no surrounding quotes - the
   // logic-tree builder's quoted pattern would hunt for literal quote
   // characters and the leg would never match (see query-utils.ts).
+  // Found because the recipe-records port of this merge pinned the
+  // pattern shape in a test.
   const pattern = ilikeFilterPattern(query);
   const ilikePromise = client
     .from('wiki_records')

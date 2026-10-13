@@ -71,6 +71,7 @@
     recordsEmptyMessage,
     recordsHeadline,
     reduceRecipeRecordRetention,
+    resetsOnRecipeChange,
     retentionEntryFor,
     serializeTags,
     todayIso,
@@ -241,10 +242,12 @@
     toDate = '';
     tagFilter = '';
     resetComposeForm();
-    if (!untrack(() => searchMode)) {
-      outcomeFilter = '';
-      expandedId = null;
-    }
+    // The matrix's conditional half (outcome + expanded row reset only
+    // in browse mode) - wired through the tested primitive so the
+    // matrix and the shipped wiring cannot drift.
+    const resets = resetsOnRecipeChange(untrack(() => searchMode));
+    if (resets.outcome) outcomeFilter = '';
+    if (resets.expandedRow) expandedId = null;
     void untrack(() => loadLog(id, {}));
     const off = onRecipeRecordChange(() => {
       if (untrack(() => searchMode)) {
@@ -261,17 +264,38 @@
     return () => off();
   });
 
-  // Search debounce + clear-on-empty (RecipeList's wiring). Reads only
+  // Reconnect re-arms a fetch the offline no-op skipped: navigating to
+  // a recipe while offline leaves its id without a map entry, and the
+  // browse view would sit on "Loading records…" forever (nothing else
+  // re-arms it). Cold fetch only - a map entry holding rows or an
+  // error stays until its own triggers refetch it. Declared AFTER the
+  // id-change effect so a mount-time double fetch is impossible (the
+  // first effect's loadLog has already set the in-flight flag).
+  $effect(() => {
+    const id = recipeId;
+    if (!id || searchMode) return;
+    if (logRows !== null || logFailed) return;
+    if (!offlineStatus.online) return;
+    if (untrack(() => logFetchInFlight)) return;
+    void untrack(() => loadLog(id, listFiltersFromBrowse(currentBrowseFilters())));
+  });
   // the query and connectivity - never the results state - so a
   // landing search cannot re-arm this effect.
   $effect(() => {
     const q = searchQuery.trim();
     if (q.length === 0) {
-      searchResults = null;
-      searchError = null;
-      searching = false;
-      if (searchAbort) searchAbort.abort();
-      searchAbort = null;
+      // Emptying the box exits search through the SAME transition as
+      // the Clear button - one exit shape, so the outcome dropdown
+      // cannot desync from the rendered log. (No-op when no search is
+      // live: state is already clear.)
+      if (searchResults !== null) clearSearch();
+      else {
+        searchResults = null;
+        searchError = null;
+        searching = false;
+        if (searchAbort) searchAbort.abort();
+        searchAbort = null;
+      }
       return;
     }
     // Offline the box stays editable and clearable, but new queries
@@ -344,12 +368,10 @@
       // A new result set is a new story: the highlight marks one
       // specific result, so a re-search (relay or keystroke) clears it.
       highlightId = null;
-      titleState = hitTitleStateFromBatch(new Map());
-      // One batched title query per result set for the cross-recipe
-      // annotations - never one read per hit. A batch failure
-      // degrades every foreign label to "couldn't load" (rows stay
-      // clickable) rather than letting a network blip read as
-      // deletion.
+      // Pending until the title batch lands: with an empty ok-map here,
+      // every foreign hit would flash "(deleted recipe)" for the batch
+      // round trip - the label must not preempt the lookup's verdict.
+      titleState = { status: 'pending' };
       try {
         const ids = Array.from(new Set(hits.map((h) => h.recipe_id)));
         const titles = await app.supabase.fetchRecipeTitles(ids);
@@ -372,6 +394,12 @@
   }
 
   function clearSearch(): void {
+    // Abort an in-flight search first: without it, a landing response
+    // would repopulate searchResults after the clear (the then-handler
+    // only skips when its own controller was aborted).
+    if (searchAbort) searchAbort.abort();
+    searchAbort = null;
+    searching = false;
     searchQuery = '';
     searchResults = null;
     searchError = null;
@@ -529,11 +557,14 @@
   }
 </script>
 
-{#if !searchMode && resolution === 'missing'}
-  <!-- Render-nothing mount-void: an empty log under a not-found pane
-       would read as "no records yet" when another device may have
-       deleted the open recipe. With a live search the section stays
-       mounted and renders the results list instead. -->
+{#if !searchMode && resolution === 'missing' && online}
+  <!-- Render-nothing mount-void, ONLINE ONLY: an empty log under a
+       not-found pane would read as "no records yet" when another
+       device may have deleted the open recipe. Offline the
+       offline-no-data line renders instead (the plan's precedence:
+       the honest no-data treatment beats a void), and with a live
+       search the section stays mounted and renders the results list
+       regardless. -->
 {:else}
   <section class="recipe-records" id="recipe-records" bind:this={sectionEl} aria-label="Records">
     <header class="recipe-records-header">

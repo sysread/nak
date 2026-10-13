@@ -476,7 +476,9 @@ this today and the crumb was gummy") and it lands here.
   chip, tag chips, and a one-line preview; click a row to read the
   full entry, with Edit, Export, and Delete underneath.
 - **Filters**: date range, tag, and outcome narrow this recipe's
-  log.
+  log. While a search is live, date and tag step aside (search
+  results bypass them) and the outcome dropdown narrows the search
+  instead.
 - **Search is cookbook-wide.** The search box searches every
   recipe's cooking log by meaning, not just the open recipe's. Hits
   from other recipes carry that recipe's title, and clicking one
@@ -487,10 +489,15 @@ this today and the crumb was gummy") and it lands here.
 - **Export**: the download button on an expanded row saves that
   record as a Markdown file; the header's download button saves the
   whole recipe plus its complete log as a ZIP (Export all ignores
-  the filters and search on purpose - you get the full diary).
+  the filters and search on purpose - you get the full diary;
+  offline it packs whatever's already loaded, which can be a
+  subset).
 - **Offline**: records need the network to load, but a log you've
-  already viewed this session stays readable offline. Writes and
-  filters grey out until you reconnect.
+  already viewed this session stays readable offline. Writes grey
+  out, the date/tag filters and the search button grey out (the
+  search box itself stays clearable, which brings you back to the
+  loaded log), and an unfetched log says so instead of looking
+  empty.
 - **Records hang off the recipe.** Deleting a recipe deletes its
   log with it - the delete confirmation says how many records it
   will take.

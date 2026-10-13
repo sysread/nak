@@ -100,7 +100,8 @@ The layout:
   import surface.
 - **Query implementations** live in plain-function modules at
   `src/lib/supabase/<domain>.ts` (samskara, settings, venice-proxy,
-  threads, topics, memories, cookbook, wiki, wiki-records,
+  threads, topics, memories, cookbook, recipe-records, wiki,
+  wiki-records,
   wiki-sources, agent-runs, documents, messages, realtime, bias).
   Each function takes the shared `SupabaseClient` as its first
   argument and keeps the name of the facade method that delegates to

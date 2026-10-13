@@ -3,10 +3,10 @@
  * and the subscribe helper live here (plain .ts, no `$state`) so any
  * caller can import them without pulling runes into a non-UI bundle.
  *
- * The reactive store half lives in `cookbook-store.svelte.ts`; it
- * re-exports the symbols here so existing UI imports keep working.
- * Keep any `$state` / `$derived` / `$effect` rune code OUT of this
- * file.
+ * The reactive store half lives in `cookbook-store.svelte.ts`;
+ * Chat.svelte's listener reacts to these events by reloading the
+ * store's recipe list (onCookbookStoreChanged). Keep any `$state` /
+ * `$derived` / `$effect` rune code OUT of this file.
  *
  * The publisher is the recipes-table realtime relay in Chat.svelte
  * (SupabaseService.subscribeToRecipeChanges -> emitCookbookChange).

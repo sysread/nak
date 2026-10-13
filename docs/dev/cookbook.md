@@ -46,12 +46,14 @@ unaffected.
   `CustomEvent` (`nak:recipes:changed`) so tools stay UI-unaware - its
   handler calls `loadRecipes`, i.e. a tool mutation resets the list to
   the top rather than trying to patch a row in the middle of a page.
-- `src/lib/tools/recipe_*.schema.ts` — the eight LLM tools' wire
+- `src/lib/tools/recipe_*.schema.ts` — the fourteen LLM tools' wire
   schemas (name, description, JSON Schema parameters). Schema only;
   the browser never executes a recipe tool.
 - `supabase/functions/venice/tools/recipe_save.ts`, `recipe_list.ts`,
-  `recipe_get.ts`, `recipe_delete.ts`, and
-  `recipe_photos.ts` (which carries all four photo verbs) — the
+  `recipe_get.ts`, `recipe_delete.ts`,
+  `recipe_photos.ts` (which carries all four photo verbs), and
+  `recipe_record_*.ts` + `_recipe_record_helpers.ts` (the six record
+  tools and their shared normalizers) — the
   implementations, dispatched function-side against the admin client.
   `_recipe_helpers.ts` holds `readRecipePhotoMeta`, the "newest
   version's link set" read that `recipe_get` and the save tool's edit form
@@ -494,7 +496,7 @@ record is one dated event about what happened when the user cooked.
 Ported from the wiki records feature (see
 [`./wiki.md`](./wiki.md), "wiki_records (the dated journey layer)"):
 same table shape, same tool split (the `recipe_record_*` chat tools
-are a separate milestone), same UI section anatomy. Full design
+landed with the section), same UI section anatomy. Full design
 decisions live in
 [`./plans/recipe-records-plan.md`](./plans/recipe-records-plan.md).
 
@@ -626,7 +628,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 
 ## Interactions
 
-- **Tools** (`./tools.md`) — eight recipe tools registered in
+- **Tools** (`./tools.md`) — fourteen recipe tools registered in
   `src/lib/tools/index.ts`'s `TOOLS` array. Every tool is declared
   on every request (there is no gating mechanism), so they appear in
   the system-prompt catalog automatically.

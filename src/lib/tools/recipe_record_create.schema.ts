@@ -57,7 +57,9 @@ export const recipeRecordCreateSchema = {
     'setting or clearing it; null clears. Tags are freeform filter ' +
     'keywords. After logging, fold any resulting recipe change (a ' +
     'tweak to the cooklang) into a separate recipe_save edit so the ' +
-    "History panel keeps the two apart. Returns the created record row.",
+    "History panel keeps the two apart. Returns {record, " +
+    'same_date_siblings, most_recent_prior} - the dedup payload names ' +
+    "its parts so a duplicate is visible without a second call.",
   shortDescription: 'log a dated cooking record on a recipe',
   formatArgs: formatRecipeRecordCreateArgs,
   parameters: {
@@ -89,13 +91,14 @@ export const recipeRecordCreateSchema = {
         description: 'Optional. Keyword tags for filtering this record.',
       },
       outcome: {
-        type: 'string',
-        enum: ['success', 'mixed', 'failure'],
+        // Array-typed so a model echoing null passes validation (the
+        // handler treats absent and null alike on a create - there is
+        // nothing to clear yet; house pattern: followup_save).
+        type: ['string', 'null'],
+        enum: ['success', 'mixed', 'failure', null],
         description:
-          'Optional. How the cook went. Omit unless setting or ' +
-          'clearing the outcome; passing null clears it (the ' +
-          'spurious-null hazard: models echo null unprompted, and a ' +
-          'null here wipes the classification).',
+          'Optional. How the cook went. Omit unless setting the ' +
+          'outcome; the model may echo null (treated as omitting).',
       },
     },
     required: ['recipe_id', 'date', 'content'],

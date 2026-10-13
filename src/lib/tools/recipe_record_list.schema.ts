@@ -10,8 +10,9 @@ export const recipeRecordListSchema = {
     'first. Provide recipe_id (from recipe_list) and optional ' +
     'filters: from_date / to_date (inclusive ISO 8601 bounds), tags ' +
     '(a record must carry every listed tag), and outcome (success | ' +
-    'mixed | failure). Returns {records: [{id, date, content, tags, ' +
-    'outcome, created_at}]}. Use this to survey a recipe\'s log ' +
+    'mixed | failure). Returns {records: [{id, recipe_id, date, ' +
+    'content, tags, outcome, source_conversation_id, created_at, ' +
+    'updated_at}]}. Use this to survey a recipe\'s log ' +
     'before recipe_record_create - if the event is already logged, ' +
     'recipe_record_update the existing record instead of stacking a ' +
     'duplicate (same EVENT, not same date).',

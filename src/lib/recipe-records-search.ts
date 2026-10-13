@@ -1,7 +1,7 @@
 /**
- * Shared semantic-search pipeline for recipe records. The
- * `src/lib/wiki.ts` twin of `searchWikiRecordsSemantic`, ported for the
- * Records section's search box: embed the query via Venice (silent
+ * Shared semantic-search pipeline for recipe records: the recipe port
+ * of `searchWikiRecordsSemantic` (`src/lib/wiki.ts`), driving the
+ * Records section's search box. Embed the query via Venice (silent
  * ILIKE-only fallback on failure - a transient Venice error shouldn't
  * blank the search), then hand the embedding to
  * `SupabaseService.searchRecipeRecords`, which merges vector hits with
@@ -19,7 +19,7 @@
 import type { RecipeRecord, SupabaseService } from './supabase';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from './models';
 
-export interface SearchRecipeRecordsOptions {
+interface SearchRecipeRecordsOptions {
   query: string;
   limit: number;
   /** Optional outcome filter (success | mixed | failure); both merge legs honor it. */

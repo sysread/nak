@@ -35,7 +35,7 @@ import { coerceRecipeRecord } from './types';
 
 // Every read path projects the same column set (no per-path embeds or
 // aggregations, unlike the wiki twin's attachment-count embed), so one
-// string serves list / get / create / update / both search legs.
+// string serves list / create / update / both search legs.
 const RECORD_COLUMNS =
   'id, user_id, recipe_id, date, content, tags, outcome, source_conversation_id, created_at, updated_at';
 
@@ -71,8 +71,7 @@ export async function listRecipeRecords(
   // serializes a raw JS array as a Postgres array literal (`cs.{a,b}`),
   // which PostgREST rejects against jsonb with a 400 (22P02). The
   // stringified form is the JSON-array containment `cs.["a","b"]` the
-  // column needs. Found by the QA use-case's first run - the wiki twin
-  // shipped the same bug.
+  // column needs.
   if (filters.tags && filters.tags.length > 0)
     query = query.contains('tags', JSON.stringify(filters.tags));
   if (filters.outcome) query = query.eq('outcome', filters.outcome);

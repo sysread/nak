@@ -13,7 +13,10 @@
  * logic-tree pattern (which wraps the value in literal double quotes
  * that PostgREST only strips inside a logic tree), leaving the leg
  * effectively dead - see query-utils.ts. These tests fail if the
- * recipe merge inherits that bug or the twin regresses.
+ * recipe merge inherits that bug. (The twin's own leg has no unit
+ * test; its revival is pinned by the wiki-records QA use-case's
+ * re-run, and this file's twin-shape case documents what the pattern
+ * must look like if it ever gets ported back.)
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';

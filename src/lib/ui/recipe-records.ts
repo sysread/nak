@@ -25,7 +25,8 @@ import {
 /**
  * One recipe id's entry in the session retention map: either the rows
  * from that recipe's most recent log fetch, or a marker that the fetch
- * failed cold (no prior rows to keep rendering). `updated_at`-ordered
+ * failed cold (no prior rows to keep rendering). Listed `date` desc
+ * with the `created_at` tie-break
  * fetches land here keyed by the id they were FOR, never the id that
  * happened to be open when the response arrived - the late-response
  * race dies by construction because the view always reads
@@ -44,6 +45,7 @@ export type RecipeRecordRetentionMap = ReadonlyMap<string, RecipeRecordRetention
  * the event exists so the contract is explicit and testable rather
  * than implicit in the caller not dispatching anything.
  */
+
 export type RecipeRecordRetentionEvent =
   | { type: 'fetch-landed'; recipeId: string; rows: RecipeRecord[] }
   | { type: 'fetch-failed'; recipeId: string }
@@ -361,8 +363,12 @@ export const HIT_TITLE_UNAVAILABLE_LABEL = "couldn't load";
  * a re-derived label, and a network blip must not read as deletion).
  */
 export type HitTitleState =
+  /** Titles landed; an id absent from the map is a confirmed deletion. */
   | { status: 'ok'; titles: ReadonlyMap<string, string> }
-  | { status: 'failed' };
+  /** The batch query failed as a whole. */
+  | { status: 'failed' }
+  /** Results rendered, batch still in flight - no deletion verdict yet. */
+  | { status: 'pending' };
 
 /** Fold a batch result (null = the query threw) into the label state. */
 export function hitTitleStateFromBatch(
@@ -373,11 +379,12 @@ export function hitTitleStateFromBatch(
 
 /**
  * The row annotation for a search hit: null for rows on the open
- * recipe (they are this recipe's records - no annotation), the
- * resolved title for a foreign hit, "(deleted recipe)" when the batch
- * succeeded and the id is absent (a saved result set can outlive a
- * recipe), or "couldn't load" when the batch failed as a whole (every
- * foreign row degrades together).
+ * recipe (they are this recipe's records - no annotation) and while
+ * the title batch is still in flight (no deletion verdict exists
+ * yet), the resolved title for a foreign hit, "(deleted recipe)"
+ * when the batch succeeded and the id is absent (a saved result set
+ * can outlive a recipe), or "couldn't load" when the batch failed as
+ * a whole (every foreign row degrades together).
  */
 export function hitLabel(
   state: HitTitleState,
@@ -385,18 +392,19 @@ export function hitLabel(
   openRecipeId: string
 ): string | null {
   if (hitRecipeId === openRecipeId) return null;
+  if (state.status === 'pending') return null;
   if (state.status === 'failed') return HIT_TITLE_UNAVAILABLE_LABEL;
   return state.titles.get(hitRecipeId) ?? DELETED_RECIPE_LABEL;
 }
 
 /**
- * Whether a search-hit row may navigate on click. Only a CONFIRMED
- * deletion (batch succeeded, id absent) is a no-op - a "couldn't load"
- * row stays clickable because the blip may be transient and cached
- * recipes still open.
+ * Whether a search-hit row may navigate on click. Rows are clickable
+ * while the batch is pending or failed (the blip may be transient and
+ * cached recipes still open); only a CONFIRMED deletion (batch
+ * succeeded, id absent) is a no-op.
  */
 export function hitClickable(state: HitTitleState, hitRecipeId: string): boolean {
-  if (state.status === 'failed') return true;
+  if (state.status !== 'ok') return true;
   return state.titles.has(hitRecipeId);
 }
 

@@ -19,10 +19,11 @@ export const MAX_RECIPE_COOKLANG_CHARS = 20_000;
 export const MAX_RECIPE_TITLE_CHARS = 160;
 
 // The neighboring "recipe limits" home is
-// supabase/functions/_shared/recipe-record-limits.ts, reached here via
-// the $shared alias when a browser caller needs the recipe-record caps.
-// The two files deliberately point in opposite directions: THIS file is
-// canonical for the cooklang/title caps (the edge side mirrors them),
-// while the _shared file is canonical for the record caps (the browser
+// supabase/functions/_shared/recipe-record-limits.ts: browser callers
+// import it through the $shared alias when they need the recipe-record
+// caps. The two files deliberately point in opposite directions: THIS
+// file is canonical for the cooklang/title caps (the edge side mirrors
+// them), while the _shared file is canonical for the record caps (the
+// browser
 // imports it). See the _shared file's preamble; do not merge the two
 // or flip either direction.

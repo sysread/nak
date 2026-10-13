@@ -696,9 +696,11 @@
   }
 
   function onCookbookStoreChanged(): void {
-    // Any recipe_* tool call or modal write invalidates the list —
-    // reload if we've ever loaded it, so the Recipes drawer tab and
-    // the modal (if still open) both reflect the new state.
+    // Any recipe-content tool call or cookbook write (save/delete/
+    // photos) invalidates the list — reload if we've ever loaded it,
+    // so the Recipes drawer tab and the open pane both reflect the
+    // new state. Record writes fire their own event instead: they
+    // touch no recipe row, so the recipe list stays put.
     if (!app.supabase) return;
     if (cookbook.recipes.length === 0 && !cookbook.loading) return;
     void loadRecipes(app.supabase);

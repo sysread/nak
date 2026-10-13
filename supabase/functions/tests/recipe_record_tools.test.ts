@@ -23,6 +23,7 @@ import { recipeRecordList } from '../venice/tools/recipe_record_list.ts';
 import { recipeRecordGet } from '../venice/tools/recipe_record_get.ts';
 import { recipeRecordSearch } from '../venice/tools/recipe_record_search.ts';
 import { recipeRecordCreateSchema } from '../../../src/lib/tools/recipe_record_create.schema.ts';
+import { recipeRecordUpdateSchema } from '../../../src/lib/tools/recipe_record_update.schema.ts';
 
 // --- localEmbed seam ---------------------------------------------------
 //
@@ -428,7 +429,12 @@ Deno.test('recipe_record_list applies date/tag/outcome filters and clamps the li
   assertEquals(callsOf(rec, 'eq')[1]!.slice(0, 2), ['recipe_id', 'r-1']);
   assertEquals(firstCall(rec, 'gte')!.slice(0, 2), ['date', '2026-10-01']);
   assertEquals(firstCall(rec, 'lte')!.slice(0, 2), ['date', '2026-10-31']);
-  assertEquals(firstCall(rec, 'contains')!.slice(0, 2), ['tags', ['rye']]);
+  // jsonb containment needs the JSON-stringified form - a raw array
+  // serializes as `cs.{rye}` and PostgREST 400s (the QA round-1 bug).
+  assertEquals(
+    firstCall(rec, 'contains')!.slice(0, 2),
+    ['tags', JSON.stringify(['rye'])]
+  );
   assertEquals(callsOf(rec, 'eq')[2]!.slice(0, 2), ['outcome', 'failure']);
   assertEquals(firstCall(rec, 'limit')![0], 5);
   // Newest event first, created_at as the tie-break (two cooks on one
@@ -635,4 +641,32 @@ Deno.test('create description carries the capture trigger and the check-list-fir
   assertStringIncludes(d, 'recipe_record_update');
   // The spurious-null hazard on the optional outcome.
   assertStringIncludes(d, 'omit unless setting or clearing');
+});
+
+// The null-clear journey is only reachable if the WIRE schema admits
+// null - the central validator (validateToolArgs) checks the wire
+// schema BEFORE dispatch, and a plain type:'string' rejects null
+// before the handler's three-state branch ever runs. These tests call
+// .execute() directly and would never see that rejection, so the
+// schema SHAPE is pinned here instead. House pattern for nullable
+// params: type: ['string','null'] + enum including null
+// (followup_save, recipe_save).
+Deno.test('update schema admits null outcome through the wire validator', () => {
+  const o = recipeRecordUpdateSchema.parameters.properties.outcome as unknown as {
+    type: readonly string[];
+    enum: readonly unknown[];
+  };
+  assertEquals(Array.isArray(o.type), true);
+  assertEquals(o.type.includes('null'), true);
+  assertEquals(o.enum.includes(null), true);
+});
+
+Deno.test('create schema admits null outcome through the wire validator', () => {
+  const o = recipeRecordCreateSchema.parameters.properties.outcome as unknown as {
+    type: readonly string[];
+    enum: readonly unknown[];
+  };
+  assertEquals(Array.isArray(o.type), true);
+  assertEquals(o.type.includes('null'), true);
+  assertEquals(o.enum.includes(null), true);
 });

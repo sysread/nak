@@ -37,10 +37,11 @@ export const RECIPE_RECORD_COLUMNS =
 export const RECIPE_RECORD_PREVIEW_CHARS = 120;
 
 // The outcome check constraint bounds the column to these values;
-// "not classified" is null. Exported for the tools' arg validation and
-// the list/search filters.
-export const RECIPE_RECORD_OUTCOMES = ['success', 'mixed', 'failure'] as const;
-export type RecipeRecordOutcome = (typeof RECIPE_RECORD_OUTCOMES)[number];
+// "not classified" is null. The tools reach the enum through
+// isRecipeRecordOutcome below - the array/type stay file-local so the
+// shapes don't invite direct enum imports.
+const RECIPE_RECORD_OUTCOMES = ['success', 'mixed', 'failure'] as const;
+type RecipeRecordOutcome = (typeof RECIPE_RECORD_OUTCOMES)[number];
 
 export function isRecipeRecordOutcome(value: unknown): value is RecipeRecordOutcome {
   return (
