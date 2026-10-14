@@ -939,6 +939,23 @@ A chat turn goes:
   streaming bubble to persisted card and stay on the row for as long as
   the thread is loaded. A cold reopen has no in-memory entry and renders
   the header bare - same elision as the tool-duration pills.
+- **A tool-call round hands its OPEN state to the delivered card.** The
+  close paths above never fire in a round that goes thinking ->
+  tool_calls (no answer delta to yield to), so before this handoff the
+  round's reasoning visibly vanished at `round_committed`: open panel at
+  the bottom of the transcript replaced by a collapsed header on the
+  tool-group card above. Now `onAssistantPersisted` consults
+  `reasoningSurvivesRoundHandoff` (same module as the pills) and sets
+  `reasoningOpenById[msg.id]` when the live panel was still open, the row
+  carries reasoning, and the row has tool_calls. The tool-group block
+  two-way binds that entry through AssistantBody's `reasoningOpen` into
+  ReasoningPanel's `open`, so the delivered card's panel renders open and
+  a user click writes back through the map and sticks. The next round's
+  FIRST text or reasoning delta collapses all delivered-open entries
+  (`collapseDeliveredReasoning` in Chat.svelte) - one open panel at a
+  time, and the yield-to-answer rhythm holds one round later, while the
+  tools keep the panel open through the dispatch window. Terminal rows
+  keep collapse-at-delivery. In-memory only, same elision as the pills.
 - **The queue drains from two turn-settled tails, not one.**
   `maybeDrainQueuedMessages(threadId)` is called after the
   try/catch/finally of BOTH `runExchange` and

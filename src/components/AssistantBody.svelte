@@ -63,6 +63,17 @@
      */
     reasoningElapsed?: string | null;
     reasoningChars?: string | null;
+    /**
+     * Two-way bound initial open state for this row's ReasoningPanel.
+     * The tool-group caller pins it true on a round whose reasoning was
+     * still streaming at the handoff, so the round's thinking survives
+     * the boundary visibly; unbound callers (plain assistant rows) get
+     * the collapsed-by-default persisted render. Bindable so a user
+     * click on the delivered panel writes back through the caller's
+     * map and the next round's first delta can auto-collapse it - see
+     * `reasoningOpenById` in Chat.svelte.
+     */
+    reasoningOpen?: boolean;
     citations?: Message['citations'];
     /**
      * Raw `messages.second_thoughts` jsonb for this assistant row. The
@@ -161,11 +172,14 @@
     onForkPreviewLeave?: () => void;
   }
 
-  const {
+  // `let`, not `const`: the declaration carries a $bindable prop
+  // (reasoningOpen), and Svelte rejects binding through a const.
+  let {
     content,
     reasoning = null,
     reasoningElapsed = null,
     reasoningChars = null,
+    reasoningOpen = $bindable(false),
     citations = null,
     secondThoughts = null,
     onRefine,
@@ -253,6 +267,7 @@
 </script>
 
 <ReasoningPanel
+  bind:open={reasoningOpen}
   reasoning={reasoning ?? ''}
   elapsedPill={reasoningElapsed}
   charPill={reasoningChars}

@@ -271,6 +271,7 @@
     reasoningShouldCollapse,
     reasoningElapsedPill,
     reasoningCharPill,
+    reasoningSurvivesRoundHandoff,
   } from '$lib/ui/reasoning-panel';
   import {
     thinkingOffRejectedForModel,
@@ -736,6 +737,35 @@
   // pills), so a background completion the user never watched doesn't
   // sprout pills on first view.
   let reasoningPillsById = $state<Record<string, { elapsed: string | null; chars: string | null }>>({});
+
+  // Delivered-open reasoning panels, keyed by message id. A tool-call
+  // round whose live panel was still streaming at the persist handoff
+  // delivers its card with the panel OPEN (reasoningSurvivesRoundHandoff)
+  // - otherwise the round's reasoning visibly vanishes at the boundary.
+  // The next round's first text/reasoning delta collapses the entry, so
+  // exactly one reasoning panel is ever open and the usual
+  // "thinking yields to the answer" rhythm holds one round later. Bindable
+  // through AssistantBody, so a user click writes back here and sticks.
+  // In-memory only, same elision as reasoningPillsById.
+  //
+  // The tool-group block binds through the two-function form (`bind:prop={
+  // get, set }`) rather than a plain member expression: rows with no entry
+  // would bind `undefined`, and Svelte throws props_invalid_value when a
+  // bindable with a fallback receives undefined - which took the whole
+  // Chat tree down on any thread that had a tool round delivered without
+  // a handoff entry (e.g. the user had collapsed the live panel).
+  let reasoningOpenById = $state<Record<string, boolean>>({});
+
+  // Close every delivered-open panel. Called on the first content or
+  // reasoning delta of a new round, so the previous round's panel tucks
+  // away as the model's next output takes over - never while the tools
+  // it called are still dispatching (the window where the reasoning is
+  // the only thing on screen explaining what's happening).
+  function collapseDeliveredReasoning(): void {
+    for (const id of Object.keys(reasoningOpenById)) {
+      if (reasoningOpenById[id]) reasoningOpenById[id] = false;
+    }
+  }
 
   // --- Per-user-message samskara diagnostics --------------------------
   // The cohort fires + substrate that the modal used to render in its
@@ -4597,6 +4627,10 @@
               // so only the first text delta schedules it.
               if (!slot.streamingContentStarted) {
                 slot.streamingContentStarted = true;
+                // This round's first output arriving closes any panel the
+                // previous round's handoff left open on its delivered
+                // card - one open reasoning panel at a time.
+                collapseDeliveredReasoning();
                 // Reasoning has yielded to the answer: freeze the
                 // elapsed-ms pill at the final thinking duration. Only
                 // when this round actually thought (reasoningStartedAt
@@ -4652,6 +4686,9 @@
               // open within ~50ms. The user's explicit collapse now
               // sticks because nothing re-opens behind it.
               if (slot.reasoningStartedAt === null) {
+                // New round's thinking starting: tuck the previous
+                // round's delivered-open panel before opening this one.
+                collapseDeliveredReasoning();
                 slot.reasoningStartedAt = performance.now();
                 if (!slot.reasoningUserToggled) slot.streamingReasoningOpen = true;
               }
@@ -4700,6 +4737,23 @@
                   if (elapsed !== null || chars !== null) {
                     reasoningPillsById[msg.id] = { elapsed, chars };
                   }
+                }
+                // Tool-round open handoff: a round whose panel was still
+                // open here delivers its card with the panel OPEN, so the
+                // reasoning the user was just reading survives the
+                // boundary on the card above instead of snapping shut.
+                // Terminal rows keep collapse-at-delivery - their
+                // reasoning already yielded to the answer via the 600ms
+                // close, and a final answer shouldn't open with a wall of
+                // thinking above it.
+                if (
+                  reasoningSurvivesRoundHandoff(
+                    slot.streamingReasoningOpen,
+                    (msg.tool_calls?.length ?? 0) > 0,
+                    msg.reasoning
+                  )
+                ) {
+                  reasoningOpenById[msg.id] = true;
                 }
                 // Only a completed terminal answer gets a second-thoughts
                 // verdict (the reviewer runs on `terminalKind==='completed'`,
@@ -8083,6 +8137,10 @@
                 <AssistantBody
                   content={block.assistant.content}
                   reasoning={block.assistant.reasoning}
+                  bind:reasoningOpen={
+                    () => reasoningOpenById[block.assistant.id] ?? false,
+                    (v) => { reasoningOpenById[block.assistant.id] = v; }
+                  }
                   reasoningElapsed={reasoningPillsById[block.assistant.id]?.elapsed ?? null}
                   reasoningChars={reasoningPillsById[block.assistant.id]?.chars ?? null}
                   citations={block.assistant.citations}

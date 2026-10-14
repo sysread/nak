@@ -95,6 +95,12 @@ all the way back up to the little header toggle. Selecting text to
 copy doesn't count as that click, so highlighting a passage won't
 snap the panel shut.
 
+Sometimes the model thinks, then calls a tool (a search, a memory
+lookup) before writing any answer. When that happens the thinking
+panel moves onto the tool's card and stays open while the tool runs,
+so you can keep reading why the model did what it did. It tucks away
+once the next part of the reply starts.
+
 After the fact, every message that has saved reasoning shows a
 thought-balloon "Reasoning" header at the top of the bubble. Click
 it to expand the block-quote back open — handy for reading *why* the

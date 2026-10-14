@@ -92,3 +92,24 @@ export function reasoningCharPill(count: number): string | null {
   if (count < 1) return null;
   return `${count.toLocaleString()} ${count === 1 ? 'char' : 'chars'}`;
 }
+
+/**
+ * Whether a just-persisted round row's reasoning panel should deliver
+ * OPEN. A tool-call round has no answer delta, so the live panel's
+ * normal close paths (sentence-boundary collapse, the ~600ms answer
+ * yield) often haven't fired by the time the round commits - and the
+ * boundary handoff clears the live buffer, which used to make the
+ * round's reasoning visibly vanish (open panel at the bottom replaced
+ * by a collapsed header on the delivered card). Tool rounds where the
+ * panel was still open therefore hand the open state to the delivered
+ * card's own panel. Plain terminal rows keep the designed
+ * collapse-at-delivery, as does any round the user (or the automation)
+ * already closed - `streamingOpen` false covers both.
+ */
+export function reasoningSurvivesRoundHandoff(
+  streamingOpen: boolean,
+  hasToolCalls: boolean,
+  reasoning: string | null | undefined,
+): boolean {
+  return streamingOpen && hasToolCalls && (reasoning?.length ?? 0) > 0;
+}

@@ -12,6 +12,7 @@ import {
   reasoningShouldCollapse,
   reasoningElapsedPill,
   reasoningCharPill,
+  reasoningSurvivesRoundHandoff,
 } from '../src/lib/ui/reasoning-panel';
 
 // Mirrors the module's FLOOR / CEILING so the boundary cases below read
@@ -100,6 +101,35 @@ describe('reasoningElapsedPill', () => {
 
   it('clamps a backwards clock to zero rather than going negative', () => {
     expect(reasoningElapsedPill(1000, null, 900)).toBe('0 ms');
+  });
+});
+
+describe('reasoningSurvivesRoundHandoff', () => {
+  it('keeps the round reasoning visible on a tool round delivered mid-stream', () => {
+    // The fix case: a tool round has no answer delta, so the live
+    // panel's yield-to-answer close never fired before the handoff.
+    // The delivered card's panel must open so the reasoning does not
+    // visibly vanish at the round boundary.
+    expect(reasoningSurvivesRoundHandoff(true, true, 'thinking...')).toBe(true);
+  });
+
+  it('delivers collapsed when the live panel was already closed', () => {
+    // Covers both the user-collapsed case (manual choice wins) and the
+    // terminal-shaped case where the 600ms answer-yield close already
+    // fired before the round committed.
+    expect(reasoningSurvivesRoundHandoff(false, true, 'thinking...')).toBe(false);
+  });
+
+  it('delivers collapsed on a terminal row (no tool calls)', () => {
+    // A final answer's reasoning collapses at delivery as always - the
+    // yield-to-answer behavior is unchanged for plain rows.
+    expect(reasoningSurvivesRoundHandoff(true, false, 'thinking...')).toBe(false);
+  });
+
+  it('delivers collapsed when the round produced no reasoning', () => {
+    expect(reasoningSurvivesRoundHandoff(true, true, '')).toBe(false);
+    expect(reasoningSurvivesRoundHandoff(true, true, null)).toBe(false);
+    expect(reasoningSurvivesRoundHandoff(true, true, undefined)).toBe(false);
   });
 });
 

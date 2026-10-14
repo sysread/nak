@@ -55,6 +55,11 @@ panel (`ToolCalls.svelte`), so steps 8-10 exercise both.
     then: (a) click the "view: json" toggle; (b) click a link in the
     rendered result if one is present; (c) drag-select part of the
     result; (d) click once on plain text inside the detail panel.
+11. On a reasoning-capable model, send a tool-call prompt again and
+    watch the reasoning panel from the first thinking token through
+    the round boundary (the model stops thinking and the tool call
+    fires) and through the tool dispatch. Then repeat once, but click
+    the panel closed mid-thought before the tool call fires.
 
 ## Expected
 
@@ -92,6 +97,13 @@ panel (`ToolCalls.svelte`), so steps 8-10 exercise both.
   drag-select leaves the panel open with the selection intact;
   (d) the plain-text click collapses the detail back to the summary
   row.
+- (11) The reasoning does NOT vanish at the round boundary: the
+  tool-group card delivers with its "Reasoning" header already
+  expanded (pills still on it), and the panel stays open through the
+  tool dispatch. It collapses on its own when the next round's
+  reasoning or answer starts - never two panels open at once. In the
+  repeat, the mid-thought click is respected: the delivered card's
+  panel arrives collapsed and stays that way.
 
 ## Cleanup
 
@@ -103,3 +115,5 @@ None - sends are normal turns; delete the test thread if desired.
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-28 | - | claude/reasoning-collapse-streaming-rlmdev | not executed | authored alongside the feature; cloud session has no browser - needs a manual run against a local stack for the baseline |
 | 2026-08-03 | - | claude/message-card-collapse-29ho59 | not executed | steps 8-10 (body-click collapse on reasoning + tool-call panels) authored alongside the feature; cloud session has no browser - needs a manual local-stack run |
+| 2026-10-13 | - | (working tree, tool-round handoff) | not executed | step 11 (tool-round open handoff - delivered card's panel opens at the round boundary) authored alongside the change; local CLI session, local-stack browser pass not run yet |
+| 2026-10-13 | local dev stack, http://[::1]:5173, GLM 5.3 Flash | (working tree, tool-round handoff) | PASS with 1 fix | step 11 executed 5x live (Trondheim/Oslo/Lisbon/Stockholm/Bergen + Helsinki/Trondheim variants). Open handoff verified: tool card delivered panel-open with frozen pills, collapsed by the next round's first delta; user-collapse and auto-collapse-before-boundary both deliver collapsed; reasoning-less rounds deliver no panel; cold reopen renders all collapsed, no errors. First two runs exposed a real bug in the first cut: binding the map entry directly threw props_invalid_value when a tool round had no entry (undefined into a fallback bindable) - the reactive flush died and no further cards rendered. Fixed with the two-function bind form (get/set). No panels >1 open at a time at any sample. |
