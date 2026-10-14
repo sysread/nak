@@ -64,7 +64,7 @@ import {
   type TranslateInput,
   type TranslatedErrorKind,
 } from '../_shared/error-translate.ts';
-import { createBroadcastPublisher } from './broadcast.ts';
+import { createBroadcastPublisher, type BroadcastPublisher } from './broadcast.ts';
 import { getStreamingCompletion } from './getStreamingCompletion.ts';
 import { pruneEmptyAssistantRows } from './empty-rows.ts';
 import {
@@ -112,7 +112,29 @@ const ASK_USER_PENDING_FLAG = '__ask_user_pending__';
 // round still calling tools is the "runaway" terminal: the loop
 // exits naturally, the END event carries conflict='round_limit',
 // and the browser surfaces the round-limit banner.
-const MAX_ROUNDS = 24;
+export const MAX_ROUNDS = 24;
+
+// Soft cap on tool calls dispatched concurrently within one round.
+// The head of the model's list runs; the tail gets deferred outcomes
+// telling the model to re-issue next round. This is blast-radius
+// control, not kill prevention: the prod incident this change came
+// from (thread 8b14894d, 2026-10-13) lost a 19-call record_delete
+// batch to a mid-dispatch isolate death, and whatever kills an
+// isolate, the state lost scales with the number of calls in flight
+// when it strikes. Smaller concurrent batches also mean shorter ones,
+// so completed results hit the DB at round boundaries more often. A
+// 24-round turn can still move ~230 calls, well past any observed
+// legitimate bulk operation.
+const MAX_PARALLEL_TOOL_CALLS = 10;
+
+// The tool-result body a deferred call sees. Must read as "not
+// executed, re-issue" - never "ask failed" phrasing that would make
+// the model apologize instead of retry - and stays under the 200-char
+// tool_call_response summary slice so the transient card carries it
+// intact.
+export const DEFERRED_TOOL_MESSAGE =
+  'Not executed: this turn already dispatched its cap of 10 parallel ' +
+  'tool calls. Re-issue this call and it will run on a later round.';
 
 // How often (ms) we UPDATE the streaming row's content with the
 // accumulated buffer. Coarser than the Broadcast publish cadence on
@@ -274,6 +296,16 @@ export interface OrchestratorOpts {
    * HEARTBEAT_INTERVAL_MS.
    */
   heartbeatIntervalMs?: number;
+  /**
+   * Test seam: the per-round Venice completion. Same signature as
+   * getStreamingCompletion (mirrors runHeadlessAgent's injectable
+   * `complete` seam); the orchestrator drives it once per round and
+   * consumes the yielded events verbatim. Tests script rounds by
+   * yielding events from a queue, which lets them drive the full
+   * round loop - dispatch, persistence, terminal write - with no
+   * network. Default: the real getStreamingCompletion.
+   */
+  complete?: typeof getStreamingCompletion;
 }
 
 /**
@@ -613,7 +645,7 @@ export async function getStreamingResponse(
       const eventTally: Record<string, number> = {};
       let roundFinishReason: string | null = null;
 
-      for await (const ev of getStreamingCompletion({
+      for await (const ev of (opts.complete ?? getStreamingCompletion)({
         apiKey: opts.apiKey,
         body,
         signal: ctl.signal,
@@ -901,28 +933,75 @@ export async function getStreamingResponse(
         depth: 0,
       };
 
-      // Tool dispatch is the operational heart of the turn - these two
-      // lines ride at info so the drawer's default level shows which
-      // tools each round ran and how they fared.
+      // Tool dispatch is the operational heart of the turn - this line
+      // rides at info so the drawer's default level shows which tools
+      // each round runs.
       log.info(
         `${runId} round ${round} dispatching ${roundToolCalls.length} tool call(s): ${roundToolCalls.map((tc) => tc.name).join(', ')}`,
       );
-      const outcomes = await Promise.all(
-        roundToolCalls.map((tc) => runOneToolCall(tc, ctx, schemaMap)),
+
+      // Soft cap on concurrent dispatch (see MAX_PARALLEL_TOOL_CALLS
+      // for why): the head of the model's list runs this round; the
+      // tail gets deferred outcomes the model re-issues next round.
+      // Model order is dispatch priority - slice, never shuffle.
+      const { dispatchable, deferred } = splitByDispatchCap(roundToolCalls);
+      const outcomes: ToolOutcome[] = new Array(roundToolCalls.length);
+      // Per-call record-keeping: each call's result row inserts (and
+      // its response event publishes) the moment it settles, so a
+      // death mid-dispatch leaves the completed calls' rows persisted
+      // and the recovery synthesizer fills only the calls that never
+      // produced a row. ask_user outcomes hold out for the batch-end
+      // pass below: the sibling-cancel rule needs the round-level
+      // picture of which ask_user is first-pending, which no single
+      // call knows mid-flight. Concurrent inserts are safe - the
+      // position trigger serializes appends per thread (FOR UPDATE on
+      // the thread row) - so racing completions cannot collide on
+      // position.
+      const toolResultRows: Array<{
+        id: string;
+        tool_call_id: string;
+        name: string;
+        content: string;
+      } | undefined> = new Array(roundToolCalls.length);
+      await Promise.all(
+        roundToolCalls.map(async (tc, i) => {
+          const o = i < dispatchable.length
+            ? await runOneToolCall(tc, ctx, schemaMap)
+            : deferredToolOutcome(tc);
+          outcomes[i] = o;
+          if (!isAskUserPending(o.result)) {
+            const content = encodeToolContent(
+              o.ok
+                ? { ok: true, value: o.result }
+                : { ok: false, error: new Error(o.errorMessage) },
+            );
+            const row = await persistOneToolResult(
+              opts.adminClient,
+              opts.threadId,
+              o.request,
+              content,
+            );
+            runRowIds.push(row.id);
+            toolResultRows[i] = { ...row, content };
+          }
+          await publishToolResponse(publisher, o);
+        }),
       );
       log.info(
-        `${runId} round ${round} outcomes: ${outcomes.map((o) => `${o.request.name}=${o.ok ? 'ok' : 'err'}`).join(', ')}`,
+        `${runId} round ${round} outcomes: ${outcomes.map((o) => `${o.request.name}=${o.deferred ? 'deferred' : o.ok ? 'ok' : 'err'}`).join(', ')}`,
       );
       // Failed dispatches get their reason in the drawer; the model
-      // sees the same text in its tool-result row next round.
+      // sees the same text in its tool-result row next round. Deferred
+      // outcomes are not failures - they are the cap working as
+      // designed - so they stay out of the error feed.
       for (const o of outcomes) {
-        if (!o.ok) {
+        if (!o.ok && !o.deferred) {
           log.error(`${runId} round ${round} ${o.request.name} failed: ${o.errorMessage}`);
         }
       }
 
       // Harvest generated-image payloads off any tool result before
-      // persistRoundToolResults strips them at encode time. Failed
+      // the per-call row inserts strip them at encode time. Failed
       // outcomes carry the error shape, not a generated image, so we
       // skip them; the structural extractor handles tool results that
       // simply don't have an image (most calls).
@@ -967,12 +1046,6 @@ export async function getStreamingResponse(
       // belongs to a non-terminal round and gets its message-row
       // anchor here.
 
-      // Detect ask_user suspend: any pending sentinel halts the round
-      // chain.
-      const suspendIdx = outcomes.findIndex((o) =>
-        isAskUserPending(o.result),
-      );
-
       // Harvest citations off any tool result that carries them
       // (web_search, research_docs, etc.). Each gets a running 1-based
       // index continuing from prior rounds so the assistant row's
@@ -990,50 +1063,33 @@ export async function getStreamingResponse(
         }
       }
 
-      // Publish tool_call_response events on the channel so the UI
-      // can update its tool-call panel as each lands. Summary only;
-      // the full payload lives on the persisted tool-result row. Strip
-      // image payloads BEFORE stringifying: the summary is sliced to
-      // 200 chars anyway, and stringify on an unstripped result walks
-      // the whole ~700KB base64 (tens of MB for an upscale) per
-      // published event for characters that are immediately discarded.
-      for (const o of outcomes) {
-        const summaryPayload = o.ok
-          ? { ok: true, value: stripGeneratedImage(o.result) }
-          : { ok: false, error: { message: o.errorMessage } };
-        let summary: string;
-        try {
-          summary = JSON.stringify(summaryPayload).slice(
-            0,
-            TOOL_RESULT_SUMMARY_CHARS,
-          );
-        } catch {
-          summary = '{"error":"result not serializable"}';
-        }
-        await publisher.publish({
-          type: 'tool_call_response',
-          id: o.request.id,
-          name: o.request.name,
-          ok: o.ok,
-          result_summary: summary,
-        });
+      // Batch-end pass for the held-out ask_user outcomes: persist +
+      // publish with the sibling-cancel rule - only the first pending
+      // ask_user carries the sentinel; the others go in as
+      // pre-cancelled answers. Runs here because no single call knows
+      // mid-flight whether a sibling already claimed first-pending.
+      const suspendIdx = outcomes.findIndex((o) =>
+        isAskUserPending(o.result),
+      );
+      for (let i = 0; i < outcomes.length; i += 1) {
+        const o = outcomes[i];
+        if (!isAskUserPending(o.result)) continue;
+        const content = askUserRowContent(o, i === suspendIdx);
+        const row = await persistOneToolResult(
+          opts.adminClient,
+          opts.threadId,
+          o.request,
+          content,
+        );
+        runRowIds.push(row.id);
+        toolResultRows[i] = { ...row, content };
+        await publishToolResponse(publisher, o);
       }
 
-      // Tool-result rows persist after dispatch + the
-      // tool_call_response broadcast. The result rows feed the model
-      // on the next round's history and also drive the expanded
-      // detail view in ToolCalls; the live status pill keys off
-      // slot.toolTimings (set by tool_call_request/response) so the
-      // card stays live independent of the result row's INSERT
-      // latency.
-      const toolResultRows = await persistRoundToolResults(
-        opts,
-        outcomes,
-        suspendIdx,
-      );
-      runRowIds.push(...toolResultRows.map((r) => r.id));
-
-      // Append to history for the next round.
+      // Append to history for the next round. Every index is filled
+      // by now (per-call pass above + the ask_user batch-end); the
+      // fill check turns a logic hole into a loud error instead of a
+      // silent wire-shape break.
       history.push({
         role: 'assistant',
         content: roundText,
@@ -1047,6 +1103,11 @@ export async function getStreamingResponse(
         })),
       });
       for (const trr of toolResultRows) {
+        if (!trr) {
+          throw new Error(
+            'tool result row missing after dispatch - fan-in would be invalid',
+          );
+        }
         history.push({
           role: 'tool',
           tool_call_id: trr.tool_call_id,
@@ -1169,13 +1230,14 @@ export async function getStreamingResponse(
       lastErrorInput = { kind: 'round_limit' };
     }
   } catch (err) {
-    // Abort-driven catches (wall timeout, user cancel) already set
-    // terminalKind + detail at the inline check sites; the catch only
-    // fires here because the fetch / SSE consumer surfaced the abort
-    // as a thrown AbortError. Don't overwrite the pre-set terminal -
-    // 'wall timeout' would otherwise lose to 'The signal has been
-    // aborted' (or whatever the underlying error library spells the
-    // abort message as) and the row would carry a confusing detail.
+    // Abort-driven catches (wall timeout, user cancel) usually have
+    // terminalKind + detail already set at the inline check sites; the
+    // catch fires here because the fetch / SSE consumer surfaced the
+    // abort as a thrown AbortError. Don't overwrite the pre-set
+    // terminal - 'wall timeout' would otherwise lose to 'The signal
+    // has been aborted' (or whatever the underlying error library
+    // spells the abort message as) and the row would carry a
+    // confusing detail.
     if (!ctl.signal.aborted) {
       terminalKind = 'error';
       terminalDetail = err instanceof Error ? err.message : String(err);
@@ -1196,6 +1258,23 @@ export async function getStreamingResponse(
           kind: 'internal',
           rawMessage: err instanceof Error ? err.message : String(err),
         };
+      }
+    } else if (terminalKind === 'completed') {
+      // An abort that struck between the inline check sites (mid-
+      // dispatch, mid-persist) reaches this catch with NO site having
+      // set the terminal. Leaving 'completed' would let the finally
+      // commit a partial turn as a finished reply. Same wall-vs-cancel
+      // split as those sites. For an aborted regenerate this also
+      // arms the finally's rollback - the designed abort semantics
+      // (a stopped regen leaves the thread as it was), now applied to
+      // a timing that previously committed a partial row.
+      if (ctl.signal.reason === WALL_TIMEOUT_REASON) {
+        terminalKind = 'error';
+        terminalDetail = 'wall timeout';
+        lastErrorInput = { kind: 'wall_timeout' };
+      } else {
+        terminalKind = 'aborted';
+        terminalDetail = undefined;
       }
     }
     // The END event's terminalKind tells the browser the turn failed;
@@ -1583,11 +1662,69 @@ export async function getStreamingResponse(
 // Helpers (file-internal).
 // ---------------------------------------------------------------------------
 
-interface ToolOutcome {
+export interface ToolOutcome {
   request: ToolCallRequest;
   ok: boolean;
   result: unknown;
   errorMessage: string;
+  /** Set when the outcome is the cap's deferral, not a tool failure. */
+  deferred?: boolean;
+}
+
+/**
+ * The cap's head/tail split over one round's tool calls, in model
+ * order. The head dispatches this round; the tail becomes deferred
+ * outcomes the model re-issues next round. Exported for the dispatch
+ * the orchestrator harness (tests/orchestrator.test.ts) too, which
+ * drives the round loop end-to-end through the `complete` seam.
+ */
+export function splitByDispatchCap<T>(calls: T[]): {
+  dispatchable: T[];
+  deferred: T[];
+} {
+  return {
+    dispatchable: calls.slice(0, MAX_PARALLEL_TOOL_CALLS),
+    deferred: calls.slice(MAX_PARALLEL_TOOL_CALLS),
+  };
+}
+
+/**
+ * The outcome a cap-deferred call receives: an error-shaped result
+ * carrying the re-issue instruction (via errorMessage, which is what
+ * a failed outcome's persisted row encodes), not a tool failure.
+ * Exported for the dispatch unit tests.
+ */
+export function deferredToolOutcome(request: ToolCallRequest): ToolOutcome {
+  return {
+    request,
+    ok: false,
+    result: { error: DEFERRED_TOOL_MESSAGE },
+    errorMessage: DEFERRED_TOOL_MESSAGE,
+    deferred: true,
+  };
+}
+
+/**
+ * The persisted-row content for a held-out ask_user outcome. Only the
+ * first pending ask_user in a round carries the live sentinel (the UI
+ * surfaces it as an AskUserCard on reconnect); sibling ask_user calls
+ * in the same round go in as pre-cancelled answers so the UI never
+ * renders a second pending card. Exported for the dispatch unit
+ * tests.
+ */
+export function askUserRowContent(
+  o: ToolOutcome,
+  isSuspend: boolean,
+): string {
+  if (isSuspend) {
+    // First ask_user pending: carry the sentinel verbatim.
+    return JSON.stringify(o.result);
+  }
+  return JSON.stringify({
+    __ask_user_answered__: true,
+    via: 'cancelled_by_sibling_ask_user',
+    answer: null,
+  });
 }
 
 async function runOneToolCall(
@@ -1689,79 +1826,88 @@ async function persistRoundAssistantRow(
 }
 
 /**
- * Insert one tool-result row per call. Mirrors the browser's
- * encodeToolContent shape so the model sees identical payloads on
- * the next round. Honors the ask_user sibling-cancel rule: when
- * multiple ask_user calls fire in one round, only the first carries
- * the pending sentinel; the others go in as pre-cancelled answers.
+ * Insert ONE tool-result row, with the caller-supplied content.
+ * Mirrors the browser's encodeToolContent shape so the model sees
+ * identical payloads on the next round. The caller owns content
+ * policy: plain outcomes encode through encodeToolContent at the
+ * dispatch site; the ask_user batch-end pass supplies the sentinel
+ * verbatim (first pending) or the pre-cancelled sibling shape.
+ *
+ * Per-call, not per-round: each completed call persists the moment it
+ * settles, so a mid-dispatch death leaves the completed calls' rows
+ * in the DB and the recovery synthesizer fills only the rest.
+ * Exported for tests - the unit file (tests/tool-batch.test.ts) and
+ * the orchestrator harness (tests/orchestrator.test.ts) both drive
+ * it directly.
+ *
+ * Throws on an insert failure: a hole in the fan-in would 400 the
+ * next round's Venice call ("Not the same number of function calls
+ * and responses"), so failing the turn is correct - the recovery
+ * synthesizer heals the thread on the next read.
  */
-async function persistRoundToolResults(
-  opts: OrchestratorOpts,
-  outcomes: ToolOutcome[],
-  suspendIdx: number,
-): Promise<Array<{
-  id: string;
-  tool_call_id: string;
-  name: string;
-  content: string;
-}>> {
-  const rows: Array<{
-    id: string;
-    tool_call_id: string;
-    name: string;
-    content: string;
-  }> = [];
-  for (let i = 0; i < outcomes.length; i += 1) {
-    const o = outcomes[i];
-    let content: string;
-    if (i === suspendIdx) {
-      // First ask_user pending: carry the sentinel verbatim - the UI
-      // surfaces it as an AskUserCard on reconnect.
-      content = JSON.stringify(o.result);
-    } else if (suspendIdx !== -1 && isAskUserPending(o.result)) {
-      // Sibling ask_user calls within the same round: pre-cancel so
-      // the UI never renders a second pending card.
-      content = JSON.stringify({
-        __ask_user_answered__: true,
-        via: 'cancelled_by_sibling_ask_user',
-        answer: null,
-      });
-    } else {
-      content = encodeToolContent(
-        o.ok
-          ? { ok: true, value: o.result }
-          : { ok: false, error: new Error(o.errorMessage) },
-      );
-    }
-    // RLS OFF: thread ownership already verified upstream. The id
-    // rides back so the orchestrator can track every row this run
-    // inserted (the aborted-regenerate rollback deletes by id).
-    const { data, error } = await opts.adminClient
-      .from('messages')
-      .insert({
-        thread_id: opts.threadId,
-        role: 'tool',
-        content,
-        tool_call_id: o.request.id,
-        name: o.request.name,
-      })
-      .select('id')
-      .single();
-    if (error) {
-      // Tool result rows missing on the next round would leave
-      // orphaned tool_call_ids on the wire; surface the failure.
-      throw new Error(
-        `Failed to persist tool-result row for ${o.request.name}: ${error.message}`,
-      );
-    }
-    rows.push({
-      id: (data as { id: string }).id,
-      tool_call_id: o.request.id,
-      name: o.request.name,
+export async function persistOneToolResult(
+  adminClient: SupabaseClient,
+  threadId: string,
+  request: ToolCallRequest,
+  content: string,
+): Promise<{ id: string; tool_call_id: string; name: string; content: string }> {
+  // RLS OFF: thread ownership already verified upstream. The id
+  // rides back so the orchestrator can track every row this run
+  // inserted (the aborted-regenerate rollback deletes by id).
+  const { data, error } = await adminClient
+    .from('messages')
+    .insert({
+      thread_id: threadId,
+      role: 'tool',
       content,
-    });
+      tool_call_id: request.id,
+      name: request.name,
+    })
+    .select('id')
+    .single();
+  if (error) {
+    // Tool result rows missing on the next round would leave
+    // orphaned tool_call_ids on the wire; surface the failure.
+    throw new Error(
+      `Failed to persist tool-result row for ${request.name}: ${error.message}`,
+    );
   }
-  return rows;
+  return {
+    id: (data as { id: string }).id,
+    tool_call_id: request.id,
+    name: request.name,
+    content,
+  };
+}
+
+/**
+ * Publish one outcome's tool_call_response event. Summary only; the
+ * full payload lives on the persisted tool-result row. Strip image
+ * payloads BEFORE stringifying: the summary is sliced to 200 chars
+ * anyway, and stringify on an unstripped result walks the whole
+ * ~700KB base64 (tens of MB for an upscale) per published event for
+ * characters that are immediately discarded.
+ */
+async function publishToolResponse(
+  publisher: BroadcastPublisher,
+  o: ToolOutcome,
+): Promise<void> {
+  const summaryPayload = o.ok
+    ? { ok: true, value: stripGeneratedImage(o.result) }
+    : { ok: false, error: { message: o.errorMessage } };
+  let summary: string;
+  try {
+    summary = JSON.stringify(summaryPayload).slice(0, TOOL_RESULT_SUMMARY_CHARS);
+  } catch {
+    summary = '{"error":"result not serializable"}';
+  }
+  await publisher.publish({
+    type: 'tool_call_response',
+    id: o.request.id,
+    name: o.request.name,
+    ok: o.ok,
+    result_summary: summary,
+  });
 }
 
 /**

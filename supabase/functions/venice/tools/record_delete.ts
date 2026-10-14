@@ -33,6 +33,12 @@ export const recordDelete: ToolDef = {
       .select('id');
     if (error) throw new Error(`deleteWikiRecord failed: ${error.message}`);
     const deleted = Array.isArray(data) && data.length > 0;
+    if (!deleted) {
+      return {
+        deleted,
+        reason: 'No record with that id - already deleted, never existed, or not yours.',
+      };
+    }
 
     if (deleted && existing) {
       const e = existing as { article_id: string; date: string; content: string };

@@ -65,6 +65,21 @@ describe('statusFor', () => {
     expect(statusFor('c1', t, results, false)).toBe('error');
   });
 
+  it('reports error for a synthesized recovery row despite its non-JSON body', () => {
+    // The recovery synthesizer fills an interrupted batch's
+    // unanswered ids with prose + the HTML-comment marker. That body
+    // is not JSON, and the non-JSON fallback treats content as
+    // success - the marker check must win, or the orphaned card
+    // paints a green check on a call that never produced a result.
+    const t: Record<string, CallTiming> = { c1: { startedAt: 100 } };
+    const results = {
+      c1: makeResultMessage(
+        '(tool execution was interrupted - no result available) <!-- nak:recovery -->'
+      ),
+    };
+    expect(statusFor('c1', t, results, false)).toBe('error');
+  });
+
   it('is error when the timing carries the error flag', () => {
     const t: Record<string, CallTiming> = {
       c1: { startedAt: 100, endedAt: 200, error: true },

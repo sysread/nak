@@ -24,7 +24,9 @@ export const wikiDeleteSchema = {
     'Delete a wiki article by id. Use only for consolidation - when one ' +
     'article is now strictly subsumed by another article you just updated. ' +
     'Never delete on the basis of "the user said something contradictory ' +
-    'today" alone; in that case, update the article to reflect the new view.',
+    'today" alone; in that case, update the article to reflect the new view. ' +
+    'Returns {id, deleted: true}, or {id, deleted: false, reason} when ' +
+    'nothing matched (already deleted, wrong id, or not yours).',
   shortDescription: 'delete a wiki article',
   formatArgs: formatWikiDeleteArgs,
   parameters: {

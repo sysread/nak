@@ -10,7 +10,9 @@ export const recordDeleteSchema = {
     'documentation, so only remove one when the user explicitly asks or ' +
     'it is clearly a duplicate / mistake. Returns {deleted: true}, or ' +
     '{deleted: false} when no record with that id exists - check the ' +
-    'flag rather than assuming the delete landed.',
+    'flag rather than assuming the delete landed. The false case ' +
+    'carries a reason string naming why (already deleted, wrong id, ' +
+    'or not owned).',
   shortDescription: 'delete a record',
   parameters: {
     type: 'object',

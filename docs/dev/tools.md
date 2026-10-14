@@ -335,6 +335,20 @@ Edge dispatch (`supabase/functions/venice/`):
   each call via `performToolCall` and persists the
   assistant-with-tool-calls row and the per-call `role='tool'`
   rows. See `./chat.md`.
+
+  Dispatch is capped and persisted per call. At most
+  `MAX_PARALLEL_TOOL_CALLS` (10) calls from a round's list run
+  concurrently; the tail gets deferred outcomes whose text tells the
+  model to re-issue the call next round (model order is dispatch
+  priority). Each call's result row inserts and its response event
+  publishes the moment it settles - not in one batch after all
+  calls finish - so a death mid-dispatch (the hosted runtime can
+  kill the isolate at any time; see the `budgetMs` bullet below)
+  leaves the completed calls' rows persisted, and the recovery
+  synthesizer fills only the calls that never produced a row.
+  ask_user results hold out until the batch settles, because the
+  sibling-cancel rule needs to know which ask_user is first-pending
+  before it can encode the rest.
 - **Background agents** - server-side only. Each agent composes its
   own prompt and toolbox and calls `runHeadlessAgent`, which drives
   model -> tool -> model rounds entirely in memory (no DB writes,
@@ -424,6 +438,16 @@ Edge dispatch (`supabase/functions/venice/`):
   time, not as a "wrong tool ran" symptom. `listRegisteredTools()`
   feeds the /stream response envelope so the browser can warn when
   the model has tools armed that the function cannot dispatch.
+- **Delete tools report honestly.** Every `*_delete` tool returns
+  `{deleted: true}` only when a row actually matched, and
+  `{deleted: false, reason}` when nothing did - the reason names the
+  possibilities without distinguishing them (already deleted, never
+  existed, or not owned; RLS makes the last two indistinguishable
+  to a probing caller by design). The model re-issuing deletes
+  after an interrupted batch needs "already gone" to read as
+  something other than success. A zero-row delete writes no
+  changelog row - the changelog append stays gated on the row
+  having existed.
 - `runHeadlessAgent(opts, parentDepth)` (edge) - drives the agent
   loop until the model settles or `maxRounds` (default 20) runs
   out; returns `{ finalText, rounds, toolCalls, stoppedByLimit }`.

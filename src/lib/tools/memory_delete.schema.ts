@@ -9,7 +9,9 @@ export const memoryDeleteSchema = {
     'Hard-delete a memory by id (use memory_search to find the id). ' +
     'Two required fields: id, and message (a one-line, commit-style ' +
     'summary of why you removed it, which lands in the memory changelog ' +
-    'the user reviews). Returns {deleted: true}.',
+    'the user reviews). Returns {deleted: true}, or {deleted: false, ' +
+    'reason} when nothing matched (already deleted, wrong id, or not ' +
+    'yours) - check the flag before assuming the memory is gone.',
   shortDescription: 'remove a saved note',
   parameters: {
     type: 'object',

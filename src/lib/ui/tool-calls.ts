@@ -13,6 +13,7 @@
 import { getToolFormatters } from '../tools';
 import type { OpenAIToolCall, ToolFormatters } from '../tools';
 import type { Message } from '../supabase';
+import { RECOVERY_MARKER } from '../conversation-recovery';
 import { formatJsonStringAsMarkdown } from './tool-format';
 
 export type Status = 'pending' | 'ok' | 'error';
@@ -72,6 +73,12 @@ export function statusFor(
   if (t?.error) return 'error';
   if (t?.endedAt) return 'ok';
   if (result) {
+    // A synthesized recovery row fills an unanswered tool_call_id after
+    // an interrupted batch. Its body is not JSON (prose + HTML-comment
+    // marker), which would otherwise fall through to the
+    // treat-as-success branch and paint a green check on a call that
+    // never produced a result - detect the marker first.
+    if (result.content.includes(RECOVERY_MARKER)) return 'error';
     try {
       const parsed = JSON.parse(result.content) as unknown;
       if (

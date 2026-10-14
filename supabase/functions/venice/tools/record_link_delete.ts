@@ -36,6 +36,12 @@ export const recordLinkDelete: ToolDef = {
       .select('id');
     if (error) throw new Error(`record_link_delete failed: ${error.message}`);
     const deleted = Array.isArray(data) && data.length > 0;
+    if (!deleted) {
+      return {
+        deleted,
+        reason: 'No such link edge for that from/to pair - never existed or already removed.',
+      };
+    }
 
     if (deleted && fromRec && toRec) {
       try {

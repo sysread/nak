@@ -203,6 +203,40 @@ It `depends = ["bundle-docs"]` because the venice function imports
 the gitignored research-docs corpus, which does not exist on a
 fresh clone until the bundler runs.
 
+### The orchestrator harness
+
+`tests/orchestrator.test.ts` drives `getStreamingResponse` end-to-end
+with **no network and no Supabase**. Two seams make it work, both
+following the injectable-seam pattern `runHeadlessAgent` established:
+
+- **`OrchestratorOpts.complete`** - the per-round Venice completion.
+  Tests script rounds as async generators yielding the normal
+  completion-event vocabulary (`tool_call_request`, `response_text`,
+  `usage`, `DONE`), so the round loop runs exactly as it does in
+  production - real dispatch, real persistence order, real terminal
+  write - with the model's behavior under test control.
+- **The stubbed adminClient** (`tests/tool-batch.test.ts`'s pattern,
+  extended) - per-table FIFO response queues with side-effect hooks
+  fired when a response is consumed, minted row ids for `.single()`
+  inserts, name-keyed scripted RPC responses, and fake realtime
+  channels whose `send` log doubles as the published-event record.
+
+What the harness can assert that unit-level exports cannot:
+`runRowIds` registration feeding the aborted-regenerate rollback,
+the catch guard's terminal assignment on an abort+throw co-timing,
+graceful wall-timeout during dispatch, the deferred-drain loop
+through the model's re-issue, ask_user suspend + sibling cancel,
+the empty-completion reroll ladder, and the round-limit runaway.
+
+Two harness conventions matter when extending it: the response
+queue **repeats its last entry when exhausted** (script an explicit
+`undefined` slot when a later chain must get the default response -
+the catch-guard test needs this for the `finally`'s marker-row
+insert), and the turn calls RPCs beyond the commit
+(`bias_clear_thread` at turn start, `move_message_to_tail` at tool
+rounds) - script RPC responses **by name** or the commit's script
+gets consumed by the wrong caller.
+
 ## Playwright
 
 `playwright.config.ts` plus `e2e/` (`setup.spec.ts`,

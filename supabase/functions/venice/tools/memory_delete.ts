@@ -1,10 +1,13 @@
 // memory_delete (function-side port)
 //
-// Hard-delete a memory by id. Returns {deleted: true} on success.
-// Snapshots the label before deletion so the changelog row carries
-// a readable label_at_change - the FK on memory_changelog.memory_id
-// is ON DELETE SET NULL, so the post-delete memory_id is null and
-// the label is what makes the row meaningful.
+// Hard-delete a memory by id. Returns {deleted: true} on success;
+// {deleted: false, reason} when nothing matched (already deleted,
+// never existed, or not owned) so a re-issued delete after an
+// interrupted batch reads honestly. Snapshots the label before
+// deletion so the changelog row carries a readable
+// label_at_change - the FK on memory_changelog.memory_id is ON
+// DELETE SET NULL, so the post-delete memory_id is null and the
+// label is what makes the row meaningful.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
@@ -42,13 +45,26 @@ export const memoryDelete: ToolDef = {
       .maybeSingle();
     if (readErr) throw new Error(`getMemoryById failed: ${readErr.message}`);
 
-    // RLS OFF: filter by userId on the delete itself.
-    const { error: delErr } = await ctx.adminClient
+    // RLS OFF: filter by userId on the delete itself. .select('id')
+    // makes a zero-row match detectable so the result can distinguish
+    // "deleted" from "nothing matched" - a model re-issuing deletes
+    // after an interrupted batch needs the difference (a bare success
+    // here previously reported {deleted: true} for an id that was
+    // already gone).
+    const { data, error: delErr } = await ctx.adminClient
       .from('memories')
       .delete()
       .eq('id', id)
-      .eq('user_id', ctx.userId);
+      .eq('user_id', ctx.userId)
+      .select('id');
     if (delErr) throw new Error(`deleteMemory failed: ${delErr.message}`);
+    const deleted = Array.isArray(data) && data.length > 0;
+    if (!deleted) {
+      return {
+        deleted: false,
+        reason: 'No memory with that id - already deleted, never existed, or not yours.',
+      };
+    }
 
     if (existing) {
       try {

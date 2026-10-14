@@ -8,8 +8,9 @@ export const recordLinkDeleteSchema = {
   description:
     'Remove the directed link from one record to another. Direction ' +
     'matters: this removes the (from -> to) edge only, leaving any ' +
-    'reverse edge. Returns {deleted: true|false}. Use the record ids a ' +
-    "record_get listing of the record's links reports.",
+    'reverse edge. Returns {deleted: true|false}; the false case ' +
+    'carries a reason string (never existed or already removed). Use ' +
+    "the record ids a record_get listing of the record's links reports.",
   shortDescription: 'remove a link between records',
   parameters: {
     type: 'object',

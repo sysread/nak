@@ -10,9 +10,9 @@ export const recipeRecordDeleteSchema = {
     'id (from recipe_record_list or recipe_record_search). Hard ' +
     'delete - the log is the historical record, so only remove one ' +
     'when the user explicitly asks or it is clearly a duplicate / ' +
-    'mistake. Returns {deleted: true}, or {deleted: false} when no ' +
-    'record with that id exists - check the flag rather than ' +
-    'assuming the delete landed.',
+    'mistake. Returns {deleted: true}, or {deleted: false, reason} ' +
+    'when no record with that id exists - check the flag rather ' +
+    'than assuming the delete landed.',
   shortDescription: 'delete a cooking record',
   parameters: {
     type: 'object',

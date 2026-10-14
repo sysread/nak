@@ -158,7 +158,9 @@ Deno.test('wiki_delete on a missing article does not trip the lock guard', async
     { id: 'a-1', message: 'test delete' },
     fc.ctx,
   );
-  assertEquals((result as { deleted: boolean }).deleted, true);
+  // A missing article reports the honest miss shape (zero-row delete),
+  // not a fake success.
+  assertEquals((result as { deleted: boolean }).deleted, false);
 });
 
 Deno.test('wiki_save (create form) never sets the favorite flag in the insert payload', async () => {

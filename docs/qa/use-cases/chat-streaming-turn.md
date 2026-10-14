@@ -52,6 +52,16 @@ subconscious priming pipelines' fire policy
     where id = '<thread>';
    ```
 
+6. Dispatch cap: ask the model for a bulk operation big enough to
+   emit more than 10 tool calls in one round (for example, more
+   than 10 memory or record writes in one batch).
+
+7. Interrupted batch: while a large batch is dispatching, kill the
+   turn without a graceful abort - the practical local recipe is to
+   bounce the functions server (`mise run functions-serve` restart)
+   mid-dispatch. Verify the per-call rows: completed calls must
+   have result rows; only in-flight calls may be missing.
+
 ## Expected
 
 - (2-3) The reply streams into the bubble; the drawer's `stream`
@@ -85,6 +95,14 @@ subconscious priming pipelines' fire policy
   the send and the reply settling, or run the janitor via a
   reconnect-only request instead (no stream follows, so the value
   persists).
+- (6) The drawer's `outcomes:` line tags the first 10 calls `ok` and
+  the rest `deferred`; each deferred call's card carries the
+  re-issue text; the model re-issues and the drain rounds complete
+  the batch with no round-limit banner.
+- (7) After the kill: result rows exist for the calls that settled
+  before the kill; the recovery pass on next load fills only the
+  missing ids with the interrupted marker, and the model's next
+  turn sees real results plus markers (never a silent gap).
 
 ## Cleanup
 
@@ -106,3 +124,5 @@ delete from messages where content = 'orphan' and thread_id = '<thread>';
 | 2026-08-21 | local (mise run dev-start) | f5e6c90b | pass (1-5) | all steps pass on one thread; DB checks via PostgREST from page context (QA agent has no shell). Cold triggers confirmed both caches. Reconnect probe exact-match. Janitor flipped orphan to error, reply streamed same send; transient last_error caught at T+0.5s, null at end. Doc drift: stream source now emits 3 lines the Expected inventory omits (in-flight probe verdict, stream_started_at stamped, stream_started_at cleared). |
 | 2026-08-21 | local (mise run dev-start) | 8abfe2bc | pass (1-5) | All five steps pass at the M1 head. The 7-line stream inventory is unchanged from the M0 baseline (in-flight probe, start, stream_started_at stamped, round 0 historyLen, round 0 events, stream_started_at cleared, end terminalKind). Cold triggers confirmed both caches. Reconnect probe returned the exact noStreamInFlight envelope. Janitor flipped the forged orphan (position 5, status=streaming, 15min old) to error; the new reply streamed in the same send at position 6-7; last_error null at end state. The round-boundary move-to-tail (replacing the created_at re-stamp) did not alter the log inventory. |
 | 2026-08-24 | local (mise run dev-start) | 116abd66 | pass (1-5) | All five steps pass at the M2 head, identical to M1 results. 7-line inventory unchanged. Cold triggers confirmed both caches. Reconnect probe exact-match. Janitor flipped the forged orphan to error, reply streamed same send, last_error null at end. The thread_transcript resolver (new in M2) did not alter the streaming path's observable behavior - zero behavior change confirmed. |
+| 2026-10-13 | local | 19db56a8 | P (1-5 baseline, prior rounds) / - (6-7) | Steps 6-7 added for the tool-batch resilience change (dispatch cap, per-call persistence). Baseline execution of the new steps not yet run - no stack/browser available in the worktree session; run 6-7 with the post-change pass and log both rows. |
+| 2026-10-13 | local (dev-start from the worktree, change code live) | 69c237b2 | pass (6) / pass (2, 7 variant) | (6) 12-call memory_delete round: first 10 ok, 2 deferred with the re-issue text on the cards; model re-issued both next round, deleted: true; 12/12 ids answered in DB, 0 memories left. (2) 2-call memory_save round: per-call rows + complete terminal. (7 variant, display path) forged round row with 2 unanswered tool_calls + recovery banner renders; cards show the interrupted body. Found+fixed: statusFor painted a green check on recovery rows (non-JSON body fell through to treat-as-success); now detects RECOVERY_MARKER and reports error. |

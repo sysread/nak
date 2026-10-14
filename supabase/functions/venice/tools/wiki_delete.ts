@@ -4,7 +4,9 @@
 // autonomous wiki agent only reaches this for consolidation (an
 // article it just updated now strictly subsumes another). Wire schema
 // lives in src/lib/tools/wiki_delete.schema.ts. Auth: b-strict,
-// explicit user_id filter on both the read and the delete.
+// explicit user_id filter on both the read and the delete. Returns
+// {id, deleted: true} on success; {id, deleted: false, reason} when
+// nothing matched (already deleted, never existed, or not owned).
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendWikiChangelog } from './_wiki_helpers.ts';
@@ -52,12 +54,24 @@ export const wikiDelete: ToolDef = {
       );
     }
 
-    const { error: delErr } = await ctx.adminClient
+    // .select('id') makes a zero-row match detectable so the result
+    // can distinguish "deleted" from "nothing matched" (see
+    // memory_delete.ts for the same change).
+    const { data, error: delErr } = await ctx.adminClient
       .from('wiki_articles')
       .delete()
       .eq('id', id)
-      .eq('user_id', ctx.userId);
+      .eq('user_id', ctx.userId)
+      .select('id');
     if (delErr) throw new Error(`deleteWikiArticle failed: ${delErr.message}`);
+    const deleted = Array.isArray(data) && data.length > 0;
+    if (!deleted) {
+      return {
+        id,
+        deleted: false,
+        reason: 'No wiki article with that id - already deleted, never existed, or not yours.',
+      };
+    }
 
     if (existing) {
       try {

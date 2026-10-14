@@ -27,6 +27,12 @@ export const recipeRecordDelete: ToolDef = {
       .select('id');
     if (error) throw new Error(`deleteRecipeRecord failed: ${error.message}`);
     const deleted = Array.isArray(data) && data.length > 0;
+    if (!deleted) {
+      return {
+        deleted,
+        reason: 'No cooking record with that id - already deleted, never existed, or not yours.',
+      };
+    }
     return { deleted };
   },
 };
