@@ -6,7 +6,9 @@ the end-user manual (also rendered in-app via the **Help** button),
 and `docs/dev/README.md` for architecture + per-feature dev notes.
 Agent sessions on any harness: `AGENTS.md` holds the plan-workflow
 rules (commit the plan first, refine with fresh-context reviewers
-before building) - they apply here too.
+before building), notes about the user, and environment-scoped
+sections - its Local environment section does not apply to web
+sessions, and its Cloud environment section points back here.
 
 ## Start with the dev docs
 

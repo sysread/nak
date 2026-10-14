@@ -1,13 +1,25 @@
 # AGENTS.md
 
 Guidance for AI agent sessions working in this repo, whatever the
-harness (opencode, Claude Code, Cursor). `CLAUDE.md` carries the full
-project guidance - the dev-docs-first rule, commenting style, git
-rules, QA use-cases, schema procedure, the local gate - and applies
-to every session regardless of harness. Read it first. This file
-holds agent-workflow rules that layer on top.
+harness (opencode, Claude Code, Cursor). The scope headers below are
+load-bearing - apply the section that matches your environment and
+skip the rest:
 
-## Plans: commit first, then refine before building
+- **All sessions** - applies to every session, everywhere.
+- **Local environment only** - applies when working on the user's
+  machine, against the local dev stack.
+- **Cloud environment only** - applies when working in the GitHub
+  cloud env (Claude Code on the web).
+
+`CLAUDE.md` is the Claude-only file. It carries the full project
+guidance - the dev-docs-first rule, commenting style, code quality,
+QA use-cases, schema procedure, the local gate - plus the detailed
+cloud finishing procedure. Claude sessions: read it too. This file
+does not duplicate that guidance; it holds what every harness needs.
+
+## All sessions
+
+### Plans: commit first, then refine before building
 
 Non-trivial work - new features, multi-file changes, anything with
 real design decisions - follows a plan-first loop:
@@ -59,3 +71,125 @@ real design decisions - follows a plan-first loop:
 
 Incorporate the findings, commit the revised plan, and only then
 start on milestone one.
+
+### Plan completion workflow
+
+When finishing planned work (work tracked by a plan file in
+`docs/dev/in-progress/`), the final milestone before merging is to
+update the docs and use cases to reflect what shipped. Load the
+`plan-completion` skill and follow it (repo skill at
+`.opencode/skills/plan-completion/` - if your harness has no skill
+loader, read its SKILL.md and follow it by hand).
+
+The skill covers: graduating the plan doc into permanent `docs/dev/`
+docs, updating Interactions ledgers in coupled feature docs, updating
+`docs/user/` for observable behavior changes, auditing QA use cases
+for drift (verifying code drift is intentional first), adding new use
+cases for new behaviors, and retiring the in-progress plan file.
+
+### Notes about the user
+
+The user is an experienced software developer but has not read a
+SINGLE LINE OF CODE IN THIS REPO. They began this project to release
+their emotional attachment to personal knowledge of the code and
+holding the entire machine in their head themselves. They are using
+this project to improve their comfort level with AI-coding and to
+experiment with ways of improving the usefulness of AI for personal
+matters. The user understands code concepts and workflow shapes, but
+only has the most vague understanding of the organization and details
+of the code base here. When explaining code, plans, or workflows,
+assume the user can understand any coding concept, but explain the
+code base by analogy and shape (eg "it's an interval worker polling
+the db" or "there is a race between the service worker and the
+frontend display"), rather than referencing function names, packages,
+or files explicitly.
+
+## Local environment only
+
+Everything in this section assumes the local Supabase stack and the
+direnv environment on the user's machine. Cloud sessions have no
+local stack; skip this section entirely.
+
+### API keys in direnv
+
+The `.envrc` in this repo (git-ignored) contains a Venice API key.
+Use it to seed `app_config.venice_api_key` in the local Supabase
+stack when testing chat flows that need real completions.
+
+**Never expose key values in the chat window, tool call arguments,
+or tool call output.** Extract only what you need with targeted
+grep, and do not paste the value into any command or response that
+would be visible in the transcript. The habit matters even for local
+dev keys.
+
+To seed the local stack:
+
+```sh
+grep -oP 'VENICE[_A-Z]*KEY=\K\S+' .envrc | \
+  xargs -I {} psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -c \
+  "UPDATE app_config SET venice_api_key = '{}';"
+```
+
+The `xargs -I {}` substitution keeps the value out of the shell
+history and the visible command line. Do not use `echo` or `cat` to
+read the key into a variable that would be printed.
+
+### Local Supabase stack
+
+The local stack runs on `127.0.0.1:54321` (API) and `127.0.0.1:54322`
+(Postgres). The dev user is `dev@nak.local`. The edge functions serve
+on port 54321 with `--no-verify-jwt`.
+
+`mise run dev-start` starts the full stack (Supabase + Vite).
+`supabase start` starts just the backend. `supabase functions serve
+--no-verify-jwt` starts just the functions (if the backend is already
+up).
+
+### Images in conversation: Venice 64px minimum
+
+Venice's image validator (the error is `Supplied image did not pass
+validation checks.`) enforces a minimum dimension of 64px on each
+side of any image sent to Venice-hosted models (for example
+`z-ai-glm-5-3-flash`). Anthropic-hosted models accept the same
+images, so this only bites when the session's model is served by
+Venice.
+
+The common trigger is a Playwright element screenshot of a thin UI
+strip (such as a toolbar 60px tall). The image is fine at read time,
+but once it is in the conversation every subsequent Venice call
+fails with Bad Request, and it keeps failing on every turn because
+the image stays in context. The conversation is effectively poisoned
+until the model is switched.
+
+Rules when doing browser QA on a Venice model:
+
+- Prefer viewport screenshots over element clips.
+- If a thin strip is needed, pad the short side to 64px or more
+  before reading it. Prefer a transparent border on PNG (keeps
+  content pixels and aspect ratio intact) over resizing, which
+  distorts. If the image may get flattened to JPEG (which has no
+  alpha), pad with the UI's background color instead.
+- If the error appears mid-conversation, do not retry the same turn
+  expecting a different result. Either pad and re-read the image, or
+  switch models to clear the poisoned context.
+
+Verified 2026-08-29: 1416x62 fails, 1416x63 fails, 1416x64 passes.
+The exact bytes were replayed with curl, so this is a server-side
+validator rule, not an opencode or tool-chain bug.
+
+## Cloud environment only
+
+The cloud env is Claude Code on the web, working directly in the
+GitHub repo. The full operating procedure lives in `CLAUDE.md`
+("Default finishing procedure per environment" and "Verifying UI
+changes"). The short form, for any harness that finds itself there:
+
+- Work on a feature branch. Default end-of-task: commit on the
+  branch, push, stop. Merge only on explicit go-ahead, and "merge to
+  main" always means merge the PR (GitHub MCP tools; no `gh` CLI in
+  that environment).
+- After a merge, watch CI through to green (Tests, then the Deploy
+  chain off it) before calling the merge done.
+- There is no browser and no visible dev server. Run `mise run
+  check`, reason carefully about the UI layer, and explicitly flag
+  in the summary what was not verified.

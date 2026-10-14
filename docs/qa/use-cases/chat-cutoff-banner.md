@@ -35,7 +35,7 @@ The incomplete-turn detection ([dev: chat](../../dev/chat.md); classifier in `sr
     -- Stage an invalid key (do NOT paste the real key here)
     update app_config set venice_api_key = 'invalid-key-for-testing';
     -- After the test:
-    -- Restore the real key from .envrc (see AGENTS.local.md)
+    -- Restore the real key from .envrc (see AGENTS.md, "Local environment only" section)
     ```
 
 5. Draft tail after inherited prefix. On a fork created by fork-and-edit (step 2), navigate away and back. Observe the bottom.

@@ -94,7 +94,6 @@ opencode.json
 .opencode/bun.lock
 
 # agent instructions (cross-tool convention)
-AGENTS.local.md
 
 # scratch docs
 .scratch/

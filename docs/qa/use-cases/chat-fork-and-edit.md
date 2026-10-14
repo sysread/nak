@@ -16,7 +16,7 @@ The fork-and-edit flow ([dev: user-message-editing](../../dev/user-message-editi
 
 - Local stack up (`mise run dev-start`), signed in as the dev user.
 - A thread with at least two completed turns (user -> assistant -> user -> assistant). Note the thread id.
-- Venice API key seeded in `app_config` (see `AGENTS.local.md`) so completions can run.
+- Venice API key seeded in `app_config` (see `AGENTS.md`, "Local environment only" section) so completions can run.
 
 ## Steps
 

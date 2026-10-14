@@ -27,6 +27,9 @@ const TARGETS = [
   'docs/**/*.md',
   'README.md',
   'CLAUDE.md',
+  // Root AGENTS.md is the harness-agnostic instruction file (loaded
+  // by opencode and other agents); same lint guardrail.
+  'AGENTS.md',
   // Nested CLAUDE.md files in the source tree (e.g.
   // src/screens/CLAUDE.md, src/components/CLAUDE.md) are loaded by
   // Claude Code when files in their subtree are touched - same
