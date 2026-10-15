@@ -25,6 +25,7 @@ import {
   parseAskUserCallArgs,
   findPendingAskUserRow,
   buildAskUserAnswerContent,
+  askUserRowState,
   ASK_USER_PENDING_FLAG,
   ASK_USER_ANSWERED_FLAG,
 } from '../src/lib/ask-user';
@@ -182,5 +183,42 @@ describe('ask_user — pending-row lookup', () => {
     ];
     expect(findPendingAskUserRow(rows)).toBeNull();
     expect(findPendingAskUserRow([])).toBeNull();
+  });
+});
+
+describe('askUserRowState', () => {
+  it('reads the pending sentinel as pending', () => {
+    const content = JSON.stringify({
+      __ask_user_pending__: true,
+      question: 'q',
+      options: [{ label: 'a', description: 'b' }],
+    });
+    expect(askUserRowState(content)).toBe('pending');
+  });
+
+  it('splits user answers from terminal closes by via', () => {
+    expect(askUserRowState(buildAskUserAnswerContent('A', 'option', 0))).toBe(
+      'answered-user'
+    );
+    expect(askUserRowState(buildAskUserAnswerContent('typed', 'free_form'))).toBe(
+      'answered-user'
+    );
+    expect(
+      askUserRowState(buildAskUserAnswerContent(null, 'abandoned_on_refresh'))
+    ).toBe('terminal');
+    expect(
+      askUserRowState(buildAskUserAnswerContent(null, 'abandoned_on_new_send'))
+    ).toBe('terminal');
+    expect(
+      askUserRowState(
+        buildAskUserAnswerContent(null, 'cancelled_by_sibling_ask_user')
+      )
+    ).toBe('terminal');
+  });
+
+  it('returns null for non-ask_user content', () => {
+    expect(askUserRowState('{"ok":true}')).toBeNull();
+    expect(askUserRowState('plain text')).toBeNull();
+    expect(askUserRowState('')).toBeNull();
   });
 });

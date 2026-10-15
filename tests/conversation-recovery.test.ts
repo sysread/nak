@@ -679,3 +679,152 @@ describe('synthesizeRecoveryMessages: false-positive guards', () => {
     expect(synthesizeRecoveryMessages(thread)).toBe(thread);
   });
 });
+
+describe('synthesizeRecoveryMessages: ask_user sentinel tails', () => {
+  // The ask_user suspend persists a complete fan-in whose tool block
+  // runs into EOF. That is the DESIGNED stop point of the turn, not an
+  // interruption, so the pending and answered shapes must pass through
+  // untouched and only the abandoned shape gets an (honest) closing
+  // assistant.
+  const askCall = call('ask-1', 'ask_user', '{"question":"q"}');
+  const pendingContent = JSON.stringify({
+    __ask_user_pending__: true,
+    question: 'Pick one',
+    options: [{ label: 'A', description: 'a' }],
+  });
+  const answeredContent = JSON.stringify({
+    __ask_user_answered__: true,
+    answer: 'A',
+    via: 'option',
+    option_index: 0,
+  });
+  const abandonedContent = JSON.stringify({
+    __ask_user_answered__: true,
+    answer: null,
+    via: 'abandoned_on_new_send',
+  });
+  const siblingCancelContent = JSON.stringify({
+    __ask_user_answered__: true,
+    answer: null,
+    via: 'cancelled_by_sibling_ask_user',
+  });
+
+  function suspendedThread(toolContent: string): Message[] {
+    return [
+      msg('user', 'hi'),
+      msg('assistant', '', { tool_calls: [askCall] }),
+      msg('tool', toolContent, { tool_call_id: 'ask-1', name: 'ask_user' }),
+    ];
+  }
+
+  it('leaves a pending sentinel tail untouched (suspension, not interruption)', () => {
+    const thread = suspendedThread(pendingContent);
+    expect(synthesizeRecoveryMessages(thread)).toBe(thread);
+  });
+
+  it('leaves an answered sentinel tail untouched (resume continues the round)', () => {
+    const thread = suspendedThread(answeredContent);
+    expect(synthesizeRecoveryMessages(thread)).toBe(thread);
+  });
+
+  it('leaves a mixed plain-tool + pending block untouched (producible suspend shape)', () => {
+    const thread = [
+      msg('user', 'hi'),
+      msg('assistant', '', { tool_calls: [call('w'), askCall] }),
+      msg('tool', '{"ok":true}', { tool_call_id: 'w' }),
+      msg('tool', pendingContent, { tool_call_id: 'ask-1', name: 'ask_user' }),
+    ];
+    expect(synthesizeRecoveryMessages(thread)).toBe(thread);
+  });
+
+  it('closes an abandoned sentinel tail with the honest moved-on note', () => {
+    const result = synthesizeRecoveryMessages(suspendedThread(abandonedContent));
+    expect(result).not.toBe(suspendedThread(abandonedContent));
+    expect(result).toHaveLength(4);
+    const closing = result[3];
+    expect(closing.role).toBe('assistant');
+    expect(closing.synthetic).toBe(true);
+    expect(isRecoveryMessage(closing)).toBe(true);
+    expect(closing.content).toContain('left unanswered');
+    expect(closing.content).not.toContain('interrupted');
+  });
+
+  it('closes a sibling-cancelled sentinel tail with the honest moved-on note', () => {
+    const result = synthesizeRecoveryMessages(
+      suspendedThread(siblingCancelContent)
+    );
+    expect(result[3].role).toBe('assistant');
+    expect(result[3].content).toContain('left unanswered');
+  });
+
+  it('closes a mixed plain-tool + abandoned block with the honest moved-on note', () => {
+    const thread = [
+      msg('user', 'hi'),
+      msg('assistant', '', { tool_calls: [call('w'), askCall] }),
+      msg('tool', '{"ok":true}', { tool_call_id: 'w' }),
+      msg('tool', abandonedContent, { tool_call_id: 'ask-1', name: 'ask_user' }),
+    ];
+    const result = synthesizeRecoveryMessages(thread);
+    expect(result).toHaveLength(5);
+    expect(result[4].role).toBe('assistant');
+    expect(result[4].content).toContain('left unanswered');
+  });
+
+  it('closes a mid-history sentinel block followed by a user row honestly', () => {
+    // Pre-fix corruption shape (or a resume that died before
+    // committing): a user row landed after the sentinel block. The
+    // wire needs an assistant between; the body must stay honest.
+    const thread = [
+      msg('user', 'hi'),
+      msg('assistant', '', { tool_calls: [askCall] }),
+      msg('tool', answeredContent, { tool_call_id: 'ask-1', name: 'ask_user' }),
+      msg('user', 'the answer is A, also do the thing'),
+    ];
+    const result = synthesizeRecoveryMessages(thread);
+    expect(result).toHaveLength(5);
+    expect(result[3].role).toBe('assistant');
+    expect(result[3].content).toContain('was answered');
+    expect(result[4].role).toBe('user');
+  });
+
+  it('keeps the interrupted note for an ask_user call whose result never landed', () => {
+    // Incomplete fan-in is a genuine interruption: the sentinel row is
+    // missing, so the old behavior (synthetic tool row + interrupted
+    // note) applies.
+    const thread = [
+      msg('user', 'hi'),
+      msg('assistant', '', { tool_calls: [askCall] }),
+    ];
+    const result = synthesizeRecoveryMessages(thread);
+    expect(result).toHaveLength(4);
+    expect(result[2].role).toBe('tool');
+    expect(result[2].content).toContain('interrupted');
+    expect(result[3].role).toBe('assistant');
+    expect(result[3].content).toContain('interrupted');
+  });
+
+  it('is idempotent across a re-read of a synthesized abandoned tail', () => {
+    const first = synthesizeRecoveryMessages(suspendedThread(abandonedContent));
+    // Simulate the persisted real closing row: replace the synthetic
+    // with a real row carrying the same marker content.
+    const persisted = [
+      ...first.slice(0, 3),
+      msg('assistant', first[3].content),
+    ];
+    expect(synthesizeRecoveryMessages(persisted)).toBe(persisted);
+  });
+});
+
+describe('askUserClosingContent', () => {
+  it('carries the recovery marker and picks the body by state', async () => {
+    const { askUserClosingContent } = await import(
+      '../src/lib/conversation-recovery'
+    );
+    const abandoned = askUserClosingContent('abandoned');
+    expect(abandoned).toContain('left unanswered');
+    expect(abandoned).toContain(RECOVERY_MARKER);
+    const answered = askUserClosingContent('answered');
+    expect(answered).toContain('was answered');
+    expect(answered).toContain(RECOVERY_MARKER);
+  });
+});

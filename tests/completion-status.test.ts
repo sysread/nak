@@ -18,7 +18,10 @@ import {
 } from '../src/lib/ui/completion-status';
 import type { CompletionErrorKind } from '../src/lib/ui/completion-status';
 import { RECOVERY_MARKER } from '../src/lib/conversation-recovery';
-import { ASK_USER_PENDING_FLAG } from '../src/lib/ask-user';
+import {
+  ASK_USER_PENDING_FLAG,
+  buildAskUserAnswerContent,
+} from '../src/lib/ask-user';
 
 function msg(over: Partial<Message>): Message {
   return {
@@ -78,6 +81,33 @@ describe('classifyTail', () => {
   it('classifies a raw pending ask_user sentinel as suspended', () => {
     const v = classifyTail([userMsg(), pendingSentinel()]);
     expect(v.kind).toBe('suspended');
+  });
+
+  it('classifies a recovery tail over an answered sentinel as settled', () => {
+    const answered = msg({
+      id: 'sentinel',
+      role: 'tool',
+      tool_call_id: 'ask',
+      content: buildAskUserAnswerContent('A', 'option', 0),
+    });
+    const v = classifyTail([userMsg(), answered, recoveryRow()]);
+    expect(v.kind).toBe('settled');
+  });
+
+  it('classifies a recovery tail over an abandoned sentinel as settled', () => {
+    const abandoned = msg({
+      id: 'sentinel',
+      role: 'tool',
+      tool_call_id: 'ask',
+      content: buildAskUserAnswerContent(null, 'abandoned_on_new_send'),
+    });
+    const v = classifyTail([userMsg(), abandoned, recoveryRow()]);
+    expect(v.kind).toBe('settled');
+  });
+
+  it('still classifies a recovery tail over a plain tool row as interrupted-round', () => {
+    const v = classifyTail([userMsg(), toolRow(), recoveryRow()]);
+    expect(v.kind).toBe('interrupted-round');
   });
 
   it('classifies an aborted assistant tail as deliberate-stop', () => {

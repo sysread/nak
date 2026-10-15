@@ -43,6 +43,7 @@ import {
   ASK_USER_PENDING_FLAG,
 } from '$lib/ask-user';
 import { isRecoveryMessage } from '$lib/conversation-recovery';
+import { askUserRowState } from '$lib/ask-user';
 
 /**
  * Error kinds shared by the live (in-session catch sites) and
@@ -381,6 +382,17 @@ function isPendingAskUser(m: Message): boolean {
   return parsed != null && ASK_USER_PENDING_FLAG in parsed;
 }
 
+/**
+ * True when the row is any ask_user sentinel (pending, answered, or
+ * abandoned). Behind a recovery-row tail, an answered or abandoned
+ * sentinel is a deliberate endpoint the closing row owns - not a
+ * cut-off turn.
+ */
+function isAskUserRow(m: Message): boolean {
+  if (m.role !== 'tool') return false;
+  return askUserRowState(m.content) !== null;
+}
+
 function anchorUserId(messages: readonly Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === 'user') return messages[i].id;
@@ -402,13 +414,17 @@ function anchorUserId(messages: readonly Message[]): string {
  * and that shape must still produce a retryable verdict instead of a
  * silent settled.
  *
- * One look-back exception: a pending ask_user sentinel is healed by
- * the synthesizer on read (its tool block runs into EOF, so a recovery
- * assistant lands after it), but that suspension is the AskUserCard's
- * interaction to own - a pending question is not a cut-off turn. The
- * classifier reads one row back through the synthetic tail to detect
- * it. On the raw in-session list (before any synthesis) the sentinel
- * is the tail itself; both shapes classify as 'suspended'.
+ * Look-back exceptions for ask_user tails, which are deliberate
+ * exchange states rather than cut-off turns. Pre-fix, the synthesizer
+ * always appended a recovery assistant after a sentinel tail; post-fix
+ * pending and answered sentinel tails get NO synthesis and arrive here
+ * as raw tool rows, while abandoned tails get the honest closing row.
+ * Both the raw-sentinel branch and the recovery-tail look-back
+ * classify by the sentinel's state: pending -> suspended (the
+ * AskUserCard's interaction to own), answered/abandoned -> settled.
+ * Legacy threads can still carry a persisted pre-fix interrupted note
+ * behind an answered or abandoned sentinel - that shape now reads as
+ * the settled endpoint it actually was.
  */
 export function classifyTail(messages: readonly Message[]): TailVerdict {
   if (messages.length === 0) return { kind: 'settled' };
@@ -416,12 +432,17 @@ export function classifyTail(messages: readonly Message[]): TailVerdict {
   const anchor = anchorUserId(messages);
   if (isRecoveryMessage(last)) {
     // Healed tail: the recovery walk appended synthetic rows. Behind
-    // the synthetic recovery assistant there may be a pending ask_user
-    // sentinel the walk also healed - that shape is an open question,
-    // not an interruption (see classifyTail's docstring).
+    // the synthetic recovery assistant there may be an ask_user row
+    // the walk closed around. Pending = the turn is suspended (open
+    // question); answered or abandoned = the exchange closed
+    // deliberately (the honest closing row owns it), so neither is a
+    // cut-off turn. Any other prev stays a retryable interruption.
     const prev = messages[messages.length - 2];
     if (prev && isPendingAskUser(prev)) {
       return { kind: 'suspended' };
+    }
+    if (prev && isAskUserRow(prev)) {
+      return { kind: 'settled' };
     }
     return { kind: 'interrupted-round', anchorUserMessageId: anchor };
   }

@@ -151,6 +151,61 @@ function makeRecoveryAssistant(): StoredMessage {
   };
 }
 
+// Ask_user sentinel state for a tool-result row, mirroring
+// askUserRowState in src/lib/ask-user.ts (the functions bundle cannot
+// import from src/lib - keep the two classifiers in sync). 'pending' =
+// open question, turn suspended; 'answered' = user picked or typed an
+// answer; 'terminal' = closed without a user answer (abandonment
+// paths, sibling cancel). Null for non-ask_user rows.
+type AskUserRowState = 'pending' | 'answered' | 'terminal';
+
+function askUserRowState(content: unknown): AskUserRowState | null {
+  if (typeof content !== 'string' || content.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.__ask_user_pending__ === true) return 'pending';
+  if (obj.__ask_user_answered__ !== true) return null;
+  return obj.via === 'option' || obj.via === 'free_form' ? 'answered' : 'terminal';
+}
+
+// Honest closing bodies for a completed ask_user block, mirroring
+// askUserClosingContent in src/lib/conversation-recovery.ts. The
+// interrupted note would lie here - the model asked a question and the
+// exchange resolved, it was not cut off. The pending body is honest
+// even though the turn it describes may still be running: curation
+// reads a POINT-IN-TIME transcript, and at read time the question
+// genuinely has no answer yet.
+const ASK_USER_PENDING_CLOSING_BODY =
+  '*(The question above is waiting for the user to answer it.)*';
+
+const ASK_USER_ANSWERED_CLOSING_BODY = '*(The question above was answered.)*';
+
+const ASK_USER_ABANDONED_CLOSING_BODY =
+  '*(The question above was left unanswered; the user moved on.)*';
+
+function makeAskUserClosingAssistant(state: AskUserRowState): StoredMessage {
+  const body =
+    state === 'pending'
+      ? ASK_USER_PENDING_CLOSING_BODY
+      : state === 'answered'
+      ? ASK_USER_ANSWERED_CLOSING_BODY
+      : ASK_USER_ABANDONED_CLOSING_BODY;
+  return {
+    id: 'synthetic-recovery-asst',
+    role: 'assistant',
+    content: body,
+    tool_calls: null,
+    tool_call_id: null,
+    name: null,
+  };
+}
+
 /**
  * Rebuild a StoredMessage slice into a tool-call fan-in that Venice's
  * strict validators accept. Three wire-shape errors drove this, all
@@ -206,12 +261,14 @@ export function repairToolCallFanIn(messages: StoredMessage[]): StoredMessage[] 
       // Mismatched or duplicate tool rows are dropped - emitting them is
       // what triggers "Unexpected tool call id <id> in tool results".
       const answered = new Set<string>();
+      const blockToolRows: StoredMessage[] = [];
       let j = i + 1;
       while (j < messages.length && messages[j].role === 'tool') {
         const tcid = messages[j].tool_call_id;
         if (tcid && callIds.has(tcid) && !answered.has(tcid)) {
           answered.add(tcid);
           result.push(messages[j]);
+          blockToolRows.push(messages[j]);
         } else {
           modified = true;
         }
@@ -228,9 +285,26 @@ export function repairToolCallFanIn(messages: StoredMessage[]): StoredMessage[] 
       // The block is never empty (>=1 call, each answered by a kept or
       // synthesized row), so the only question is whether an assistant
       // follows it. Venice rejects `tool -> user` and `tool -> EOF`.
+      // An ask_user block reaching this point is the designed suspend
+      // shape, not an interruption, but the worker wire ALWAYS needs an
+      // assistant here (completeOverThreadSlice pushes its instruction
+      // user row after the tail), so every sentinel state keeps one
+      // with an honest body instead of the interrupted note. Mirror of
+      // the browser rule in synthesizeRecoveryMessages.
       const next = j < messages.length ? messages[j] : null;
       if (next === null || next.role !== 'assistant') {
-        result.push(makeRecoveryAssistant());
+        const states = blockToolRows.map((r) => askUserRowState(r.content));
+        const incomplete = calls.some((c) => !answered.has(c.id));
+        if (!incomplete && states.some((s) => s !== null)) {
+          const state: AskUserRowState = states.some((s) => s === 'pending')
+            ? 'pending'
+            : states.some((s) => s === 'answered')
+              ? 'answered'
+              : 'terminal';
+          result.push(makeAskUserClosingAssistant(state));
+        } else {
+          result.push(makeRecoveryAssistant());
+        }
         modified = true;
       }
       i = j;

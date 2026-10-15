@@ -565,3 +565,108 @@ Deno.test('drain reports cap exhaustion only when the queue is still producing',
   const dry = drainOver(['saved', 'empty-queue'], 5);
   assertEquals(await dry.run(), false);
 });
+
+// --- repairToolCallFanIn: ask_user sentinel tails -------------------------
+//
+// An ask_user suspend persists a complete fan-in whose tool block ends
+// the transcript - the DESIGNED stop point, not an interruption. The
+// worker wire always needs an assistant after the block (the curation
+// slice pushes its instruction user row after the tail), so every
+// sentinel state keeps one, with an honest body instead of the
+// interrupted note.
+
+function askSentinel(via: 'pending' | 'answered' | 'abandoned' | 'sibling'): StoredMessage {
+  const content =
+    via === 'pending'
+      ? JSON.stringify({
+          __ask_user_pending__: true,
+          question: 'Pick one',
+          options: [{ label: 'A', description: 'a' }],
+        })
+      : JSON.stringify({
+          __ask_user_answered__: true,
+          answer: via === 'answered' ? 'A' : null,
+          via:
+            via === 'answered'
+              ? 'option'
+              : via === 'abandoned'
+                ? 'abandoned_on_new_send'
+                : 'cancelled_by_sibling_ask_user',
+        });
+  return {
+    id: 'sentinel',
+    role: 'tool',
+    content,
+    tool_calls: null,
+    tool_call_id: 'call_ask',
+    name: 'ask_user',
+  };
+}
+
+function asstAsk(id: string): StoredMessage {
+  return {
+    id,
+    role: 'assistant',
+    content: '',
+    tool_calls: [
+      { id: 'call_ask', type: 'function', function: { name: 'ask_user', arguments: '{}' } },
+    ],
+    tool_call_id: null,
+    name: null,
+  };
+}
+
+Deno.test('repairToolCallFanIn keeps an honest assistant after a pending ask_user tail', () => {
+  const msgs = [plain('user', 'u0'), asstAsk('a1'), askSentinel('pending')];
+  const out = repairToolCallFanIn(msgs);
+  assertWireValid(out);
+  assertEquals(out.length, 4);
+  assertEquals(out[3].role, 'assistant');
+  assert(out[3].content.includes('waiting for the user'));
+  assert(!out[3].content.includes('interrupted'));
+});
+
+Deno.test('repairToolCallFanIn notes an answered ask_user tail honestly', () => {
+  const out = repairToolCallFanIn([
+    plain('user', 'u0'),
+    asstAsk('a1'),
+    askSentinel('answered'),
+  ]);
+  assertWireValid(out);
+  assertEquals(out[3].role, 'assistant');
+  assert(out[3].content.includes('was answered'));
+});
+
+Deno.test('repairToolCallFanIn notes an abandoned ask_user tail as moved-on', () => {
+  for (const via of ['abandoned', 'sibling'] as const) {
+    const out = repairToolCallFanIn([
+      plain('user', 'u0'),
+      asstAsk('a1'),
+      askSentinel(via),
+    ]);
+    assertWireValid(out);
+    assertEquals(out[3].role, 'assistant');
+    assert(out[3].content.includes('left unanswered'));
+  }
+});
+
+Deno.test('repairToolCallFanIn keeps the interrupted note for a missing ask_user result', () => {
+  // Incomplete fan-in is a genuine interruption even for ask_user.
+  const out = repairToolCallFanIn([plain('user', 'u0'), asstAsk('a1')]);
+  assertWireValid(out);
+  assertEquals(out.length, 4);
+  assertEquals(out[2].role, 'tool');
+  assertEquals(out[2].content, '(tool execution was interrupted - no result available)');
+  assert(out[3].content.includes('interrupted'));
+});
+
+Deno.test('repairToolCallFanIn keeps the interrupted note for a plain-tool tail', () => {
+  const out = repairToolCallFanIn([
+    plain('user', 'u0'),
+    asstCall('a1', ['call_aaa']),
+    toolRes('t1', 'call_aaa'),
+  ]);
+  assertWireValid(out);
+  assertEquals(out[3].role, 'assistant');
+  assert(out[3].content.includes('interrupted'));
+});

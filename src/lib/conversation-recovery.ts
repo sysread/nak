@@ -57,10 +57,29 @@
  * tool rows added. The trickier case "complete fan-in followed by
  * user, no assistant in between" DOES get a recovery assistant
  * inserted, because `tool -> user` is itself a wire violation.
+ *
+ * ask_user blocks are the one legitimate way a tool block ends the
+ * transcript: the pending sentinel suspends the turn, and the
+ * resumed round continues from the tool block, so no assistant
+ * belongs between them. For a COMPLETE fan-in whose block contains
+ * an ask_user sentinel row (`askUserRowState` in lib/ask-user.ts):
+ *
+ *   - any row pending, or any user-answered row with the block at
+ *     EOF -> nothing injected (suspension, or a resume about to
+ *     continue; injecting would lie to the model that comes next).
+ *   - otherwise (all rows abandoned/sibling-cancelled at EOF, or
+ *     any sentinel block followed by a non-assistant row - pre-fix
+ *     corruption or a resume that died before committing) -> the
+ *     honest closing assistant (answered / left-unanswered body)
+ *     so the next user row never follows a tool row directly.
+ *
+ * Incomplete fan-ins and plain-tool blocks keep the interrupted-note
+ * behavior below: those are genuine interruptions.
  */
 
 import type { Message } from './supabase';
 import type { OpenAIToolCall } from './tools/types';
+import { askUserRowState } from './ask-user';
 
 /**
  * Marker placed in the content of every synthesized recovery row.
@@ -81,6 +100,21 @@ const RECOVERY_ASSISTANT_BODY =
   '*(The previous response was interrupted before I finished. Picking up from here.)*';
 
 /**
+ * Honest closing bodies for a completed ask_user tool block that ends
+ * the transcript or runs into a non-assistant row. The interrupted
+ * body above would LIE here - the model asked a question and the
+ * exchange resolved without an interruption - so the closing note
+ * names what actually happened. 'answered' rides before a user row
+ * only when a resumed turn died before committing anything
+ * (see synthesizeRecoveryMessages); 'abandoned' is the typed-over or
+ * refreshed-away question.
+ */
+const ASK_USER_ANSWERED_CLOSING_BODY = '*(The question above was answered.)*';
+
+const ASK_USER_ABANDONED_CLOSING_BODY =
+  '*(The question above was left unanswered; the user moved on.)*';
+
+/**
  * Visible body for synthesized tool-result rows. Plain parens (not
  * markdown italic) because tool content goes onto the wire as a JSON
  * string in many providers' implementations, and italic underscores
@@ -90,12 +124,22 @@ const RECOVERY_ASSISTANT_BODY =
 const RECOVERY_TOOL_BODY =
   '(tool execution was interrupted - no result available)';
 
-function recoveryAssistantContent(): string {
-  return `${RECOVERY_ASSISTANT_BODY}\n\n${RECOVERY_MARKER}`;
-}
-
 function recoveryToolContent(): string {
   return `${RECOVERY_TOOL_BODY} ${RECOVERY_MARKER}`;
+}
+
+/**
+ * Content for the synthesized ask_user closing assistant. Shared by
+ * the synthesizer and by Chat.svelte's abandon paths (which persist a
+ * REAL closing row at abandon time); both must produce the same body
+ * so a real row followed by a synthesized one never disagrees.
+ */
+export function askUserClosingContent(state: 'answered' | 'abandoned'): string {
+  const body =
+    state === 'answered'
+      ? ASK_USER_ANSWERED_CLOSING_BODY
+      : ASK_USER_ABANDONED_CLOSING_BODY;
+  return `${body}\n\n${RECOVERY_MARKER}`;
 }
 
 /**
@@ -115,14 +159,19 @@ export function isRecoveryMessage(m: Pick<Message, 'content'>): boolean {
  * id when it writes. `created_at` is honestly "now" (when the heal
  * happened); transcript placement comes from `position`, which starts
  * null here and is assigned by the synthesizer's placement pass once
- * the row's neighbors are known.
+ * the row's neighbors are known. `body` defaults to the interrupted
+ * note; the ask_user closing path passes its own honest body.
  */
-function makeRecoveryAssistant(threadId: string, idx: number): Message {
+function makeRecoveryAssistant(
+  threadId: string,
+  idx: number,
+  body: string = RECOVERY_ASSISTANT_BODY
+): Message {
   return {
     id: `synthetic-recovery-asst-${idx}`,
     thread_id: threadId,
     role: 'assistant',
-    content: recoveryAssistantContent(),
+    content: `${body}\n\n${RECOVERY_MARKER}`,
     created_at: new Date().toISOString(),
     position: null,
     synthetic: true,
@@ -243,11 +292,13 @@ export function synthesizeRecoveryMessages(messages: Message[]): Message[] {
       // Asst-with-tool_calls: process the tool block that follows it.
       result.push(m);
       const answered = new Set<string>();
+      const blockToolRows: Message[] = [];
       let j = i + 1;
       while (j < messages.length && messages[j].role === 'tool') {
         const tcid = messages[j].tool_call_id;
         if (tcid) answered.add(tcid);
         result.push(messages[j]);
+        blockToolRows.push(messages[j]);
         j++;
       }
       const missing = m.tool_calls.filter((c) => !answered.has(c.id));
@@ -272,8 +323,43 @@ export function synthesizeRecoveryMessages(messages: Message[]): Message[] {
         toolBlockLength > 0 &&
         (next === null || next.role !== 'assistant')
       ) {
-        result.push(makeRecoveryAssistant(m.thread_id, synthIdx++));
-        modified = true;
+        // ask_user blocks end the transcript by design (the pending
+        // sentinel suspends the turn; the resumed round continues
+        // from the tool block), so the interrupted-note body would
+        // LIE on every read of a suspended thread. Route by the
+        // block's ask_user state instead - see askUserRowState. The
+        // docstring's header comment records the full decision table.
+        const askStates = blockToolRows.map((r) =>
+          r.content == null ? null : askUserRowState(r.content)
+        );
+        const hasAskUser = askStates.some((s) => s !== null);
+        const hasPending = askStates.some((s) => s === 'pending');
+        const hasUserAnswered = askStates.some((s) => s === 'answered-user');
+        if (missing.length === 0 && hasAskUser) {
+          if (hasPending || (hasUserAnswered && next === null)) {
+            // Suspension or a resume about to continue: the tool
+            // block is a legitimate stop. Nothing to heal.
+          } else {
+            // Terminal block (abandoned / sibling-cancelled) at EOF,
+            // or any sentinel block running into a later row
+            // (pre-fix corruption, or a resume that died before
+            // committing): close the exchange honestly so the next
+            // user row never follows a tool row directly.
+            result.push(
+              makeRecoveryAssistant(
+                m.thread_id,
+                synthIdx++,
+                hasUserAnswered
+                  ? ASK_USER_ANSWERED_CLOSING_BODY
+                  : ASK_USER_ABANDONED_CLOSING_BODY
+              )
+            );
+            modified = true;
+          }
+        } else {
+          result.push(makeRecoveryAssistant(m.thread_id, synthIdx++));
+          modified = true;
+        }
       }
       i = j;
       continue;

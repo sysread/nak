@@ -62,6 +62,20 @@ subconscious priming pipelines' fire policy
    mid-dispatch. Verify the per-call rows: completed calls must
    have result rows; only in-flight calls may be missing.
 
+8. Ask_user recovery shapes: drive an ask_user round (for example,
+   "ask me a clarifying question with options before doing X"),
+   then exercise the three sentinel tails and check the wire and
+   the DB after each: (a) answer the card in the same tab and
+   confirm the resumed reply contains no interruption language;
+   (b) reload the thread while the question is pending (the
+   abandon-on-refresh rewrite fires), then type the answer as a
+   plain message and confirm the DB tail carries the honest
+   closing row ("left unanswered") between the sentinel and the
+   user row, never the "interrupted" note; (c) reload mid-turn
+   BEFORE the question lands, let the reconnect probe settle the
+   suspended turn, then answer the card and confirm the resumed
+   wire ends at the answered sentinel with no synthetic row.
+
 ## Expected
 
 - (2-3) The reply streams into the bubble; the drawer's `stream`
@@ -103,6 +117,15 @@ subconscious priming pipelines' fire policy
   before the kill; the recovery pass on next load fills only the
   missing ids with the interrupted marker, and the model's next
   turn sees real results plus markers (never a silent gap).
+- (8) (a) The resumed reply follows the answer with no "interrupted"
+  note anywhere on the wire (Logs drawer shows the request the
+  function received; in-session there is no synthesis at all).
+  (b) The DB tail reads sentinel (abandoned envelope) then the
+  honest closing assistant row, then the user row - no
+  "previous response was interrupted" row, no interrupted-round
+  status card. (c) The resumed turn's request ends at the answered
+  sentinel (plus the metadata system row) with no recovery
+  assistant after it; the reply continues normally.
 
 ## Cleanup
 
@@ -126,3 +149,4 @@ delete from messages where content = 'orphan' and thread_id = '<thread>';
 | 2026-08-24 | local (mise run dev-start) | 116abd66 | pass (1-5) | All five steps pass at the M2 head, identical to M1 results. 7-line inventory unchanged. Cold triggers confirmed both caches. Reconnect probe exact-match. Janitor flipped the forged orphan to error, reply streamed same send, last_error null at end. The thread_transcript resolver (new in M2) did not alter the streaming path's observable behavior - zero behavior change confirmed. |
 | 2026-10-13 | local | 19db56a8 | P (1-5 baseline, prior rounds) / - (6-7) | Steps 6-7 added for the tool-batch resilience change (dispatch cap, per-call persistence). Baseline execution of the new steps not yet run - no stack/browser available in the worktree session; run 6-7 with the post-change pass and log both rows. |
 | 2026-10-13 | local (dev-start from the worktree, change code live) | 69c237b2 | pass (6) / pass (2, 7 variant) | (6) 12-call memory_delete round: first 10 ok, 2 deferred with the re-issue text on the cards; model re-issued both next round, deleted: true; 12/12 ids answered in DB, 0 memories left. (2) 2-call memory_save round: per-call rows + complete terminal. (7 variant, display path) forged round row with 2 unanswered tool_calls + recovery banner renders; cards show the interrupted body. Found+fixed: statusFor painted a green check on recovery rows (non-JSON body fell through to treat-as-success); now detects RECOVERY_MARKER and reports error. |
+| 2026-10-15 | unit gate (worktree) | this branch | - (8, live) / P (unit) | Step 8 added for the ask_user recovery false-positive fix. No stack/browser available in the worktree session; live pass pending. Unit coverage instead: synthesizeRecoveryMessages drives all three sentinel tails plus mixed/incomplete/mid-history shapes (tests/conversation-recovery.test.ts), askUserRowState classifier (tests/ask-user-tool.test.ts), classifyTail sentinel look-back (tests/completion-status.test.ts), function-side twin bodies (supabase/functions/tests/curation.test.ts). Full mise run check green. |

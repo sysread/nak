@@ -290,6 +290,7 @@
     findPendingAskUserRow,
     type AskUserVia,
   } from '$lib/ask-user';
+  import { askUserClosingContent } from '$lib/conversation-recovery';
   import MessageAttachments from '../components/MessageAttachments.svelte';
   import TopBarActions from '../components/TopBarActions.svelte';
   // ExtractedTextDrawer + LogsDrawer are toggled overlays - the
@@ -6614,6 +6615,16 @@
    * the sentinel will get rewritten on the next try and the wire
    * shape stays valid either way.
    *
+   * When the rewrite succeeds and the sentinel is still the transcript
+   * tail, an honest closing assistant row is persisted right after it:
+   * the abandoned exchange must never hand a `tool -> user` wire to
+   * the provider on the next send, and the synthesizer's closing body
+   * is the fallback when this insert fails (it heals on the next
+   * read; persistSyntheticRecovery lands it on the next send). The
+   * returned row is appended in memory too - the realtime echo dedupes
+   * by id - so the resumed send's wire builder sees the closing row
+   * without waiting for a refetch.
+   *
    * Used by:
    *   - selectThread's mount-time cleanup (via='abandoned_on_refresh')
    *   - send()'s pre-send cancel (via='abandoned_on_new_send')
@@ -6641,6 +6652,18 @@
       // stale pending card flashing past while the resumed loop
       // (if any) reads the persisted state.
       messages = messages.map((m) => (m.id === updated.id ? updated : m));
+      // Close the exchange honestly. Tail-gated: if rows already
+      // landed past the sentinel, the synthesizer's mid-history rule
+      // owns the wire instead.
+      const tail = messages.at(-1);
+      if (tail && tail.id === updated.id) {
+        const closing = await app.supabase.addMessage(
+          threadId,
+          'assistant',
+          askUserClosingContent('abandoned')
+        );
+        messages = [...messages, closing];
+      }
     } catch (err) {
       log.warn('cancelPendingAskUser failed', err);
     }

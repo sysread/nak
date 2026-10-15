@@ -243,3 +243,31 @@ export function findPendingAskUserRow(messages: readonly Message[]): {
   }
   return null;
 }
+
+/**
+ * What an ask_user tool-result row says happened, derived from
+ * `parseAskUserContent` plus the answer's `via` field:
+ *
+ *   'pending'       - the question is open; the turn is suspended on
+ *                     the AskUserCard interaction.
+ *   'answered-user' - the user deliberately answered (option pick or
+ *                     free-form text); a resumed round continues the
+ *                     exchange.
+ *   'terminal'      - the exchange closed without a user answer
+ *                     (abandonment paths, sibling cancel); the wire
+ *                     needs a closing assistant before any future
+ *                     user row.
+ *
+ * Null for anything that is not an ask_user surface (regular tool
+ * results, error payloads, malformed JSON) so callers can key
+ * ask_user-specific behavior off non-null without re-parsing.
+ */
+export type AskUserRowState = 'pending' | 'answered-user' | 'terminal';
+
+export function askUserRowState(content: string): AskUserRowState | null {
+  const parsed = parseAskUserContent(content);
+  if (!parsed) return null;
+  if (ASK_USER_PENDING_FLAG in parsed) return 'pending';
+  const via = (parsed as AskUserAnsweredContent).via;
+  return via === 'option' || via === 'free_form' ? 'answered-user' : 'terminal';
+}

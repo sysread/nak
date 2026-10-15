@@ -454,6 +454,19 @@ A chat turn goes:
   `abandoned_on_*` answer envelope when the user reloads (mount-
   time scan in `selectThread`) or sends a new message instead of
   picking an option, keeping the wire shape valid in both cases.
+  Abandonment also persists an honest closing assistant row ("the
+  question above was left unanswered") right after the sentinel
+  when the sentinel is still the transcript tail. The recovery
+  synthesizer treats an ask_user sentinel tail as the designed stop
+  point it is, NOT an interruption: pending and answered sentinel
+  tails synthesize nothing (the resumed round continues from the
+  tool block), abandoned tails synthesize the honest closing note
+  when no real one landed, and only an incomplete fan-in still
+  produces the "interrupted" note. The function-side twin
+  (`repairToolCallFanIn` in `_curation_helpers.ts`) always inserts
+  an assistant after a sentinel block (the curation wire pushes its
+  instruction user row after the tail) but picks the body by the
+  sentinel's state for the same honesty reason.
   See `src/lib/tools/ask_user.schema.ts` for the sentinel/answer shapes
   and `src/lib/notifications.svelte.ts` for the foreground OS
   notification that fires when the suspension lands while the
