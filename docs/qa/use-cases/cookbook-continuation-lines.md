@@ -70,3 +70,4 @@ Stop the worktree's second Vite if one is still running.
 | Date       | Env                              | Commit    | Result | Notes                                                                                          |
 | ---------- | -------------------------------- | --------- | ------ | ---------------------------------------------------------------------------------------------- |
 | 2026-10-16 | worktree Vite :5174, local stack | 9e109d38  | PASS   | First run; all three steps verified via Playwright against the worktree bundle (see git log).  |
+| 2026-10-16 | prod (GitHub Pages deploy)       | 6569eef2  | PASS   | Confirmed by Jeff after the deploy chain landed.                                               |
