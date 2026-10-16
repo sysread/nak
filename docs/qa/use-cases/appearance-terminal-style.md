@@ -76,4 +76,4 @@ and Supabase persistence of `profiles.settings.uiStyle`.
 
 | Date | Env | Commit | Result | Notes |
 |---|---|---|---|---|
-| - | - | - | - | Feature just built; no runs. |
+| 2026-10-16 | local (`dev-start`, dev@nak.local) | a6b638c7 | Pass | First run, browser-driven (Playwright) while QA-ing the new accent palettes. Steps 1-7, 9, 10 P. Step 5 flipped all seven new accents (teal, pink, lime, gold, cyan, rust, slate) plus red through the real picker in both modes. Step 8 F at first run - pre-existing env bug, unrelated to accents: the seeded auth users predate the on_auth_user_created trigger, so they had no profiles row and the UPDATE-only merge_profile_settings RPC silently dropped every settings write. Fixed in 4e4c947b (the RPC upserts now; local rows backfilled); step 8 re-run on a fresh origin ([::1]:5173) and P - settings arrived dark/rust/terminal. Step 4's error-bubble bar sub-check not run (no error thread staged). |
