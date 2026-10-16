@@ -84,7 +84,9 @@ export const recipeSaveSchema = {
     'optional ingredients take `?` after the `@` (`@?cilantro{2%tbsp}`); ' +
     'alternatives get one `@` with the substitute as prose; ' +
     'prefer timer syntax `~{N%unit}` over prose durations (it feeds the timers list); ' +
-    "wrap long steps with a `> ` continuation line; " +
+    "a `> `-prefixed line continues the previous step and keeps its own line: " +
+    'bullet continuations (`- `/`* `) render as a sub-list inside the step, ' +
+    'plain ones rejoin the step prose; ' +
     '`== Soup ==` / `# Soup` start sections; ' +
     'emphasis `**bold**` / `*italic*` renders, backticks do NOT. ' +
     "The star rating is the user's verdict and is not editable here - " +

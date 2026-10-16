@@ -317,6 +317,11 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   the recipe detail pane's Timers block: the summed total with the
   timers nested beneath it, range totals, the flat fallback, and
   wrapped step text with inline emphasis.
+- [cookbook-continuation-lines](./use-cases/cookbook-continuation-lines.md) -
+  the >` continuation extension: prose continuations rejoining the
+  step, bullet continuations rendering as a sub-list inside the step,
+  tap-highlight resolving through sub-bullets, and the export nesting
+  in Markdown and plain text.
 - [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -
   Settings pane independence, update-check/reload flow, background-job
   toggles, usage refresh, and credential/export actions.

@@ -33,7 +33,7 @@ unaffected.
   share. `recipeToc` is a third projection of the parsed AST (alongside
   the HTML and the export renderers): it returns the detail pane's table
   of contents (Ingredients + Instructions, each with a sub-entry per
-  rendered section). Its link ids and the `<h3>` / `<h4>` ids
+  rendered section). Its link ids and the `<h3`> / `<h4`> ids
   `recipeToHtml` stamps both come from one private `tocHeadingId` helper,
   so a jump link can never point at a heading the renderer didn't emit.
 - `src/lib/cookbook-store.svelte.ts` — module-level `$state` for the
@@ -89,7 +89,7 @@ unaffected.
   to-close conventions; styles scoped locally rather than added to
   `styles.css` because the panel is an island. The detail pane parses
   the recipe once and feeds both `recipeToHtml` and `recipeToc` off the
-  result; the TOC renders as a `<nav class="cookbook-toc">` above the
+  result; the TOC renders as a `<nav class="cookbook-toc"`> above the
   rendered body, and a click resolves the target heading by id within
   the bound render container (`detailRenderEl`) and `scrollIntoView`s it.
   The TOC is gated on `recipeTocVisible(...)` so a one-block
@@ -277,7 +277,7 @@ unaffected.
     `mime_type text`, `size_bytes int`, `storage_path text`,
     `created_at`. Unique on `(user_id, sha256)` for per-user dedup.
   - Bytes live in the private `recipe-images` Storage bucket at the
-    content-addressed key `<user_id>/<sha256>` (`storage_path`).
+    content-addressed key `<user_id>/<sha256`> (`storage_path`).
     `listRecipePhotos` resolves a display `url` (a signed bucket URL).
     The migration off the old base64 `data` column is complete - see
     [`./file-storage.md`](./file-storage.md).
@@ -325,7 +325,7 @@ unaffected.
 - `cooklangToHtml(src: string): string` — parses + renders a scoped
   HTML fragment (no root wrapper). Classes prefixed `cook-` so host
   CSS can style without nesting selectors. The Ingredients /
-  Instructions `<h3>`s and their section `<h4>`s carry `id`s
+  Instructions `<h3`>s and their section `<h4`>s carry `id`s
   (`cook-ingredients`, `cook-instructions`, `cook-<block>-sN`) so the
   TOC can scroll to them; Cookware is not a TOC target and stays
   id-less.
@@ -443,7 +443,7 @@ session and clears the marks; starting always begins fresh.
 
 - **Persistence**: the session lives in
   `profiles.settings.activeSessions` under the key
-  `cooking:<recipe id>` (`{ startedAt, used[] }`), so progress
+  `cooking:<recipe id`> (`{ startedAt, used[] }`), so progress
   survives a reload or a PWA eviction mid-cook - the realistic
   failure the sessionStorage alternative died in. Several recipes
   cook at once, one map entry each (main + side).
@@ -476,7 +476,7 @@ session and clears the marks; starting always begins fresh.
   renderer stamps `data-row` (ordinal across ALL checkbox rows in
   the render, numbering straight through section sub-lists) and
   the used list stores `usedIngredientKey(row, name)` =
-  `<row>:<normalized name>`. The name rides along so a mid-session
+  `<row>:<normalized name`>. The name rides along so a mid-session
   edit that shifts rows drops stale marks instead of moving them
   onto a different ingredient.
 - The checkbox count in the progress line is
@@ -698,8 +698,8 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   while looking authoritative. The plain-text and Markdown exports
   carry no total.
 - **Timer links are click-intercepted, not native anchors.** Each
-  timer label is an `<a href="#cook-step-N">` pointing at its step's
-  `<li>` (N is the step's index in `recipe.steps`, so ids stay unique
+  timer label is an `<a href="#cook-step-N"`> pointing at its step's
+  `<li`> (N is the step's index in `recipe.steps`, so ids stay unique
   across sections). The detail pane, edit preview, and past-version
   view all render the same ids, so a native fragment jump could land
   in the wrong pane and would write the fragment into the URL. Every
@@ -823,9 +823,16 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   `ingredients / cookware / timers` lists untouched so existing
   callers keep working. `recipeToHtml` groups by section when any
   section exists and collapses to the flat layout when none do — no
-  data migration, no schema change, just a richer read. `>` at line
-  start is a continuation marker: the parser merges the line into
-  the previous step's text and references.
+  data migration, no schema change, just a richer read. ``> at line
+  start is a continuation marker: the parser merges the line into the
+  previous step's text and references, joining lines with `\n` so line
+  structure survives the parse. Renderers rejoin plain prose lines
+  with a space (hard-wrapped prose reads exactly as it always has);
+  continuation lines starting with a markdown bullet (`-`/`*`)
+  render as a sub-list inside the step (`ul.cook-substeps` in HTML,
+  indented bullets in the plain-text and markdown exports). An empty
+  ``> body (bare ``>) contributes nothing, so a paragraph break
+  expressed that way is silently dropped.
 - **Declaration lines vs. instruction steps.** A line whose first
   non-whitespace character is `@` is an ingredient declaration (Step
   with `kind: 'declaration'` and empty `text`). Its ingredients flow
@@ -866,7 +873,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   heading is a silent dead link, not a crash. They are kept honest by
   sharing the private `tocHeadingId` helper (id scheme) and the
   `ingredientBucketRenders` / `instructionBucketRenders` predicates
-  (which sections actually emit an `<h4>`). If you change which
+  (which sections actually emit an `<h4`>). If you change which
   sections the renderer emits, change those predicates rather than
   branching the renderer alone, or the TOC will list a section the body
   doesn't show. Section ids are keyed by index in `recipe.sections`,

@@ -389,13 +389,13 @@ describe('parseCooklang — sections and continuations', () => {
     expect(r.steps[0]!.text).toBe('Warm saucepan on medium heat.');
   });
 
-  it('merges `> continuation` into the previous step text', () => {
+  it('merges `> continuation` into the previous step, keeping line structure', () => {
     const r = parseCooklang(
       'Sear the @chicken{1%lb} on both sides.\n> Remove to a plate; reduce heat to medium.'
     );
     expect(r.steps).toHaveLength(1);
     expect(r.steps[0]!.text).toBe(
-      'Sear the chicken on both sides. Remove to a plate; reduce heat to medium.'
+      'Sear the chicken on both sides.\nRemove to a plate; reduce heat to medium.'
     );
   });
 
@@ -415,7 +415,7 @@ describe('parseCooklang — sections and continuations', () => {
   it('handles multiple sequential `>` continuation lines', () => {
     const r = parseCooklang('Step one.\n> part two.\n> part three.');
     expect(r.steps).toHaveLength(1);
-    expect(r.steps[0]!.text).toBe('Step one. part two. part three.');
+    expect(r.steps[0]!.text).toBe('Step one.\npart two.\npart three.');
   });
 
   it('promotes a leading `> line` to a standalone step when no prior step exists', () => {
@@ -436,7 +436,131 @@ describe('parseCooklang — sections and continuations', () => {
     const r = parseCooklang('>> servings: 4\nStep one.\n> wraps.');
     expect(r.metadata).toEqual({ servings: '4' });
     expect(r.steps).toHaveLength(1);
-    expect(r.steps[0]!.text).toBe('Step one. wraps.');
+    expect(r.steps[0]!.text).toBe('Step one.\nwraps.');
+  });
+});
+
+describe('recipeToHtml — `>` continuation rendering', () => {
+  // The step li closes with `</li></ol>`; nested sub-bullet lis are
+  // followed by another `<li>` or `</ul>`, so this terminator uniquely
+  // captures the whole step even when it contains a sub-list.
+  function stepLi(html: string): string {
+    return /<li id="cook-step-0">[\s\S]*?<\/li><\/ol>/.exec(html)![0]!;
+  }
+
+  it('renders hard-wrapped prose continuations as one space-joined text run', () => {
+    // Back-compat: the parser keeps line structure, but adjacent prose
+    // lines rejoin with a space so pre-continuation-lines recipes
+    // render byte-identically.
+    const html = cooklangToHtml('Sear the chicken.\n> Remove to a plate.\n> Rest it.');
+    expect(stepLi(html)).toBe(
+      '<li id="cook-step-0">Sear the chicken. Remove to a plate. Rest it.</li></ol>'
+    );
+  });
+
+  it('renders bullet continuations as a sub-list with emphasis', () => {
+    const html = cooklangToHtml(
+      'Reason from the baseline:\n> - **Juicier than usual:** use less water.\n> - **Overcooked:** rehydrate.'
+    );
+    expect(stepLi(html)).toBe(
+      '<li id="cook-step-0">Reason from the baseline:' +
+        '<ul class="cook-substeps">' +
+        '<li><strong>Juicier than usual:</strong> use less water.</li>' +
+        '<li><strong>Overcooked:</strong> rehydrate.</li>' +
+        '</ul></li></ol>'
+    );
+  });
+
+  it('renders prose-bullets-prose blocks in order', () => {
+    const html = cooklangToHtml(
+      'Add water to hit a baseline:\n> - Juicier: use less.\n> - Drier: use more.\n> Starting light is reversible.'
+    );
+    expect(stepLi(html)).toBe(
+      '<li id="cook-step-0">Add water to hit a baseline:' +
+        '<ul class="cook-substeps"><li>Juicier: use less.</li><li>Drier: use more.</li></ul>' +
+        'Starting light is reversible.</li></ol>'
+    );
+  });
+
+  it('renders a step that is only bullets under the numbered badge', () => {
+    // Reachable: a top-level `- item` line is its own step, and a
+    // `> - item` after a declaration line is promoted to a step.
+    const html = cooklangToHtml('- **Juicier:** use less water.');
+    expect(stepLi(html)).toBe(
+      '<li id="cook-step-0"><ul class="cook-substeps"><li><strong>Juicier:</strong> use less water.</li></ul></li></ol>'
+    );
+  });
+
+  it('shows the timer context as the first prose block', () => {
+    const html = cooklangToHtml(
+      'Bulk ferment the dough ~{12%hours}.\n> - Covered, at room temperature.\n> - Until doubled.'
+    );
+    // The timer sits in the lead-in prose; the context shows that prose
+    // block re-joined, not the bullet lines or the raw `\n` join.
+    expect(html).toContain(
+      '<span class="cook-timer-context">Bulk ferment the dough 12 hours.</span>'
+    );
+  });
+
+  it('falls back to marker-free bullet text for the timer context of an all-bullets step', () => {
+    const html = cooklangToHtml('- Covered, at room temperature ~{12%hours}.');
+    expect(html).toContain(
+      '<span class="cook-timer-context">Covered, at room temperature 12 hours.</span>'
+    );
+  });
+});
+
+describe('recipeToPlainText / recipeToMarkdown — `>` continuation rendering', () => {
+  const src = [
+    'Add water to hit a baseline:',
+    '> - **Juicier:** use less.',
+    '> - **Drier:** use more.',
+    '> Starting light is reversible.',
+    'Bake the loaf.',
+  ].join('\n');
+
+  it('indents bullets and trailing prose under the numbered plain-text step', () => {
+    // No declarations in the source, so no Ingredients block renders -
+    // the assertion is the whole export.
+    const text = recipeToPlainText('Test', parseCooklang(src));
+    expect(text).toBe(
+      [
+        'Test',
+        '',
+        'Instructions',
+        '1. Add water to hit a baseline:',
+        '   - **Juicier:** use less.',
+        '   - **Drier:** use more.',
+        '   Starting light is reversible.',
+        '2. Bake the loaf.',
+      ].join('\n')
+    );
+  });
+
+  it('nests bullets in markdown and blank-line-separates trailing prose', () => {
+    const md = recipeToMarkdown('Test', parseCooklang(src));
+    expect(md).toContain(
+      [
+        '## Instructions',
+        '',
+        '1. Add water to hit a baseline:',
+        '    - **Juicier:** use less.',
+        '    - **Drier:** use more.',
+        '',
+        '    Starting light is reversible.',
+        '2. Bake the loaf.',
+      ].join('\n')
+    );
+  });
+
+  it('emits a bare numbered marker for an all-bullets markdown step', () => {
+    const md = recipeToMarkdown('Test', parseCooklang('- **Juicier:** use less water.'));
+    expect(md).toContain('1.\n    - **Juicier:** use less water.');
+  });
+
+  it('emits a bare numbered marker for an all-bullets plain-text step', () => {
+    const text = recipeToPlainText('Test', parseCooklang('- **Juicier:** use less water.'));
+    expect(text).toContain('1.\n   - **Juicier:** use less water.');
   });
 });
 
@@ -490,7 +614,7 @@ Stir in @butter{2%tbsp} and @salt.`;
     const soupSteps = r.steps.filter((s) => s.section === 'Soup');
     expect(soupSteps).toHaveLength(1);
     expect(soupSteps[0]!.text).toBe(
-      'Add lentils and onion. Simmer until tender, about 30 minutes.'
+      'Add lentils and onion.\nSimmer until tender, about 30 minutes.'
     );
     const html = recipeToHtml(r);
     expect(html).toContain('>Soup</h4>');

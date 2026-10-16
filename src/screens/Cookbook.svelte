@@ -1450,15 +1450,16 @@
   // Click an instruction step to move a theme-tinted highlight onto
   // it — a light "I'm on this step" marker for the reader cooking
   // along. Single-highlight: clicking a new step moves the marker;
-  // clicking the already-active step clears it. Delegation walks up
-  // from the click target to the nearest `<li>`, then verifies that
-  // li is inside an `ol.cook-steps` (so clicks on ingredient lists
-  // or cookware don't highlight). We clear across every `cook-steps`
-  // in the container, not just the clicked `<ol>`, because sectioned
-  // recipes split steps into one `<ol>` per section — "one at a
-  // time" is one-per-recipe, not one-per-section. The state lives on
-  // the DOM via a class; no reactive state, no persistence —
-  // switching recipes replaces the HTML and wipes the highlight.
+  // clicking the already-active step clears it. Delegation resolves
+  // the nearest step `<li>` via `ol.cook-steps > li` (so clicks on
+  // ingredient lists or cookware don't highlight, and a click on a
+  // nested sub-bullet highlights its parent step). We clear across
+  // every `cook-steps` in the container, not just the clicked `<ol>`,
+  // because sectioned recipes split steps into one `<ol>` per
+  // section — "one at a time" is one-per-recipe, not one-per-section.
+  // The state lives on the DOM via a class; no reactive state, no
+  // persistence — switching recipes replaces the HTML and wipes the
+  // highlight.
   function onRenderClick(e: MouseEvent): void {
     const container = e.currentTarget;
     if (!(container instanceof Element)) return;
@@ -1474,10 +1475,13 @@
     }
     const target = e.target;
     if (!(target instanceof Element)) return;
-    const li = target.closest('li');
+    // Resolve the STEP li, not any li: a step can contain a nested
+    // `ul.cook-substeps` (from `> `-continuation bullets), and a click
+    // on a sub-bullet should highlight its parent step. `closest`
+    // walks up from the sub-bullet's li to the direct-child step li in
+    // one selector.
+    const li = target.closest('ol.cook-steps > li');
     if (!li) return;
-    const ol = li.parentElement;
-    if (!ol || !ol.classList.contains('cook-steps')) return;
     // Capture before clearing so "click the active step to clear it"
     // still works — otherwise the clear would remove the class and we
     // couldn't tell the re-toggle case apart from a fresh click.
@@ -2821,14 +2825,17 @@
   /* Instruction steps — replace the browser-default "1." marker with
      a circular accent-weak badge via CSS counters. The hanging indent
      keeps multi-line step text flowing under itself instead of
-     crashing into the badge. */
+     crashing into the badge. Direct-child selectors: a step can
+     contain a nested `ul.cook-substeps` (from `> `-continuation
+     bullets), and those inner <li>s must not get step badges or
+     increment the counter. */
   .cookbook-render :global(ol.cook-steps) {
     list-style: none;
     counter-reset: cook-step;
     margin: 0.35rem 0 0.75rem;
     padding: 0;
   }
-  .cookbook-render :global(ol.cook-steps li) {
+  .cookbook-render :global(ol.cook-steps > li) {
     counter-increment: cook-step;
     position: relative;
     padding: 0.15rem 0 0.6rem 2.1rem;
@@ -2838,7 +2845,7 @@
        inside `ol.cook-steps`, so the cursor stays accurate. */
     cursor: pointer;
   }
-  .cookbook-render :global(ol.cook-steps li::before) {
+  .cookbook-render :global(ol.cook-steps > li::before) {
     content: counter(cook-step);
     position: absolute;
     left: 0;
@@ -2853,6 +2860,21 @@
     font-size: 0.8rem;
     font-weight: 700;
     border-radius: var(--radius-round);
+  }
+  /* Sub-list inside a step — the rendered form of `> `-continuation
+     lines that start with a markdown bullet. Disc markers and a small
+     left indent keep them visually subordinate to the numbered step.
+     Pointer cursor: clicking a sub-bullet highlights its parent step
+     (the click delegate resolves the nearest `ol.cook-steps > li`),
+     so the tappable affordance extends down into the sub-list. */
+  .cookbook-render :global(ul.cook-substeps) {
+    margin: 0.15rem 0 0.3rem;
+    padding-left: 1.1rem;
+    list-style: disc;
+  }
+  .cookbook-render :global(ul.cook-substeps li) {
+    cursor: pointer;
+    line-height: 1.45;
   }
   /* Highlighted step — a soft accent-weak wash that tells the reader
      "this is the step I'm on" while cooking. Full-bleed padding so the

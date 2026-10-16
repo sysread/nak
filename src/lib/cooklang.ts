@@ -31,9 +31,18 @@
  *                              when writing long recipes.
  *   > continuation text      → AnyList's tradition for wrapping a long
  *                              step across lines. Merged into the
- *                              previous step's text so the renderer sees
- *                              one numbered instruction instead of a
- *                              shredded sequence.
+ *                              previous step so the renderer sees one
+ *                              numbered instruction instead of a
+ *                              shredded sequence. Line structure is
+ *                              preserved: continuation lines join the
+ *                              step's text with `\n`, and the renderers
+ *                              rejoin plain prose lines with a space.
+ *                              A continuation whose body starts with a
+ *                              markdown bullet (`- `/`* `) renders as a
+ *                              sub-list inside the step. An empty body
+ *                              (bare `>`) drops the paragraph-break
+ *                              signal — surrounding prose rejoins into
+ *                              one run.
  *   @-first declaration line → a line whose first non-whitespace char
  *                              is `@` is an ingredient declaration:
  *                              it contributes to the ingredients list
@@ -539,7 +548,12 @@ export function parseCooklang(src: string): Recipe {
       if (anchor) {
         if (continuation.length > 0) {
           const tok = tokenizeLine(continuation);
-          anchor.text = anchor.text.length > 0 ? `${anchor.text} ${tok.text}` : tok.text;
+          // Lines join with `\n`, not a space: the renderer re-joins
+          // plain prose lines with a space (so hard-wrapped prose
+          // reads exactly as it always has) but presents bullet lines
+          // (`- `/`* ` prefixed) as a sub-list inside the step.
+          // Flattening to a space here would erase that structure.
+          anchor.text = anchor.text.length > 0 ? `${anchor.text}\n${tok.text}` : tok.text;
           anchor.ingredients.push(...tok.ingredients);
           anchor.cookware.push(...tok.cookware);
           anchor.timers.push(...tok.timers);

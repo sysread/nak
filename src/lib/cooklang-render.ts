@@ -65,7 +65,7 @@ function collectTimersWithContext(recipe: Recipe): TimerWithContext[] {
       seen.add(key);
       out.push({
         timer,
-        stepText: timer.name ? null : step.text,
+        stepText: timer.name ? null : stepContextText(step.text),
         stepId: step.kind === 'instruction' ? stepAnchorId(i) : null,
       });
     }
@@ -354,6 +354,57 @@ function dedupeFromSteps(steps: Step[]): Ingredient[] {
 }
 
 /**
+ * One block of a step's rendered text, grouped by `stepBlocks`.
+ * Plain prose lines and markdown bullet lines (`- `/`* `) render
+ * differently in every projection, so the grouping is shared.
+ */
+type StepBlock =
+  | { kind: 'prose'; text: string }
+  | { kind: 'bullets'; items: string[] };
+
+/**
+ * Split a step's text into render-order blocks. Continuation lines
+ * join the step with `\n` (see `parseCooklang`), so a step can mix
+ * prose lines and bullet lines. Adjacent prose lines rejoin with a
+ * single space — reproducing the pre-continuation-lines rendering for
+ * hard-wrapped prose — while consecutive bullet lines collapse into
+ * one sub-list block. Blank lines (empty `>` bodies) contribute
+ * nothing.
+ */
+function stepBlocks(text: string): StepBlock[] {
+  const blocks: StepBlock[] = [];
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
+    const bullet = /^[-*] (.+)$/.exec(line);
+    const last = blocks[blocks.length - 1];
+    if (bullet) {
+      if (last?.kind === 'bullets') last.items.push(bullet[1]!);
+      else blocks.push({ kind: 'bullets', items: [bullet[1]!] });
+    } else if (last?.kind === 'prose') {
+      last.text = `${last.text} ${line}`;
+    } else {
+      blocks.push({ kind: 'prose', text: line });
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Context text for a timer: the step's first prose block, so the
+ * HTML clamp and the markdown truncation see one line. Falls back to
+ * the first bullet's text (marker already stripped by `stepBlocks`)
+ * for a step that is only bullets.
+ */
+function stepContextText(text: string): string {
+  const blocks = stepBlocks(text);
+  const firstProse = blocks.find((b): b is Extract<StepBlock, { kind: 'prose' }> => b.kind === 'prose');
+  if (firstProse) return firstProse.text;
+  const firstBullets = blocks.find((b): b is Extract<StepBlock, { kind: 'bullets' }> => b.kind === 'bullets');
+  return firstBullets ? (firstBullets.items[0] ?? '') : text;
+}
+
+/**
  * Accessible label for a grocery checkbox ingredient row. Shared with
  * the Cookbook detail pane's sync effect, which RESTORES this label
  * when cooking mode (which swaps it for the used-ingredient verb)
@@ -579,10 +630,28 @@ export interface RecipeHtmlOptions {
   ingredientCheckboxes?: boolean;
 }
 
-/** One instruction `<li>`, carrying the anchor id the Timers links target. */
+/**
+ * One instruction `<li>`, carrying the anchor id the Timers links
+ * target. The step's block structure (see `stepBlocks`) renders in
+ * order: prose blocks as inline text runs, bullet blocks as a
+ * `<ul class="cook-substeps">` nested inside the step. The `<ul>` is a
+ * block box, so prose after a sub-list starts on its own line without
+ * a `<br>`.
+ */
 function stepListItem(step: Step, recipe: Recipe): string {
   const id = stepAnchorId(recipe.steps.indexOf(step));
-  return `<li id="${id}">${renderInlineEmphasis(esc(step.text))}</li>`;
+  let inner = '';
+  for (const block of stepBlocks(step.text)) {
+    if (block.kind === 'prose') {
+      inner += renderInlineEmphasis(esc(block.text));
+    } else {
+      const items = block.items
+        .map((item) => `<li>${renderInlineEmphasis(esc(item))}</li>`)
+        .join('');
+      inner += `<ul class="cook-substeps">${items}</ul>`;
+    }
+  }
+  return `<li id="${id}">${inner}</li>`;
 }
 
 export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): string {
@@ -805,6 +874,33 @@ export function recipeToc(recipe: Recipe): RecipeTocEntry[] {
 // ---------------------------------------------------------------------------
 
 /**
+ * One plain-text instruction step as output lines: the prose lead on
+ * the `N.` line, then bullets and later prose indented three spaces so
+ * they read as part of the step when pasted into AnyList. A step that
+ * opens with bullets gets a bare `N.` marker with the bullets beneath.
+ */
+function plainTextStepLines(num: number, text: string): string[] {
+  const blocks = stepBlocks(text);
+  if (blocks.length === 0) return [`${num}.`];
+  const lines: string[] = [];
+  const first = blocks[0]!;
+  if (first.kind === 'prose') {
+    lines.push(`${num}. ${first.text}`);
+  } else {
+    lines.push(`${num}.`);
+    for (const item of first.items) lines.push(`   - ${item}`);
+  }
+  for (const block of blocks.slice(1)) {
+    if (block.kind === 'prose') {
+      lines.push(`   ${block.text}`);
+    } else {
+      for (const item of block.items) lines.push(`   - ${item}`);
+    }
+  }
+  return lines;
+}
+
+/**
  * Render a parsed recipe as a plain-text block the user can paste into
  * AnyList's manual-add text areas (or any other shopping-list app that
  * accepts "one item per line" ingredient lists).
@@ -856,7 +952,7 @@ export function recipeToPlainText(title: string, recipe: Recipe): string {
     lines.push('Instructions');
     if (recipe.sections.length === 0) {
       instructionSteps.forEach((step, i) => {
-        lines.push(`${i + 1}. ${step.text}`);
+        lines.push(...plainTextStepLines(i + 1, step.text));
       });
     } else {
       // Emit each bucket as its own numbered run so the renderer and
@@ -870,7 +966,7 @@ export function recipeToPlainText(title: string, recipe: Recipe): string {
           lines.push(`== ${bucket.name} ==`);
         }
         bucketInstructions.forEach((step, i) => {
-          lines.push(`${i + 1}. ${step.text}`);
+          lines.push(...plainTextStepLines(i + 1, step.text));
         });
       }
     }
@@ -881,6 +977,37 @@ export function recipeToPlainText(title: string, recipe: Recipe): string {
 // ---------------------------------------------------------------------------
 // Markdown export (for pasting into Obsidian / Notion / a GitHub issue)
 // ---------------------------------------------------------------------------
+
+/**
+ * One markdown instruction step as output lines. Prose goes on the
+ * `N.` line; bullet blocks indent four spaces so CommonMark nests them
+ * inside the ordered item (`1. ` content column is 3). A prose block
+ * AFTER a sub-list gets a blank line plus the four-space indent, which
+ * makes it a sibling paragraph of the sub-list inside the item -
+ * without the blank line it would lazy-continue onto the last bullet.
+ * A step that opens with bullets gets a bare `N.` marker with the
+ * bullets indented beneath.
+ */
+function markdownStepLines(num: number, text: string): string[] {
+  const blocks = stepBlocks(text);
+  if (blocks.length === 0) return [`${num}.`];
+  const lines: string[] = [];
+  const first = blocks[0]!;
+  if (first.kind === 'prose') {
+    lines.push(`${num}. ${first.text}`);
+  } else {
+    lines.push(`${num}.`);
+    for (const item of first.items) lines.push(`    - ${item}`);
+  }
+  for (const block of blocks.slice(1)) {
+    if (block.kind === 'prose') {
+      lines.push('', `    ${block.text}`);
+    } else {
+      for (const item of block.items) lines.push(`    - ${item}`);
+    }
+  }
+  return lines;
+}
 
 /**
  * Render a parsed recipe as a Markdown document the user can paste into
@@ -1044,7 +1171,7 @@ export function recipeToMarkdown(
     lines.push('## Instructions', '');
     if (recipe.sections.length === 0) {
       instructionSteps.forEach((step, i) => {
-        lines.push(`${i + 1}. ${step.text}`);
+        lines.push(...markdownStepLines(i + 1, step.text));
       });
     } else {
       for (const bucket of groupStepsBySection(recipe)) {
@@ -1055,7 +1182,7 @@ export function recipeToMarkdown(
           lines.push(`${prefix} ${bucket.name}`, '');
         }
         bucketInstructions.forEach((step, i) => {
-          lines.push(`${i + 1}. ${step.text}`);
+          lines.push(...markdownStepLines(i + 1, step.text));
         });
         lines.push('');
       }

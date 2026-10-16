@@ -92,10 +92,14 @@ Stir in @butter{2%tbsp} and serve.
 - `# Section Name` (with a space after `#`) is a markdown-style alias
   — handy if you're used to writing headers that way. `#cookware` with
   no space still means cookware, so the two don't collide.
-- A line starting with `>` (followed by a space and the rest of the
+- A line starting with ``> (followed by a space and the rest of the
   text) is a **continuation** of the previous step. Use it to break a
   long instruction across two or three lines in the source without
-  fragmenting it in the rendered recipe.
+  fragmenting it in the rendered recipe. Continuation lines keep
+  their own shape: plain lines wrap back into the step's prose, and a
+  line starting with a markdown bullet (`-` or `*`) renders as a
+  sub-list inside the step — handy for conditional instructions like
+  "- **Juicier than usual:** use less water".
 
 ### Cookbook-style: declarations plus flat instructions
 
