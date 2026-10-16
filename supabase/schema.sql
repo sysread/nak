@@ -150,6 +150,12 @@ revoke all on function public.handle_new_user() from public, anon, authenticated
 -- user_id) scopes the write to the caller's own row; the explicit
 -- auth.uid() guard turns an unauthenticated call into a clear error
 -- rather than a silent zero-row no-op.
+--
+-- The write is an upsert, not an update: a user whose profile row was
+-- never born (seeded before the on_auth_user_created trigger existed,
+-- or the trigger failed) would otherwise turn every settings write
+-- into a silent zero-row no-op - the UI's fire-and-forget write
+-- swallows the nothing, and the preference quietly stops syncing.
 drop function if exists public.merge_profile_settings(jsonb, text[]);
 create or replace function public.merge_profile_settings(p_set jsonb, p_remove text[])
 returns jsonb
@@ -162,10 +168,12 @@ begin
     raise exception 'merge_profile_settings: not authenticated'
       using errcode = '28000';
   end if;
-  update public.profiles
-     set settings = (coalesce(settings, '{}'::jsonb) - coalesce(p_remove, '{}'::text[]))
+  insert into public.profiles (user_id, settings)
+       values (v_user, coalesce(p_set, '{}'::jsonb) - coalesce(p_remove, '{}'::text[]))
+  on conflict (user_id) do update
+       set settings = (coalesce(profiles.settings, '{}'::jsonb)
+                         - coalesce(p_remove, '{}'::text[]))
                     || coalesce(p_set, '{}'::jsonb)
-   where user_id = v_user
    returning settings into v_settings;
   return v_settings;
 end $$;
