@@ -8,6 +8,13 @@ cached locally so the right look appears instantly on next load.
 
 ## Accent color
 
+Twelve accents ship with the app: Blue, Green, Purple, Orange, Red,
+Teal, Pink, Lime, Gold, Cyan, Rust, and Slate. Pick one in
+**Settings > Appearance > Accent**. The choice tints buttons,
+selected rows, focus rings, and the bar on your own chat messages.
+Every accent clears WCAG AA contrast against every surface in both
+color modes.
+
 ## Style
 
 Two looks for the whole interface, picked in **Settings >

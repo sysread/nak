@@ -15,8 +15,9 @@ import {
 } from '../src/lib/theme';
 
 describe('theme enums', () => {
-  it('ACCENTS has exactly five entries', () => {
-    expect(ACCENTS.length).toBe(5);
+  it('ACCENTS has exactly twelve entries, all unique', () => {
+    expect(ACCENTS.length).toBe(12);
+    expect(new Set(ACCENTS).size).toBe(ACCENTS.length);
   });
   it('MODES includes system + light + dark', () => {
     expect(new Set(MODES)).toEqual(new Set(['system', 'light', 'dark']));

@@ -18,7 +18,19 @@
 
 export type ColorMode = 'light' | 'dark' | 'system';
 export type EffectiveMode = 'light' | 'dark';
-export type Accent = 'blue' | 'green' | 'purple' | 'orange' | 'red';
+export type Accent =
+  | 'blue'
+  | 'green'
+  | 'purple'
+  | 'orange'
+  | 'red'
+  | 'teal'
+  | 'pink'
+  | 'lime'
+  | 'gold'
+  | 'cyan'
+  | 'rust'
+  | 'slate';
 export type UiStyle = 'soft' | 'terminal';
 
 export const MODES: readonly ColorMode[] = ['system', 'light', 'dark'];
@@ -29,6 +41,13 @@ export const ACCENTS: readonly Accent[] = [
   'purple',
   'orange',
   'red',
+  'teal',
+  'pink',
+  'lime',
+  'gold',
+  'cyan',
+  'rust',
+  'slate',
 ];
 
 export const DEFAULT_MODE: ColorMode = 'system';
@@ -59,6 +78,13 @@ export const ACCENT_LABELS: Record<Accent, string> = {
   purple: 'Purple',
   orange: 'Orange',
   red: 'Red',
+  teal: 'Teal',
+  pink: 'Pink',
+  lime: 'Lime',
+  gold: 'Gold',
+  cyan: 'Cyan',
+  rust: 'Rust',
+  slate: 'Slate',
 };
 
 /**
@@ -77,6 +103,13 @@ export const ACCENT_SWATCHES: Record<
     purple: { light: '#7e22ce', dark: '#c4b5fd' },
     orange: { light: '#c2410c', dark: '#fdba74' },
     red: { light: '#b91c1c', dark: '#fca5a5' },
+    teal: { light: '#115e59', dark: '#5eead4' },
+    pink: { light: '#be185d', dark: '#f9a8d4' },
+    lime: { light: '#3f6212', dark: '#bef264' },
+    gold: { light: '#854d0e', dark: '#fde047' },
+    cyan: { light: '#155e75', dark: '#67e8f9' },
+    rust: { light: '#96502b', dark: '#ecb39a' },
+    slate: { light: '#475569', dark: '#cbd5e1' },
   },
   terminal: {
     blue: { light: '#0000cc', dark: '#7a7aff' },
@@ -84,6 +117,13 @@ export const ACCENT_SWATCHES: Record<
     purple: { light: '#9900cc', dark: '#ff66ff' },
     orange: { light: '#b34700', dark: '#ff8700' },
     red: { light: '#cc0000', dark: '#ff5555' },
+    teal: { light: '#006d6d', dark: '#00e0d0' },
+    pink: { light: '#cc0066', dark: '#ff69b4' },
+    lime: { light: '#557000', dark: '#aaff00' },
+    gold: { light: '#736300', dark: '#ffd700' },
+    cyan: { light: '#00707f', dark: '#40e0ff' },
+    rust: { light: '#8f3f14', dark: '#cf7042' },
+    slate: { light: '#3f3f3f', dark: '#b8b8b8' },
   },
 };
 
