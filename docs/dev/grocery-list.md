@@ -431,7 +431,7 @@ Deployed via its own line in `deploy.yml`.
   cooklang `@`-token grammar; the drift-guard suite in
   `tests/grocery-list.test.ts` mirrors it in JS and compares
   against `parseCooklang`. Changing INGREDIENT_RE in
-  `src/lib/cooklang.ts` (or the SQL) without updating the other
+  `supabase/functions/_shared/cooklang-parse.ts` (or the SQL) without updating the other
   side fails that suite - that is the alarm working, not noise.
 - **Seeding is client-side and racy by a round trip.** Two tabs
   racing the first load can in principle double-seed the canned

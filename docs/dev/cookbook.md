@@ -26,8 +26,20 @@ unaffected.
 
 ## Files
 
-- `src/lib/cooklang.ts` — inline Cooklang parser + HTML / plain-text / markdown
-  renderers. Deliberately no upstream dep. Exports `parseCooklang`,
+- `supabase/functions/_shared/cooklang-parse.ts` - the inline Cooklang
+  parser (`parseCooklang` + the `Recipe` / `Step` / `Ingredient` types).
+  Deliberately no upstream dep. Lives in the shared folder because the
+  `recipe_save` edge tool runs it to validate submissions (see
+  `cooklang-validate.ts` below); the browser reaches it only through
+  `src/lib/cooklang.ts`.
+- `supabase/functions/_shared/cooklang-validate.ts` -
+  `validateCooklangSource`, the authoring-mistake checks `recipe_save`
+  runs before writing (both forms). A non-empty result refuses the
+  write and hands the model the list. See the "Save-time validation"
+  gotcha.
+- `src/lib/cooklang.ts` - the browser's single Cooklang import surface:
+  re-exports the parser and validator and the HTML / plain-text /
+  markdown renderers from `src/lib/cooklang-render.ts`. Exports `parseCooklang`,
   `recipeToHtml`, `cooklangToHtml`, `recipeToc`, `recipeToPlainText`,
   `recipeToMarkdown`, and the size constants the tools and the panel
   share. `recipeToc` is a third projection of the parsed AST (alongside
@@ -313,7 +325,7 @@ unaffected.
     only delete the row (never the Storage object) and never caught
     insert-side orphans. See
     [`./file-storage.md`](./file-storage.md).
-- Parsed shape (`src/lib/cooklang.ts::Recipe`): `{ metadata, steps,
+- Parsed shape (`_shared/cooklang-parse.ts::Recipe`): `{ metadata, steps,
   ingredients, cookware, timers, sections }`. The DB stores raw
   source; the parsed shape is re-derived at read time.
 
@@ -689,7 +701,24 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   and owning the parser means a spec tweak doesn't block on an
   upstream release. If the parser ever needs to handle recipe
   references or shopping-list blocks, revisit — but today every
-  line of `src/lib/cooklang.ts` is straightforward.
+  line of the parser (`_shared/cooklang-parse.ts`) is straightforward.
+- **Save-time validation targets silent loss.** The parser never
+  throws, so a malformed recipe still saves and simply renders
+  wrong - often by dropping text without a trace. The checks in
+  `cooklang-validate.ts` exist to turn those cases into a refused
+  `recipe_save` the model can fix in the same turn. Each one names a
+  mistake seen in prod: a note written as `# NOTE: ...` (an empty
+  section, which the renderer never shows), a parent heading with only
+  sub-sections under it (same drop), `20--25 min` (the `--` comment
+  rule eats the rest of the line), `## Heading` (renders as a literal
+  step), and literal `\n` escapes from a double-escaped tool argument
+  (the whole recipe parses as one line). The empty-section check runs
+  the real parser, so it agrees with the renderer by construction;
+  the others are line regexes that mirror the parser's comment and
+  reset order. Edits re-validate the whole body, so a recipe saved
+  before a check existed must be fixed before the model can edit it -
+  the error says what to change. Add a check only for text the cook
+  would lose or misread, not for style.
 - **The Timers total is all-or-nothing.** The HTML renderer sums
   the deduped timer list into a "Total" row and nests the timers
   under it. If any one duration is unreadable (not a number,
