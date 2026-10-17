@@ -1022,7 +1022,12 @@
     color: var(--text-muted, inherit);
   }
   .recipe-record-tags {
-    flex: 0 0 auto;
+    /* Shrinkable (flex-shrink 1 + min-width 0): with 0 0 auto a
+       tag-heavy record's chip row is as wide as all its chips on one
+       line, which pushes the whole record row past the pane edge and
+       makes the detail pane scroll horizontally. */
+    flex: 0 1 auto;
+    min-width: 0;
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
