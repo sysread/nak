@@ -544,6 +544,44 @@
     expandedId = expandedId === record.id ? null : record.id;
   }
 
+  /**
+   * Tag-chip overflow for collapsed record rows: hides the chips that
+   * don't fit on the row and shows a "+N more" chip with the hidden
+   * count. Re-fits when the row resizes (the observer watches the row,
+   * whose width is pane-driven and unaffected by which chips are
+   * hidden) and when the row's expanded state flips (the preview
+   * empties and frees width).
+   */
+  function fitTags(node: HTMLElement, _expanded: boolean) {
+    const chips = Array.from(
+      node.querySelectorAll(':scope > .recipe-record-chip:not(.recipe-record-tags-more)')
+    );
+    const more = node.querySelector<HTMLElement>(':scope > .recipe-record-tags-more');
+    const fit = () => {
+      chips.forEach((c) => c.removeAttribute('data-hidden'));
+      if (!more) return;
+      more.removeAttribute('data-hidden');
+      let visible = chips.length;
+      while (node.scrollWidth > node.clientWidth + 1 && visible > 1) {
+        chips[visible - 1]!.setAttribute('data-hidden', '');
+        visible -= 1;
+        more.textContent = `+${chips.length - visible} more`;
+      }
+      if (visible === chips.length) more.setAttribute('data-hidden', '');
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(node.parentElement ?? node);
+    return {
+      update() {
+        requestAnimationFrame(fit);
+      },
+      destroy() {
+        ro.disconnect();
+      },
+    };
+  }
+
   function openHit(record: RecipeRecord): void {
     // Sticky label semantics: a CONFIRMED-deleted hit (the batch
     // succeeded, the id is gone) is a no-op click; a "couldn't load"
@@ -861,10 +899,13 @@
         {expandedId === record.id ? '' : contentPreview(record.content)}
       </span>
       {#if record.tags.length > 0}
-        <span class="recipe-record-tags">
+        <span class="recipe-record-tags" use:fitTags={expandedId === record.id}>
           {#each record.tags as tag (tag)}
             <span class="recipe-record-chip">{tag}</span>
           {/each}
+          <span class="recipe-record-chip recipe-record-tags-more" data-hidden
+            >+{record.tags.length - 1} more</span
+          >
         </span>
       {/if}
       {#if label}
@@ -1022,15 +1063,20 @@
     color: var(--text-muted, inherit);
   }
   .recipe-record-tags {
-    /* Shrinkable (flex-shrink 1 + min-width 0): with 0 0 auto a
-       tag-heavy record's chip row is as wide as all its chips on one
-       line, which pushes the whole record row past the pane edge and
-       makes the detail pane scroll horizontally. */
+    /* Single line, shrinkable, clipped: the fitTags action hides the
+       chips that don't fit and appends a "+N more" chip. Wrapping here
+       instead would stack chips into a tall column per record. */
     flex: 0 1 auto;
     min-width: 0;
+    overflow: hidden;
     display: flex;
-    flex-wrap: wrap;
     gap: 0.25rem;
+  }
+  .recipe-record-chip[data-hidden] {
+    display: none;
+  }
+  .recipe-record-tags-more {
+    color: var(--muted);
   }
   .recipe-record-chip {
     font-size: 0.7em;
