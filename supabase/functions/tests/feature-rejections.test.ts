@@ -13,11 +13,11 @@ Deno.test('stripRejectedFeatures removes recorded droppable fields in place', ()
   const body: Record<string, unknown> = {
     model: 'zai-org-glm-5-2',
     messages: [],
-    text: { verbosity: 'low' },
+    reasoning_effort: 'low',
   };
-  const stripped = stripRejectedFeatures(body, new Set(['text']));
-  assertEquals(stripped, ['text']);
-  assert(!('text' in body));
+  const stripped = stripRejectedFeatures(body, new Set(['reasoning_effort']));
+  assertEquals(stripped, ['reasoning_effort']);
+  assert(!('reasoning_effort' in body));
   assert('messages' in body);
 });
 
@@ -37,7 +37,7 @@ Deno.test('stripRejectedFeatures never strips non-droppable fields', () => {
 
 Deno.test('stripRejectedFeatures skips fields absent from the body', () => {
   const body: Record<string, unknown> = { model: 'm', messages: [] };
-  assertEquals(stripRejectedFeatures(body, new Set(['text'])), []);
+  assertEquals(stripRejectedFeatures(body, new Set(['reasoning_effort'])), []);
 });
 
 function stubClient(overrides: {
@@ -93,8 +93,8 @@ Deno.test('recordRejectedFeature upserts on the composite key and never throws',
       return { error: null };
     },
   });
-  await recordRejectedFeature(client, 'zai-org-glm-5-2', 'text');
-  assertEquals(captured!.row, { model_id: 'zai-org-glm-5-2', feature: 'text' });
+  await recordRejectedFeature(client, 'zai-org-glm-5-2', 'reasoning_effort');
+  assertEquals(captured!.row, { model_id: 'zai-org-glm-5-2', feature: 'reasoning_effort' });
   assertEquals(
     (captured!.opts as { onConflict: string }).onConflict,
     'model_id,feature',
@@ -105,7 +105,7 @@ Deno.test('recordRejectedFeature upserts on the composite key and never throws',
   const failing = stubClient({
     onUpsert: () => ({ error: { message: 'nope' } }),
   });
-  await recordRejectedFeature(failing, 'm', 'text');
+  await recordRejectedFeature(failing, 'm', 'reasoning_effort');
 });
 
 Deno.test('stripRejectedFeatures handles the dotted disable_thinking path', () => {
@@ -130,4 +130,26 @@ Deno.test('stripRejectedFeatures keeps a venice_parameters parent that still car
   };
   stripRejectedFeatures(body, new Set(['venice_parameters.disable_thinking']));
   assertEquals(body.venice_parameters, { enable_web_search: 'auto' });
+});
+
+// Verbosity is retry-only: a backend's rejection of it depends on the
+// rest of the request (glm-5-3-flash rejects it only alongside
+// reasoning_effort), so a recorded row would strip it from requests
+// that honor it.
+Deno.test('verbosity (text) is never recorded nor stripped preemptively', async () => {
+  let writes = 0;
+  const client = {
+    from: () => ({
+      upsert: () => {
+        writes += 1;
+        return Promise.resolve({ error: null });
+      },
+    }),
+  } as unknown as SupabaseClient;
+  await recordRejectedFeature(client, 'z-ai-glm-5-3-flash', 'text');
+  assertEquals(writes, 0);
+
+  const body: Record<string, unknown> = { model: 'm', messages: [], text: { verbosity: 'low' } };
+  assertEquals(stripRejectedFeatures(body, new Set(['text'])), []);
+  assert('text' in body, 'a legacy text row leaves the body alone');
 });

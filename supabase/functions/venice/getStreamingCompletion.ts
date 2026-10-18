@@ -63,6 +63,7 @@ import {
   deleteWireField,
   hasWireField,
   rejectedWireField,
+  stripModelQuirkFields,
   VeniceError,
 } from '../_shared/venice.ts';
 import { streamGuardsForModel } from './stream-guards.ts';
@@ -129,6 +130,16 @@ export async function* getStreamingCompletion(
   opts: StreamingCompletionOpts,
 ): AsyncGenerator<CompletionEvent | StreamSignal, void, void> {
   yield { type: 'BEGIN' };
+
+  // Known per-model rejections are stripped before the first request,
+  // in place like the 400 fallback's strip, so later tool rounds that
+  // re-send this body skip them too.
+  const quirkStripped = stripModelQuirkFields(opts.body);
+  if (quirkStripped.length > 0) {
+    console.log(
+      `[getStreamingCompletion] stripped model-quirk fields for ${String(opts.body.model)}: ${quirkStripped.join(', ')}`,
+    );
+  }
 
   const guards =
     opts.guardsOverride ??

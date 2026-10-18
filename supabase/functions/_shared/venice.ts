@@ -278,6 +278,45 @@ function withoutWireField(
   return copy;
 }
 
+// SPECIAL CASE - one model, one Venice serving quirk. Not a general
+// mechanism; the general one is the strip-and-retry on a 400 below.
+//
+// On Venice, z-ai-glm-5-3-flash rejects every request that carries
+// BOTH reasoning_effort and the text.verbosity knob ("Extra inputs are
+// not permitted, field: 'verbosity'"), streaming or not. Either knob
+// alone is accepted. A live probe on 2026-10-18 found this
+// deterministic (every request, not intermittent). Flash is the
+// default model for chat and web search, so leaving it to the
+// strip-and-retry would cost an extra round-trip on every thinking-on
+// message. Dropping verbosity up front for that one combination
+// avoids the round-trip and keeps verbosity on thinking-off requests,
+// where the model honors it.
+//
+// If Venice fixes this, the only cost of leaving it in place is that
+// verbosity is ignored on thinking-on flash turns. Re-probe (both
+// knobs, no strip) before deleting it. Other models that show the same
+// rejection are handled by the general strip-and-retry, not by
+// widening this check.
+const GLM_53_FLASH_MODEL_ID = 'z-ai-glm-5-3-flash';
+
+/**
+ * Remove wire fields a specific model is known to reject before the
+ * request goes out. Mutates the body in place; returns the removed
+ * paths for logging. See the SPECIAL CASE note above - it covers one
+ * model and one field combination.
+ */
+export function stripModelQuirkFields(body: Record<string, unknown>): string[] {
+  if (
+    body.model === GLM_53_FLASH_MODEL_ID &&
+    hasWireField(body, 'reasoning_effort') &&
+    hasWireField(body, 'text')
+  ) {
+    deleteWireField(body, 'text');
+    return ['text'];
+  }
+  return [];
+}
+
 /**
  * Extract the rejected wire path from a strict-validation 400, or
  * null when the error is anything else. Two shapes are recognized:
@@ -365,7 +404,10 @@ function sleepCancellable(ms: number, signal?: AbortSignal): Promise<boolean> {
 export async function veniceComplete(opts: VeniceCompleteOptions): Promise<unknown> {
   const schedule = opts.retrySchedule ?? COMPLETE_RETRY_SCHEDULE_MS;
   let attempt = 0;
-  let body = opts.body;
+  // Shallow copy: the quirk strip only touches top-level fields, and
+  // this helper must not mutate a body the caller owns.
+  let body = { ...opts.body };
+  stripModelQuirkFields(body);
   for (;;) {
     try {
       return await veniceCompleteOnce({ ...opts, body });

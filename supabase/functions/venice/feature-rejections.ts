@@ -14,6 +14,16 @@
 // src/lib/supabase/settings.ts) to disable matching controls in
 // Settings -> Model profiles.
 //
+// Verbosity ('text') is retry-only: never recorded, and any row a
+// past discovery left behind is ignored. Venice routes one model id to
+// backends that differ by request shape - glm-5-3-flash rejects
+// verbosity only when reasoning_effort rides along - so a recorded
+// row would strip verbosity from requests that honor it, and grey out
+// the control for good. A per-request retry is the cheaper mistake.
+// The one model where that retry would fire on every thinking-on
+// turn is special-cased up front instead (stripModelQuirkFields in
+// ../_shared/venice.ts).
+//
 // Both DB helpers are best-effort and never throw: a read failure
 // degrades to "nothing known rejected" (the strip-and-retry fallback
 // still recovers the turn, just with one extra round-trip), and a
@@ -26,6 +36,10 @@ import {
   deleteWireField,
   hasWireField,
 } from '../_shared/venice.ts';
+
+// Wire paths the 400 fallback still strips per request, but that are
+// never persisted or stripped preemptively. See the header note.
+const RETRY_ONLY_FEATURES: ReadonlySet<string> = new Set(['text']);
 
 /**
  * Fetch the set of wire fields known to be rejected by `modelId`'s
@@ -56,12 +70,14 @@ export async function fetchRejectedFeatures(
 /**
  * Record a runtime-discovered rejection. Idempotent: the (model_id,
  * feature) primary key makes a repeat discovery a no-op upsert.
+ * No-op for RETRY_ONLY_FEATURES.
  */
 export async function recordRejectedFeature(
   client: SupabaseClient,
   modelId: string,
   feature: string,
 ): Promise<void> {
+  if (RETRY_ONLY_FEATURES.has(feature)) return;
   try {
     const { error } = await client
       .from('model_feature_rejections')
@@ -87,7 +103,8 @@ export async function recordRejectedFeature(
  * Delete recorded-rejected features from a request body, in place.
  * Gated on DROPPABLE_WIRE_FIELDS so a stray or hand-inserted DB row
  * can never strip a semantic field (tools, messages, ...) - the table
- * is trusted for advisory knobs only. Returns the field names actually
+ * is trusted for advisory knobs only. RETRY_ONLY_FEATURES rows (left
+ * by past discoveries) are skipped. Returns the field names actually
  * removed (for logging).
  */
 export function stripRejectedFeatures(
@@ -96,7 +113,11 @@ export function stripRejectedFeatures(
 ): string[] {
   const stripped: string[] = [];
   for (const field of rejected) {
-    if (DROPPABLE_WIRE_FIELDS.has(field) && hasWireField(body, field)) {
+    if (
+      DROPPABLE_WIRE_FIELDS.has(field) &&
+      !RETRY_ONLY_FEATURES.has(field) &&
+      hasWireField(body, field)
+    ) {
       deleteWireField(body, field);
       stripped.push(field);
     }

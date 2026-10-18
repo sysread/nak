@@ -680,12 +680,10 @@ export function buildChatBody(req: ChatRequest, streaming: boolean): Record<stri
   // observed) reject the whole request with a strict-validation 400
   // ("Extra inputs are not permitted, field: 'text'", or 'verbosity'
   // when Venice flattened the knob before forwarding). The edge
-  // function recovers: it strips the field and re-issues on first
-  // encounter, records the rejection in model_feature_rejections,
-  // and strips preemptively on every later turn (see
-  // DROPPABLE_WIRE_FIELDS in supabase/functions/_shared/venice.ts
-  // and venice/feature-rejections.ts), so sending it optimistically
-  // stays safe.
+  // function recovers by stripping the field and re-issuing, per
+  // request (see DROPPABLE_WIRE_FIELDS and stripModelQuirkFields in
+  // supabase/functions/_shared/venice.ts), so sending it
+  // optimistically stays safe.
   if (req.verbosity) {
     body.text = { verbosity: req.verbosity };
   }

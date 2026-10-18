@@ -170,31 +170,13 @@ export function profilesMatch(
 }
 
 /**
- * True when the model's backend is known to reject the verbosity knob
- * outright. `rejections` is the model_feature_rejections snapshot
- * (app.modelFeatureRejections), keyed by model id; the recorded
- * feature name is the wire FIELD the backend rejected - 'text',
- * because verbosity ships as the OpenAI-shape `text.verbosity` object
- * - so this helper owns the field-to-control mapping. Settings uses
- * it to disable the profile card's verbosity dropdown; the edge
- * function strips the field from outgoing requests regardless, so
- * this is a UX affordance, not the enforcement point.
- */
-export function verbosityRejectedForModel(
-  rejections: Readonly<Record<string, readonly string[]>>,
-  modelId: string
-): boolean {
-  return rejections[modelId]?.includes('text') ?? false;
-}
-
-/**
  * True when the model's backend refuses to run without a thinking
  * pass ("Reasoning is mandatory" - recorded under the
  * venice_parameters.disable_thinking wire path; observed on
  * z-ai-glm-5-3). Settings and the composer use it to disable the
  * "Off" thinking option for that model; the edge function strips the
- * flag from outgoing requests regardless, so - like the verbosity
- * twin above - this is a UX affordance, not the enforcement point.
+ * flag from outgoing requests regardless, so this is a UX
+ * affordance, not the enforcement point.
  */
 export function thinkingOffRejectedForModel(
   rejections: Readonly<Record<string, readonly string[]>>,
