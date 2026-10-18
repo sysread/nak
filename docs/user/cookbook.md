@@ -99,8 +99,12 @@ Stir in @butter{2%tbsp} and serve.
 - When the assistant saves a recipe, the save is refused if part of
   the recipe would not show up: an empty heading, a `##` heading, a
   `--` stuck to a word (like `20--25 min`, where `--` starts a hidden
-  comment), or a recipe sent as one long line. The assistant sees what
-  went wrong and resubmits a fixed version.
+  comment), or a recipe sent as one long line. It is also refused when
+  something looks like recipe syntax but isn't: braces around a plain
+  value (`{325°F}`), an unclosed brace, a stray `@`, an amount with two
+  `%` signs, or a timer missing its `%` (`~{12-15 min}`, which would be
+  left out of the Timers list). The assistant sees what went wrong and
+  resubmits a fixed version.
 - A line starting with ``> (followed by a space and the rest of the
   text) is a **continuation** of the previous step. Use it to break a
   long instruction across two or three lines in the source without

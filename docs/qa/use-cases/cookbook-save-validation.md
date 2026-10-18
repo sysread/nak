@@ -5,7 +5,9 @@
 The save-time checks `recipe_save` runs before writing
 ([dev: cookbook](../../dev/cookbook.md), "Save-time validation"
 gotcha): a note written as a `#` heading (empty section), a `##`
-heading, a `--` glued to a range, and literal `\n` escapes. Each must
+heading, a `--` glued to a range, literal `\n` escapes, and syntax
+the parser skipped or misread (raw braces, a double `%`, a timer with
+no `%`). Each must
 refuse the write with an error the model acts on, and the model's
 resubmission must render the text it originally lost.
 
@@ -24,6 +26,9 @@ resubmission must render the text it originally lost.
    step Serve hot."
 2. Open the recipe_save tool call(s) in the turn's tool-call panel.
 3. Open the saved recipe in the Cookbook detail pane.
+4. Send: "Edit ZZQA Save Validation: add a first step reading exactly
+   `Preheat to {400°F}, then roast ~{12-15 min} with @olive oil{1%1%tbsp}.`"
+   Then repeat steps 2 and 3.
 
 ## Expected
 
@@ -36,6 +41,11 @@ resubmission must render the text it originally lost.
   or `# Serve`).
 - (3) The detail pane shows the altitude note, "20-25 minutes", and a
   Serve section heading. Nothing the user asked for is missing.
+- (4) The first edit call fails, naming the raw `{400°F}` braces, the
+  `~{12-15 min}` timer missing its `%`, and the double-`%` olive oil
+  amount. The retry succeeds; the pane shows "400°F" with no braces, a
+  12-15 min entry in the Timers list, and an olive oil amount with no
+  stray `%`.
 
 ## Cleanup
 
