@@ -277,3 +277,40 @@ Deno.test('veniceComplete does not strip a non-droppable field', async () => {
   );
   assertEquals(calls, 1);
 });
+
+// Web search pins disable_thinking. Venice forwards that as
+// reasoning_effort='none', and a thinking-only backend refuses it with
+// wording that names a field nak never sent. The retry must drop the
+// disable_thinking knob, keep the other venice_parameters, and succeed.
+Deno.test('veniceComplete drops disable_thinking on a thinking-only refusal', async () => {
+  const sentBodies: Array<Record<string, unknown>> = [];
+  const fakeFetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    sentBodies.push(JSON.parse(init!.body as string));
+    if (sentBodies.length === 1) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error:
+              "GLM-5.3 is a thinking-only model; disabling thinking (reasoning_effort='none') is not supported.",
+          }),
+          { status: 400 }
+        )
+      );
+    }
+    return Promise.resolve(new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+  }) as typeof fetch;
+
+  await veniceComplete({
+    apiKey: 'k',
+    body: {
+      model: 'zai-org-glm-5-3',
+      messages: [],
+      venice_parameters: { enable_web_search: 'on', disable_thinking: true },
+    },
+    fetchImpl: fakeFetch,
+    retrySchedule: [],
+  });
+
+  assertEquals(sentBodies.length, 2);
+  assertEquals(sentBodies[1].venice_parameters, { enable_web_search: 'on' });
+});

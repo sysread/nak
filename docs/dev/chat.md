@@ -231,8 +231,10 @@ A chat turn goes:
   `venice_parameters.disable_thinking`, the rest -> `reasoning_effort`.
   Only forwarded when the profile's `supportsReasoning` is true (some
   providers 400 on the unknown field). Some reasoning backends refuse
-  the `off` knob outright ("Reasoning is mandatory" - observed on GLM
-  5.3 non-flash); that 400 rides the same two-layer recovery as
+  the `off` knob outright ("Reasoning is mandatory", or "is a
+  thinking-only model; disabling thinking (reasoning_effort='none') is
+  not supported" - both observed on GLM 5.3 depending on which backend
+  answers); that 400 rides the same two-layer recovery as
   verbosity below, recorded under the
   `venice_parameters.disable_thinking` path, and the Settings profile
   card plus the composer's reasoning picker grey out the Off option

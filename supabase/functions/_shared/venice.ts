@@ -287,10 +287,14 @@ function withoutWireField(
  *     field is the path, after REPORTED_FIELD_ALIASES maps a
  *     backend-side name ('verbosity') back to the path nak sends
  *     ('text').
- *   - `Reasoning is mandatory for this endpoint and cannot be
- *     disabled.` - a backend refusing the disable_thinking knob
- *     outright (observed on z-ai-glm-5-3, whose serving offers no
- *     'none' reasoning-effort option). Maps to the
+ *   - A backend refusing the disable_thinking knob outright. Two
+ *     wordings observed on GLM 5.3, depending on which backend
+ *     answers: `Reasoning is mandatory for this endpoint and cannot
+ *     be disabled.` and `GLM-5.3 is a thinking-only model; disabling
+ *     thinking (reasoning_effort='none') is not supported.` The
+ *     second names reasoning_effort because Venice translates
+ *     disable_thinking into reasoning_effort='none' before
+ *     forwarding - nak never sent that field. Maps to the
  *     venice_parameters.disable_thinking path; stripping it falls
  *     back to thinking-on, which is what the backend forces anyway.
  */
@@ -306,7 +310,7 @@ export function rejectedWireField(err: unknown): string | null {
     /Extra inputs are not permitted, field: '([^']+)'/,
   );
   if (m) return REPORTED_FIELD_ALIASES[m[1]] ?? m[1];
-  if (/reasoning is mandatory/i.test(err.message)) {
+  if (/reasoning is mandatory|thinking-only model/i.test(err.message)) {
     return 'venice_parameters.disable_thinking';
   }
   return null;
