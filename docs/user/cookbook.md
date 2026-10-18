@@ -92,6 +92,15 @@ Stir in @butter{2%tbsp} and serve.
 - `# Section Name` (with a space after `#`) is a markdown-style alias
   — handy if you're used to writing headers that way. `#cookware` with
   no space still means cookware, so the two don't collide.
+- A heading only shows when at least one line sits under it. Don't use
+  `#` for a note or callout: write the note as an ordinary line
+  instead (e.g. `**Note:** at altitude, add 20 minutes`). `## Name` is
+  not a heading; use `=== Name ===` for a sub-section.
+- When the assistant saves a recipe, the save is refused if part of
+  the recipe would not show up: an empty heading, a `##` heading, a
+  `--` stuck to a word (like `20--25 min`, where `--` starts a hidden
+  comment), or a recipe sent as one long line. The assistant sees what
+  went wrong and resubmits a fixed version.
 - A line starting with ``> (followed by a space and the rest of the
   text) is a **continuation** of the previous step. Use it to break a
   long instruction across two or three lines in the source without

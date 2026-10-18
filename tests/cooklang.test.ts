@@ -962,6 +962,69 @@ describe('validateCooklangSource', () => {
     );
     expect(errors.length).toBe(2);
   });
+
+  it('flags a `#` heading with nothing under it (a note written as a heading)', () => {
+    // The shape that hid an altitude note in prod: the note became the
+    // name of an empty section and the renderer dropped it.
+    const errors = validateCooklangSource(
+      '# ALTITUDE: add 20 minutes to the first bake.\n\n== Baking ==\nBake the @potatoes{6}.',
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('ALTITUDE: add 20 minutes');
+    expect(errors[0]).toContain('no lines under it');
+  });
+
+  it('flags a parent section whose only content is sub-sections', () => {
+    const errors = validateCooklangSource('== Sauce ==\n=== Base ===\nMelt @butter{2%tbsp}.');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('"Sauce"');
+  });
+
+  it('does NOT flag a trailing empty section that reappears with lines', () => {
+    const errors = validateCooklangSource(
+      '== Sauce ==\n\n== Pasta ==\nBoil @pasta{1%lb}.\n== Sauce ==\nMelt @butter{2%tbsp}.',
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('does NOT flag sections that each carry a line', () => {
+    const errors = validateCooklangSource(
+      '# Prep\n@onion{1}\n---\n== Cook ==\nSaute the onion.',
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('flags `--` glued to text, which hides the rest of the line', () => {
+    const errors = validateCooklangSource('Bake for 20--25 minutes.');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('--25 minutes');
+  });
+
+  it('does NOT flag a deliberate comment, a dash-only reset, or a block comment', () => {
+    const errors = validateCooklangSource(
+      'Add @salt. -- to taste\n-- whole-line comment\n---\n[- a--b -]Stir.',
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('flags `##` headings, which render as literal step text', () => {
+    const errors = validateCooklangSource('## Sauce\nMelt @butter{2%tbsp}.');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('## Sauce');
+  });
+
+  it('flags literal \\n escapes (double-escaped source) on their own', () => {
+    // Prod shape: a whole recipe stored as one line whose `--` reset
+    // would also trip the glued-comment check. Only the root cause
+    // is reported.
+    const errors = validateCooklangSource('@rice{}\\n@carrot{}\\n\\n--\\n\\nCook the rice.');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('escape sequences');
+  });
+
+  it('does NOT flag `#cookware` at the start of a line', () => {
+    expect(validateCooklangSource('#skillet{} goes on high heat.')).toEqual([]);
+  });
 });
 
 describe('recipeToHtml — inline emphasis in step text', () => {

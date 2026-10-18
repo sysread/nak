@@ -21,9 +21,9 @@
 // edit that had in fact preserved every photo. Changing the photo set
 // is the recipe_photos_* tools' job.
 //
-// Cooklang authoring-quirk validator mirrors validateCooklangSource
-// in src/lib/cooklang.ts - if that file's check list grows, mirror
-// the additions here.
+// Both forms run validateCooklangSource (_shared/cooklang-validate.ts)
+// on the submitted body and refuse the write when it reports anything,
+// so the model sees the problem and resubmits a fixed recipe.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readRecipePhotoMeta } from './_recipe_helpers.ts';

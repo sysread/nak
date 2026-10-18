@@ -87,7 +87,15 @@ export const recipeSaveSchema = {
     "a `> `-prefixed line continues the previous step and keeps its own line: " +
     'bullet continuations (`- `/`* `) render as a sub-list inside the step, ' +
     'plain ones rejoin the step prose; ' +
-    '`== Soup ==` / `# Soup` start sections; ' +
+    '`== Soup ==` / `# Soup` start sections (`=== Base ===` for a ' +
+    'sub-section; `## Soup` is NOT a heading). A heading is never a ' +
+    'comment, note, or callout: a section with no lines under it is ' +
+    'dropped from the rendered recipe, so write a note for the cook as ' +
+    'a plain step line (e.g. `**Note:** at altitude, add 20 minutes`); ' +
+    '`--` starts a hidden comment, so write ranges with one hyphen ' +
+    '(`20-25 minutes`); ' +
+    'the save is refused with a list of problems when the recipe breaks ' +
+    'these rules - fix them and resubmit; ' +
     'emphasis `**bold**` / `*italic*` renders, backticks do NOT. ' +
     "The star rating is the user's verdict and is not editable here - " +
     'only they can set or clear it, from the recipe card. ' +

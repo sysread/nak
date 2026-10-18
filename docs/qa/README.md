@@ -322,6 +322,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   step, bullet continuations rendering as a sub-list inside the step,
   tap-highlight resolving through sub-bullets, and the export nesting
   in Markdown and plain text.
+- [cookbook-save-validation](./use-cases/cookbook-save-validation.md) -
+  recipe_save refusing text the renderer would drop (a note written as
+  a heading, `##` headings, glued `--`, literal escapes) and the
+  model's fixed resubmission rendering it.
 - [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -
   Settings pane independence, update-check/reload flow, background-job
   toggles, usage refresh, and credential/export actions.
