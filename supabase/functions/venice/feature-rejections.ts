@@ -25,7 +25,7 @@ import {
   DROPPABLE_WIRE_FIELDS,
   deleteWireField,
   hasWireField,
-} from './getStreamingCompletion.ts';
+} from '../_shared/venice.ts';
 
 /**
  * Fetch the set of wire fields known to be rejected by `modelId`'s
