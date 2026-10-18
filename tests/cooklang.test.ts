@@ -1022,6 +1022,41 @@ describe('validateCooklangSource', () => {
     expect(errors[0]).toContain('escape sequences');
   });
 
+  it('flags braces the parser did not consume (a braced temperature)', () => {
+    // Prod shape: `{325°F}` has no `%`, so it is not a bare timer and
+    // rendered with the braces showing.
+    const errors = validateCooklangSource('Preheat the oven to {325°F}.');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('Preheat the oven to {325°F}.');
+  });
+
+  it('flags an unclosed ingredient brace and a stray `@`', () => {
+    expect(validateCooklangSource('Add @salt{1%tsp to the pot.')).toHaveLength(1);
+    expect(validateCooklangSource('Bake @ 350 until golden.')).toHaveLength(1);
+  });
+
+  it('flags a second `%` inside an amount', () => {
+    const errors = validateCooklangSource('Dust with @barley flour{1/2%1%tsp}.');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('@barley flour{1/2%1%tsp}');
+  });
+
+  it('flags a timer written without `%` and suggests the fix', () => {
+    // Prod shape: renders fine in the step but drops out of the Timers list.
+    const errors = validateCooklangSource('Roast ~{50-55 min}, until tender.');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('`~{50-55%min}`');
+  });
+
+  it('does NOT flag consumed syntax: parenthetical names, bare durations, non-time timers', () => {
+    expect(
+      validateCooklangSource(
+        'Grind @black pepper (ground){} and @fresh-milled rye (fine){40%g}.\n' +
+          'Simmer {30%minutes}, then rest ~{5%min} at ~{6,000%ft}.',
+      ),
+    ).toEqual([]);
+  });
+
   it('does NOT flag `#cookware` at the start of a line', () => {
     expect(validateCooklangSource('#skillet{} goes on high heat.')).toEqual([]);
   });

@@ -30,9 +30,27 @@
  *     "bake 20". A comment the author meant has whitespace before it.
  *   - `##`-style headings. Only a single `#` (or `==`) is a heading;
  *     `## Sauce` renders as a numbered step reading "## Sauce".
+ *   - Leftover syntax. Any `{`, `}`, or `@` still present in the parsed
+ *     output (step text, ingredient names and notes, section names) is
+ *     markup the parser did not recognize, and the cook sees it raw:
+ *     `{325°F}` (braces with no `%` are not a bare timer), an unclosed
+ *     `@salt{1%tsp`, a stray `@ 350`. Checking the parse output rather
+ *     than the source means a token the parser DID consume never fires.
+ *   - Malformed amounts. A `%`, `{`, or `}` left inside a parsed qty or
+ *     unit - `@flour{1/2%1%tsp}` splits on the first `%` and shows the
+ *     unit as "1%tsp".
+ *   - Timers without a unit. `~{12-15 min}` has no `%`, so the whole
+ *     body parses as the duration with a null unit. The step text reads
+ *     fine, but the renderer only lists timers with a recognized time
+ *     unit, so this one silently drops out of the Timers list.
+ *
+ * Deliberately NOT flagged: a timer with a non-time unit
+ * (`~{6,000%ft}`). The renderer keeps those out of the Timers list on
+ * purpose (see TIME_UNITS in src/lib/cooklang-render.ts), so the text
+ * reads fine.
  */
 
-import { parseCooklang } from './cooklang-parse.ts';
+import { parseCooklang, type Recipe } from './cooklang-parse.ts';
 
 export function validateCooklangSource(src: string): string[] {
   const errors: string[] = [];
@@ -84,9 +102,13 @@ export function validateCooklangSource(src: string): string[] {
     return errors;
   }
 
-  errors.push(...emptySectionErrors(src));
+  const recipe = parseCooklang(src);
+  errors.push(...emptySectionErrors(recipe));
   errors.push(...gluedCommentErrors(src));
   errors.push(...multiHashHeadingErrors(src));
+  errors.push(...leftoverSyntaxErrors(recipe));
+  errors.push(...malformedAmountErrors(recipe));
+  errors.push(...unitlessTimerErrors(recipe));
 
   return errors;
 }
@@ -105,8 +127,7 @@ function excerpt(s: string): string {
  * appears twice (once empty, once with lines) merges into one rendered
  * section and is fine.
  */
-function emptySectionErrors(src: string): string[] {
-  const recipe = parseCooklang(src);
+function emptySectionErrors(recipe: Recipe): string[] {
   const populated = new Set(recipe.steps.map((s) => s.section));
   return recipe.sections
     .filter((name) => !populated.has(name))
@@ -165,4 +186,95 @@ function multiHashHeadingErrors(src: string): string[] {
         'characters. Use `# Name` or `== Name ==` for a section and ' +
         '`=== Name ===` for a sub-section.',
     );
+}
+
+/**
+ * Rendered strings that still carry Cooklang markup characters. The
+ * tokenizer replaces every reference it recognizes with plain display
+ * text, so a `{`, `}`, or `@` that survives into the parse output is
+ * markup it skipped - and the renderer shows it verbatim. Ingredient
+ * names are included because a parenthetical name segment can swallow
+ * a brace (`@flour (sifted{1%cup})`).
+ */
+function leftoverSyntaxErrors(recipe: Recipe): string[] {
+  const rendered = [
+    ...recipe.steps.map((s) => s.text),
+    ...recipe.steps.flatMap((s) => s.ingredients.flatMap((i) => [i.name, i.note ?? ''])),
+    ...recipe.sections,
+  ];
+  const seen = new Set<string>();
+  const errors: string[] = [];
+  for (const text of rendered) {
+    for (const line of text.split('\n')) {
+      if (!/[{}@]/.test(line) || seen.has(line)) continue;
+      seen.add(line);
+      errors.push(
+        `"${excerpt(line.trim())}" still shows raw Cooklang characters ` +
+          '(`{`, `}`, or `@`) after parsing, so the cook will see them ' +
+          'literally. Braces only mean something attached to a reference - ' +
+          '`@name{qty%unit}`, `#name{}`, `~{qty%unit}`. Write plain values ' +
+          '(temperatures, notes) without braces, close every `{` you open, ' +
+          'and put the ingredient name right after `@` with no space.',
+      );
+    }
+  }
+  return errors;
+}
+
+/**
+ * Parsed amounts that still contain markup. parseQtyUnit splits on the
+ * FIRST `%`, so `{1/2%1%tsp}` yields qty "1/2" and unit "1%tsp", which
+ * the ingredient list prints as written.
+ */
+function malformedAmountErrors(recipe: Recipe): string[] {
+  const amounts = [
+    ...recipe.steps.flatMap((s) =>
+      s.ingredients.map((i) => ({ label: `@${i.name}`, qty: i.qty, unit: i.unit })),
+    ),
+    ...recipe.steps.flatMap((s) =>
+      s.timers.map((t) => ({ label: `~${t.name ?? ''}`, qty: t.duration, unit: t.unit })),
+    ),
+  ];
+  const seen = new Set<string>();
+  const errors: string[] = [];
+  for (const { label, qty, unit } of amounts) {
+    const body = `${qty ?? ''}%${unit ?? ''}`;
+    if (!/[%{}]/.test(`${qty ?? ''}${unit ?? ''}`) || seen.has(label + body)) continue;
+    seen.add(label + body);
+    errors.push(
+      `${label}{${body}} has a malformed amount: a braced amount takes ` +
+        'exactly one `%` between quantity and unit (`{1/2-1%tsp}`), so ' +
+        'this renders with stray characters. Write a range with a hyphen ' +
+        'and keep a single `%`.',
+    );
+  }
+  return errors;
+}
+
+/**
+ * Timers whose braces carried no `%`. Anonymous `~{...}` and named
+ * `~name{...}` forms accept a body without one, so a duration written
+ * with a space instead (`~{12-15 min}`) still tokenizes - as a duration
+ * with no unit, which keeps it out of the Timers list.
+ */
+function unitlessTimerErrors(recipe: Recipe): string[] {
+  const seen = new Set<string>();
+  const errors: string[] = [];
+  for (const t of recipe.steps.flatMap((s) => s.timers)) {
+    if (t.unit !== null || t.duration.length === 0) continue;
+    const written = `~${t.name ?? ''}{${t.duration}}`;
+    if (seen.has(written)) continue;
+    seen.add(written);
+    // "12-15 min" -> "12-15%min"; a body with no trailing word gets no
+    // guessed unit, just the rule.
+    const fixed = t.duration.replace(/\s+(\S+)$/, '%$1');
+    const hint = fixed.includes('%')
+      ? `Write it as \`~${t.name ?? ''}{${fixed}}\`.`
+      : 'Add a time unit after a `%`, e.g. `~{10%minutes}`.';
+    errors.push(
+      `${written} has no \`%\` between duration and unit, so it is ` +
+        `missing from the Timers list. ${hint}`,
+    );
+  }
+  return errors;
 }

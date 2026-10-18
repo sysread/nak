@@ -712,10 +712,18 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   sub-sections under it (same drop), `20--25 min` (the `--` comment
   rule eats the rest of the line), `## Heading` (renders as a literal
   step), and literal `\n` escapes from a double-escaped tool argument
-  (the whole recipe parses as one line). The empty-section check runs
-  the real parser, so it agrees with the renderer by construction;
-  the others are line regexes that mirror the parser's comment and
-  reset order. Edits re-validate the whole body, so a recipe saved
+  (the whole recipe parses as one line). A second family inspects the
+  parse output instead of the source: any `{`, `}`, or `@` left in
+  rendered text is markup the tokenizer skipped (`{325°F}` - braces
+  without `%` are not a bare timer), a `%` or brace left inside a
+  parsed qty/unit is a malformed amount (`{1/2%1%tsp}`), and a timer
+  with a null unit was written without `%` (`~{12-15 min}`) and
+  silently drops out of the Timers list. Timers with a non-time unit
+  (`~{6,000%ft}`) are NOT flagged - the renderer filters them out of
+  the Timers list on purpose. The empty-section and parse-output
+  checks run the real parser, so they agree with the renderer by
+  construction; the rest are line regexes that mirror the parser's
+  comment and reset order. Edits re-validate the whole body, so a recipe saved
   before a check existed must be fixed before the model can edit it -
   the error says what to change. Add a check only for text the cook
   would lose or misread, not for style.

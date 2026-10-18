@@ -94,6 +94,10 @@ export const recipeSaveSchema = {
     'a plain step line (e.g. `**Note:** at altitude, add 20 minutes`); ' +
     '`--` starts a hidden comment, so write ranges with one hyphen ' +
     '(`20-25 minutes`); ' +
+    'braces belong only to an `@`/`#`/`~` reference and carry exactly ' +
+    'one `%` (`~{12-15%min}`, never `~{12-15 min}` or `{1/2%1%tsp}`) - ' +
+    'plain values like temperatures take no braces (`325°F`, not ' +
+    '`{325°F}`); ' +
     'the save is refused with a list of problems when the recipe breaks ' +
     'these rules - fix them and resubmit; ' +
     'emphasis `**bold**` / `*italic*` renders, backticks do NOT. ' +
