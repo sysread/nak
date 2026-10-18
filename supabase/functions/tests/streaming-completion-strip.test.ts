@@ -87,6 +87,84 @@ Deno.test('strips a rejected droppable field and retries successfully', async ()
   assertEquals(signals[0].field, 'text');
 });
 
+// Venice serves one model id from several backends and some flatten
+// `text.verbosity` to a top-level `verbosity` before forwarding, so the
+// 400 names a field nak never sent under that name. The parser maps it
+// back to the `text` path so the strip (and the recorded rejection)
+// target what is actually in the body.
+Deno.test('a 400 naming the flattened verbosity field strips text', async () => {
+  const sentBodies: Array<Record<string, unknown>> = [];
+  const fakeFetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    sentBodies.push(JSON.parse(init!.body as string));
+    if (sentBodies.length === 1) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: "Extra inputs are not permitted, field: 'verbosity'",
+            request_id: 'req-test',
+          }),
+          { status: 400 },
+        ),
+      );
+    }
+    return Promise.resolve(new Response(HAPPY_SSE, { status: 200 }));
+  }) as typeof fetch;
+
+  const events = await collect(
+    {
+      model: 'zai-org-glm-5-2',
+      messages: [{ role: 'user', content: 'ping' }],
+      text: { verbosity: 'low' },
+    },
+    fakeFetch,
+  );
+
+  assertEquals(sentBodies.length, 2);
+  assert(!('text' in sentBodies[1]), 'retry goes out without the knob');
+  assertEquals(events.at(-1)?.type, 'DONE');
+  const signal = events.find((e) => e.type === 'wire_feature_rejected') as
+    | Extract<StreamSignal, { type: 'wire_feature_rejected' }>
+    | undefined;
+  assertEquals(signal?.field, 'text');
+});
+
+Deno.test('strips a rejected reasoning_effort and retries successfully', async () => {
+  const sentBodies: Array<Record<string, unknown>> = [];
+  const fakeFetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    sentBodies.push(JSON.parse(init!.body as string));
+    if (sentBodies.length === 1) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: "Extra inputs are not permitted, field: 'reasoning_effort'",
+            request_id: 'req-test',
+          }),
+          { status: 400 },
+        ),
+      );
+    }
+    return Promise.resolve(new Response(HAPPY_SSE, { status: 200 }));
+  }) as typeof fetch;
+
+  const events = await collect(
+    {
+      model: 'zai-org-glm-5-2',
+      messages: [{ role: 'user', content: 'ping' }],
+      reasoning_effort: 'high',
+    },
+    fakeFetch,
+  );
+
+  assertEquals(sentBodies.length, 2);
+  assertEquals(sentBodies[0].reasoning_effort, 'high');
+  assert(!('reasoning_effort' in sentBodies[1]), 'retry goes out without the knob');
+  assertEquals(events.at(-1)?.type, 'DONE');
+  const signal = events.find((e) => e.type === 'wire_feature_rejected') as
+    | Extract<StreamSignal, { type: 'wire_feature_rejected' }>
+    | undefined;
+  assertEquals(signal?.field, 'reasoning_effort');
+});
+
 Deno.test('a repeat 400 naming an already-stripped field is terminal', async () => {
   // Guards against an infinite strip loop: once the field is gone from
   // the body, the same 400 must fall through to the error event rather
@@ -199,4 +277,51 @@ Deno.test('a mandatory-reasoning 400 with no disable_thinking in the body is ter
 
   assertEquals(calls, 1);
   assertEquals(events.at(-1)?.type, 'error');
+});
+
+// SPECIAL CASE pin: glm-5-3-flash rejects verbosity whenever
+// reasoning_effort rides along, so it is dropped before the first
+// request - no 400 round-trip, no rejection signal. Thinking-off
+// requests (no reasoning_effort) keep verbosity.
+Deno.test('glm-5-3-flash drops verbosity up front only alongside reasoning_effort', async () => {
+  const sentBodies: Array<Record<string, unknown>> = [];
+  const fakeFetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    sentBodies.push(JSON.parse(init!.body as string));
+    return Promise.resolve(new Response(HAPPY_SSE, { status: 200 }));
+  }) as typeof fetch;
+
+  const thinking = await collect(
+    {
+      model: 'z-ai-glm-5-3-flash',
+      messages: [{ role: 'user', content: 'ping' }],
+      reasoning_effort: 'low',
+      text: { verbosity: 'low' },
+    },
+    fakeFetch,
+  );
+  assertEquals(sentBodies.length, 1);
+  assert(!('text' in sentBodies[0]), 'verbosity never reaches the wire');
+  assertEquals(sentBodies[0].reasoning_effort, 'low');
+  assert(!thinking.some((e) => e.type === 'wire_feature_rejected'));
+
+  await collect(
+    {
+      model: 'z-ai-glm-5-3-flash',
+      messages: [{ role: 'user', content: 'ping' }],
+      text: { verbosity: 'low' },
+    },
+    fakeFetch,
+  );
+  assert('text' in sentBodies[1], 'thinking-off request keeps verbosity');
+
+  await collect(
+    {
+      model: 'z-ai-glm-5-3',
+      messages: [{ role: 'user', content: 'ping' }],
+      reasoning_effort: 'low',
+      text: { verbosity: 'low' },
+    },
+    fakeFetch,
+  );
+  assert('text' in sentBodies[2], 'non-flash GLM keeps verbosity');
 });

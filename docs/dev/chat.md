@@ -231,13 +231,19 @@ A chat turn goes:
   `venice_parameters.disable_thinking`, the rest -> `reasoning_effort`.
   Only forwarded when the profile's `supportsReasoning` is true (some
   providers 400 on the unknown field). Some reasoning backends refuse
-  the `off` knob outright ("Reasoning is mandatory" - observed on GLM
-  5.3 non-flash); that 400 rides the same two-layer recovery as
+  the `off` knob outright ("Reasoning is mandatory", or "is a
+  thinking-only model; disabling thinking (reasoning_effort='none') is
+  not supported" - both observed on GLM 5.3 depending on which backend
+  answers); that 400 rides the same two-layer recovery as
   verbosity below, recorded under the
   `venice_parameters.disable_thinking` path, and the Settings profile
   card plus the composer's reasoning picker grey out the Off option
   for models carrying that record
-  (`thinkingOffRejectedForModel`).
+  (`thinkingOffRejectedForModel`). A strict backend can also 400 on
+  `reasoning_effort` itself ("Extra inputs are not permitted, field:
+  'reasoning_effort'"); that rides the same recovery, recorded under
+  `'reasoning_effort'`. No UI control greys out for that record - the
+  picker stays live and the edge function just strips the knob.
 - **Verbosity** — per-thread `threads.verbosity`, falling back to
   the profile's `verbosity` default at send-time. Forwarded
   unconditionally as `text.verbosity` (OpenAI-shape: nested under
@@ -245,19 +251,39 @@ A chat turn goes:
   gate — most providers that don't honor the knob silently ignore
   it, but some model backends (GLM 5.x was the first observed)
   400 the whole request with "Extra inputs are not permitted,
-  field: 'text'". Two-layer recovery, both server-side:
+  field: 'text'". Venice serves one model id from several upstream
+  backends and sometimes flattens the knob before forwarding, so the
+  same rejection can also read `field: 'verbosity'`; the parser maps
+  that name back to the `text` path nak actually sends. Which
+  backend answers is not purely random: a live probe on 2026-10-18
+  found z-ai-glm-5-3-flash rejecting `verbosity` on every request
+  that also carried `reasoning_effort` (streaming or not), and
+  accepting either knob alone. So the 400 tracks the thread's
+  thinking level, which is why it can look intermittent.
+  Recovery, all server-side:
+  - **Flash special case:** `stripModelQuirkFields` (in
+    `supabase/functions/_shared/venice.ts`) drops `text` before the
+    first request when the model is z-ai-glm-5-3-flash AND
+    `reasoning_effort` is present. Both senders call it. It is a
+    hardcoded one-model exception, kept because flash is the default
+    model and the retry below would otherwise fire on every
+    thinking-on turn. Re-probe before removing it.
   - **Runtime fallback:** a 400 naming a droppable optional field
     (the pydantic extra-field shape, or the "Reasoning is mandatory"
     refusal that maps to `venice_parameters.disable_thinking`)
     strips that path from the body in place and re-issues (see
-    `DROPPABLE_WIRE_FIELDS` in `getStreamingCompletion.ts`), and
-    emits a `wire_feature_rejected` signal. Only advisory knobs are in the
-    droppable set — semantic fields (`tools`, `messages`) always
+    `DROPPABLE_WIRE_FIELDS` in `supabase/functions/_shared/venice.ts`),
+    and emits a `wire_feature_rejected` signal. The one-shot
+    `veniceComplete` helper (background agents, the browser's
+    non-streaming completions proxy) does the same strip-and-retry
+    but records nothing, so it pays the extra round-trip per call.
+    Only advisory knobs are in the droppable set — semantic fields (`tools`, `messages`) always
     surface as errors.
-  - **Persistent memory:** the orchestrator records each discovery
-    in the global `model_feature_rejections` table (model_id +
-    feature, where feature is a wire field PATH - `'text'`, or the
-    dotted `'venice_parameters.disable_thinking'`) and
+  - **Persistent memory (not for verbosity):** the orchestrator
+    records each discovery in the global `model_feature_rejections`
+    table (model_id + feature, where feature is a wire field PATH -
+    `'reasoning_effort'`, or the dotted
+    `'venice_parameters.disable_thinking'`) and
     strips known-rejected features from the body at turn start
     (`feature-rejections.ts`), so the failing round-trip is paid
     once ever per model+feature, not per turn. Reads/writes are
@@ -265,14 +291,14 @@ A chat turn goes:
     recovers if the table is unreachable. Staleness is accepted
     like the profile capability snapshots: a backend that later
     adds support stays stripped until the row is deleted by hand.
+    Verbosity (`'text'`) is retry-only: never recorded, and legacy
+    `'text'` rows are ignored (`RETRY_ONLY_FEATURES` in
+    `feature-rejections.ts`). A backend's verdict on it depends on
+    the rest of the request, so a row would strip it from requests
+    that honor it and disable the control for good.
 
-  The browser reads the same table (`app.modelFeatureRejections`,
-  hydrated in `refreshSettings` alongside `priceCaps`) to disable
-  the matching controls - the verbosity dropdown in Settings ->
-  Model profiles (see [Settings](./settings.md)) and the composer's
-  per-thread verbosity picker - via `verbosityRejectedForModel` in
-  `src/lib/ui/model-profiles.ts`, so the two surfaces read from one
-  signal.
+  The verbosity controls (composer picker, Settings profile card)
+  never disable.
 - **Usage** — `messages.usage` stores
   `{ prompt_tokens, completion_tokens, total_tokens }` from
   Venice. Sourced by passing `stream_options:

@@ -275,7 +275,6 @@
   } from '$lib/ui/reasoning-panel';
   import {
     thinkingOffRejectedForModel,
-    verbosityRejectedForModel,
   } from '$lib/ui/model-profiles';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
@@ -3116,13 +3115,6 @@
   // (see getStreamingCompletion's strict-validation fallback).
   const currentVerbosity = $derived<Verbosity>(
     currentThread?.verbosity ?? currentProfile.verbosity
-  );
-  // Whether the current model is recorded as rejecting the verbosity
-  // knob outright (model_feature_rejections). Disables the composer's
-  // verbosity picker - same signal that disables the Settings profile
-  // card's verbosity dropdown, so the two surfaces can't disagree.
-  const currentVerbosityRejected = $derived<boolean>(
-    verbosityRejectedForModel(app.modelFeatureRejections, currentProfile.modelId)
   );
   // Whether the current model refuses to run without a thinking pass
   // ("Reasoning is mandatory" in model_feature_rejections). Disables
@@ -9172,18 +9164,15 @@
               {/if}
 
               <!-- Verbosity picker: per-thread override, stored on
-                   threads.verbosity. Surfaced unconditionally but
-                   disabled when the model is recorded as rejecting the
-                   knob (currentVerbosityRejected) - providers that
-                   merely don't honor `text.verbosity` silently ignore
-                   it, so the common no-support case stays enabled.
+                   threads.verbosity. Surfaced unconditionally -
+                   providers that don't honor `text.verbosity` silently
+                   ignore it, and strict ones are recovered server-side.
                    Same auto-create-draft pattern as the model and
                    reasoning pickers so the choice always has somewhere
                    to land. -->
               <VerbosityPicker
                 value={currentVerbosity}
                 defaultVerbosity={currentProfile.verbosity}
-                disabled={currentVerbosityRejected}
                 open={verbosityMenuOpen}
                 onToggle={() => {
                   const next = !verbosityMenuOpen;

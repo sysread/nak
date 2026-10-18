@@ -3,7 +3,7 @@
 // `deno test` with zero network and no Supabase. The body-shaping logic
 // stays in src/lib/venice.ts (browser-side) - this helper is a thin
 // authenticated forwarder.
-import { assertEquals, assertRejects } from '@std/assert';
+import { assert, assertEquals, assertRejects } from '@std/assert';
 import { veniceComplete, VeniceError } from '../_shared/venice.ts';
 
 Deno.test('veniceComplete forwards the body verbatim and returns the parsed JSON', async () => {
@@ -216,4 +216,101 @@ Deno.test('veniceComplete maps a non-JSON success body to parse', async () => {
     VeniceError
   );
   assertEquals(err.kind, 'parse');
+});
+
+// Strict-validation fallback: some Venice backends 400 on optional
+// knobs other backends ignore. The one-shot path re-issues without the
+// named field (mapping the flattened 'verbosity' name back to 'text'),
+// and never mutates the caller's body.
+Deno.test('veniceComplete strips rejected advisory fields and retries', async () => {
+  const sentBodies: Array<Record<string, unknown>> = [];
+  const rejections = ['verbosity', 'reasoning_effort'];
+  const fakeFetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    sentBodies.push(JSON.parse(init!.body as string));
+    const field = rejections.shift();
+    if (field !== undefined) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ error: `Extra inputs are not permitted, field: '${field}'` }),
+          { status: 400 }
+        )
+      );
+    }
+    return Promise.resolve(new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+  }) as typeof fetch;
+
+  const body = {
+    model: 'glm-5',
+    messages: [{ role: 'user', content: 'ping' }],
+    text: { verbosity: 'low' },
+    reasoning_effort: 'low',
+  };
+  await veniceComplete({ apiKey: 'k', body, fetchImpl: fakeFetch, retrySchedule: [] });
+
+  assertEquals(sentBodies.length, 3);
+  assert(!('text' in sentBodies[1]), 'second attempt drops text');
+  assertEquals(sentBodies[1].reasoning_effort, 'low');
+  assert(!('reasoning_effort' in sentBodies[2]), 'third attempt drops reasoning_effort');
+  assert('text' in body && 'reasoning_effort' in body, 'caller body untouched');
+});
+
+Deno.test('veniceComplete does not strip a non-droppable field', async () => {
+  let calls = 0;
+  const fakeFetch = (() => {
+    calls += 1;
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ error: "Extra inputs are not permitted, field: 'tools'" }),
+        { status: 400 }
+      )
+    );
+  }) as typeof fetch;
+  await assertRejects(
+    () =>
+      veniceComplete({
+        apiKey: 'k',
+        body: { model: 'glm-5', tools: [] },
+        fetchImpl: fakeFetch,
+        retrySchedule: [],
+      }),
+    VeniceError
+  );
+  assertEquals(calls, 1);
+});
+
+// Web search pins disable_thinking. Venice forwards that as
+// reasoning_effort='none', and a thinking-only backend refuses it with
+// wording that names a field nak never sent. The retry must drop the
+// disable_thinking knob, keep the other venice_parameters, and succeed.
+Deno.test('veniceComplete drops disable_thinking on a thinking-only refusal', async () => {
+  const sentBodies: Array<Record<string, unknown>> = [];
+  const fakeFetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    sentBodies.push(JSON.parse(init!.body as string));
+    if (sentBodies.length === 1) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error:
+              "GLM-5.3 is a thinking-only model; disabling thinking (reasoning_effort='none') is not supported.",
+          }),
+          { status: 400 }
+        )
+      );
+    }
+    return Promise.resolve(new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+  }) as typeof fetch;
+
+  await veniceComplete({
+    apiKey: 'k',
+    body: {
+      model: 'zai-org-glm-5-3',
+      messages: [],
+      venice_parameters: { enable_web_search: 'on', disable_thinking: true },
+    },
+    fetchImpl: fakeFetch,
+    retrySchedule: [],
+  });
+
+  assertEquals(sentBodies.length, 2);
+  assertEquals(sentBodies[1].venice_parameters, { enable_web_search: 'on' });
 });

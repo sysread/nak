@@ -667,7 +667,9 @@ export function buildChatBody(req: ChatRequest, streaming: boolean): Record<stri
   }
   // Only send reasoning_effort when the caller opted in. Keeps the
   // wire payload clean for non-reasoning models and for test / utility
-  // call paths (auto-titling) that shouldn't pay the latency tax.
+  // call paths (auto-titling) that shouldn't pay the latency tax. Some
+  // backends 400 on it with strict validation; the edge function
+  // strips and retries the same way as text.verbosity below.
   if (req.reasoningEffort) {
     body.reasoning_effort = req.reasoningEffort;
   }
@@ -676,13 +678,12 @@ export function buildChatBody(req: ChatRequest, streaming: boolean): Record<stri
   // spec shape. Most providers that don't honor the knob silently
   // ignore it, but some model backends (GLM 5.x was the first
   // observed) reject the whole request with a strict-validation 400
-  // ("Extra inputs are not permitted, field: 'text'"). The edge
-  // function recovers: it strips the field and re-issues on first
-  // encounter, records the rejection in model_feature_rejections,
-  // and strips preemptively on every later turn (see
-  // DROPPABLE_WIRE_FIELDS in supabase/functions/venice/
-  // getStreamingCompletion.ts and feature-rejections.ts), so sending
-  // it optimistically stays safe.
+  // ("Extra inputs are not permitted, field: 'text'", or 'verbosity'
+  // when Venice flattened the knob before forwarding). The edge
+  // function recovers by stripping the field and re-issuing, per
+  // request (see DROPPABLE_WIRE_FIELDS and stripModelQuirkFields in
+  // supabase/functions/_shared/venice.ts), so sending it
+  // optimistically stays safe.
   if (req.verbosity) {
     body.text = { verbosity: req.verbosity };
   }

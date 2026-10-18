@@ -79,7 +79,8 @@ profiles**:
   conversation can override them from the composer. A dropdown
   disables itself (with an explanatory tooltip) when the selected
   model can't honor that setting - reasoning for non-reasoning
-  models, verbosity for models whose backend rejects the knob.
+  models. Verbosity is always available; a model that can't honor
+  it just ignores it.
 - **Mark the default profile.** The radio on each card picks which
   profile new conversations start on. Selecting one deselects the
   rest - there is always exactly one default. With a single profile

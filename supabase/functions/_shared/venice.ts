@@ -178,6 +178,183 @@ const COMPLETE_RETRY_SCHEDULE_MS = [500, 1500, 4000];
 // for overload that outlasts this.
 const RATE_LIMIT_WAIT_CAP_MS = 5000;
 
+// --- Strict-validation wire fields ----------------------------------------
+//
+// Optional wire knobs that can be dropped from a request body when a
+// model's backend rejects them with strict validation. Venice serves
+// one model id from several upstream backends, and some of them (GLM
+// 5.x was the first observed) run strict pydantic validation on the
+// forwarded body and 400 the whole request with "Extra inputs are not
+// permitted, field: 'X'" for fields other backends silently ignore.
+// Which backend answers can change request to request, so a model that
+// accepted a knob a minute ago can reject it now. Only advisory knobs
+// belong in this set - losing one changes response style or thinking
+// depth at worst, never correctness. Fields that change semantics
+// (`tools`, `messages`, `response_format`) must never be silently
+// dropped.
+// Consumers: the streaming wrapper (venice/getStreamingCompletion.ts)
+// and veniceComplete below strip-and-retry on a matching 400; the
+// orchestrator's preemptive strip of fields recorded in
+// model_feature_rejections (venice/feature-rejections.ts) gates on the
+// same set, so a stray DB row can never strip a semantic field.
+// Entries are wire PATHS: a bare key ('text') or one dotted level
+// ('venice_parameters.disable_thinking') - the path grammar
+// hasWireField/deleteWireField implement.
+export const DROPPABLE_WIRE_FIELDS: ReadonlySet<string> = new Set([
+  'text',
+  'reasoning_effort',
+  'venice_parameters.disable_thinking',
+]);
+
+// Field names a backend reports that differ from the path nak sends.
+// nak sends verbosity OpenAI-style as `text: {verbosity}`, but Venice
+// flattens it to a top-level `verbosity` before forwarding to some
+// backends, so their 400 reads "field: 'verbosity'" for a field that
+// is not in our body under that name. Normalizing to 'text' keeps the
+// strip targeting what we actually sent, and keeps the recorded
+// model_feature_rejections row matching what the browser's Settings
+// helper (verbosityRejectedForModel) looks for.
+const REPORTED_FIELD_ALIASES: Readonly<Record<string, string>> = {
+  verbosity: 'text',
+};
+
+/**
+ * True when the body carries the wire path - a top-level key, or a
+ * key nested one level down for 'a.b' paths.
+ */
+export function hasWireField(
+  body: Record<string, unknown>,
+  path: string,
+): boolean {
+  const dot = path.indexOf('.');
+  if (dot === -1) return path in body;
+  const parent = body[path.slice(0, dot)];
+  return (
+    typeof parent === 'object' && parent !== null && path.slice(dot + 1) in parent
+  );
+}
+
+/**
+ * Delete the wire path from the body in place. For a dotted path the
+ * nested key is removed and an emptied parent object is dropped too -
+ * an empty `venice_parameters: {}` left behind would itself be an
+ * "extra input" to a strict backend.
+ */
+export function deleteWireField(
+  body: Record<string, unknown>,
+  path: string,
+): void {
+  const dot = path.indexOf('.');
+  if (dot === -1) {
+    delete body[path];
+    return;
+  }
+  const parentKey = path.slice(0, dot);
+  const parent = body[parentKey];
+  if (typeof parent !== 'object' || parent === null) return;
+  delete (parent as Record<string, unknown>)[path.slice(dot + 1)];
+  if (Object.keys(parent).length === 0) delete body[parentKey];
+}
+
+/**
+ * Copy of the body with the wire path removed. The caller's body and
+ * any nested parent object are left untouched - deleteWireField's
+ * in-place twin for callers that do not own the body.
+ */
+function withoutWireField(
+  body: Record<string, unknown>,
+  path: string,
+): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...body };
+  const dot = path.indexOf('.');
+  if (dot !== -1) {
+    const parentKey = path.slice(0, dot);
+    const parent = copy[parentKey];
+    if (typeof parent === 'object' && parent !== null) {
+      copy[parentKey] = { ...(parent as Record<string, unknown>) };
+    }
+  }
+  deleteWireField(copy, path);
+  return copy;
+}
+
+// SPECIAL CASE - one model, one Venice serving quirk. Not a general
+// mechanism; the general one is the strip-and-retry on a 400 below.
+//
+// On Venice, z-ai-glm-5-3-flash rejects every request that carries
+// BOTH reasoning_effort and the text.verbosity knob ("Extra inputs are
+// not permitted, field: 'verbosity'"), streaming or not. Either knob
+// alone is accepted. A live probe on 2026-10-18 found this
+// deterministic (every request, not intermittent). Flash is the
+// default model for chat and web search, so leaving it to the
+// strip-and-retry would cost an extra round-trip on every thinking-on
+// message. Dropping verbosity up front for that one combination
+// avoids the round-trip and keeps verbosity on thinking-off requests,
+// where the model honors it.
+//
+// If Venice fixes this, the only cost of leaving it in place is that
+// verbosity is ignored on thinking-on flash turns. Re-probe (both
+// knobs, no strip) before deleting it. Other models that show the same
+// rejection are handled by the general strip-and-retry, not by
+// widening this check.
+const GLM_53_FLASH_MODEL_ID = 'z-ai-glm-5-3-flash';
+
+/**
+ * Remove wire fields a specific model is known to reject before the
+ * request goes out. Mutates the body in place; returns the removed
+ * paths for logging. See the SPECIAL CASE note above - it covers one
+ * model and one field combination.
+ */
+export function stripModelQuirkFields(body: Record<string, unknown>): string[] {
+  if (
+    body.model === GLM_53_FLASH_MODEL_ID &&
+    hasWireField(body, 'reasoning_effort') &&
+    hasWireField(body, 'text')
+  ) {
+    deleteWireField(body, 'text');
+    return ['text'];
+  }
+  return [];
+}
+
+/**
+ * Extract the rejected wire path from a strict-validation 400, or
+ * null when the error is anything else. Two shapes are recognized:
+ *
+ *   - The pydantic-style extra-field message Venice relays:
+ *     `Extra inputs are not permitted, field: 'text'`. The named
+ *     field is the path, after REPORTED_FIELD_ALIASES maps a
+ *     backend-side name ('verbosity') back to the path nak sends
+ *     ('text').
+ *   - A backend refusing the disable_thinking knob outright. Two
+ *     wordings observed on GLM 5.3, depending on which backend
+ *     answers: `Reasoning is mandatory for this endpoint and cannot
+ *     be disabled.` and `GLM-5.3 is a thinking-only model; disabling
+ *     thinking (reasoning_effort='none') is not supported.` The
+ *     second names reasoning_effort because Venice translates
+ *     disable_thinking into reasoning_effort='none' before
+ *     forwarding - nak never sent that field. Maps to the
+ *     venice_parameters.disable_thinking path; stripping it falls
+ *     back to thinking-on, which is what the backend forces anyway.
+ */
+export function rejectedWireField(err: unknown): string | null {
+  if (
+    !(err instanceof VeniceError) ||
+    err.kind !== 'http' ||
+    err.status !== 400
+  ) {
+    return null;
+  }
+  const m = err.message.match(
+    /Extra inputs are not permitted, field: '([^']+)'/,
+  );
+  if (m) return REPORTED_FIELD_ALIASES[m[1]] ?? m[1];
+  if (/reasoning is mandatory|thinking-only model/i.test(err.message)) {
+    return 'venice_parameters.disable_thinking';
+  }
+  return null;
+}
+
 /**
  * True for failures a retry might clear: a connection-level error, or an
  * upstream 5xx (500/502/503/504). A 4xx (bad request, auth) and a
@@ -227,10 +404,35 @@ function sleepCancellable(ms: number, signal?: AbortSignal): Promise<boolean> {
 export async function veniceComplete(opts: VeniceCompleteOptions): Promise<unknown> {
   const schedule = opts.retrySchedule ?? COMPLETE_RETRY_SCHEDULE_MS;
   let attempt = 0;
+  // Shallow copy: the quirk strip only touches top-level fields, and
+  // this helper must not mutate a body the caller owns.
+  let body = { ...opts.body };
+  stripModelQuirkFields(body);
   for (;;) {
     try {
-      return await veniceCompleteOnce(opts);
+      return await veniceCompleteOnce({ ...opts, body });
     } catch (err) {
+      // Strict-validation fallback, same contract as the streaming
+      // wrapper's: a 400 naming a droppable advisory field is re-issued
+      // without it, immediately and outside the retry schedule (the
+      // request never reached inference). The hasWireField check
+      // terminates the loop - a repeat 400 naming an already-stripped
+      // field falls through to the rethrow. No persistence here: this
+      // path has no orchestrator to record the discovery, so each call
+      // pays the extra round-trip.
+      const rejected = rejectedWireField(err);
+      if (
+        rejected !== null &&
+        DROPPABLE_WIRE_FIELDS.has(rejected) &&
+        hasWireField(body, rejected) &&
+        !opts.signal?.aborted
+      ) {
+        console.log(
+          `[veniceComplete] model backend rejected optional field '${rejected}'; stripping and retrying`,
+        );
+        body = withoutWireField(body, rejected);
+        continue;
+      }
       const retryable =
         err instanceof VeniceError &&
         (isTransientCompleteError(err) ||

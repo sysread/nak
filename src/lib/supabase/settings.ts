@@ -73,7 +73,7 @@ export async function getPriceCaps(client: SupabaseClient): Promise<ModelPriceCa
 
 /**
  * Read the project-global model_feature_rejections table: wire fields
- * (e.g. 'text', the text.verbosity knob) that a model's backend
+ * (e.g. 'venice_parameters.disable_thinking') that a model's backend
  * rejects with strict validation, discovered and recorded at runtime
  * by the venice edge function. Keyed by model id. Settings -> Model
  * profiles uses this to disable controls the selected model can't

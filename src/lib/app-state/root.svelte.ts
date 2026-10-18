@@ -93,7 +93,7 @@ interface AppState {
   /**
    * Project-global model_feature_rejections snapshot: wire fields a
    * model's backend rejects with strict validation, keyed by model id
-   * (e.g. 'text' = the text.verbosity knob). Discovered and recorded
+   * (e.g. 'venice_parameters.disable_thinking'). Discovered and recorded
    * server-side by the venice edge function; hydrated by Chat's
    * refreshSettings alongside priceCaps (seeded empty on activate()).
    * Read by Settings -> Model profiles to disable controls the
