@@ -254,7 +254,12 @@ A chat turn goes:
   field: 'text'". Venice serves one model id from several upstream
   backends and sometimes flattens the knob before forwarding, so the
   same rejection can also read `field: 'verbosity'`; the parser maps
-  that name back to the `text` path nak actually sends. Two-layer
+  that name back to the `text` path nak actually sends. Which
+  backend answers is not purely random: a live probe on 2026-10-18
+  found z-ai-glm-5-3-flash rejecting `verbosity` on every request
+  that also carried `reasoning_effort` (streaming or not), and
+  accepting either knob alone. So the 400 tracks the thread's
+  thinking level, which is why it can look intermittent. Two-layer
   recovery, both server-side:
   - **Runtime fallback:** a 400 naming a droppable optional field
     (the pydantic extra-field shape, or the "Reasoning is mandatory"
