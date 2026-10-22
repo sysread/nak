@@ -15,11 +15,15 @@ each other:
 3. **Playwright** (`e2e/*.spec.ts`) - browser-driven end-to-end
    specs, run on demand rather than in the gate.
 
-The vitest suite also carries two **guardrail tests** that are not
-really unit tests: a postcss parse of every stylesheet, and a
-markdownlint pass over the doc tree. Both exist because their
-failure modes otherwise surface only at deploy time or as a
-silently-wrong render.
+The vitest suite also carries **guardrail tests** that are not
+really unit tests: a postcss parse of every stylesheet, a
+markdownlint pass over the doc tree, and two scanners over
+`supabase/schema.sql` - `tests/schema-dml-columns.test.ts` (every
+DML column reference names a column the table declares) and
+`tests/schema-grants.test.ts` (every table and view is created
+above the Data API grant block). They exist because their failure
+modes otherwise surface only at deploy time, at first runtime
+call, or as a silently-wrong render.
 
 ## Files
 

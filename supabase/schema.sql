@@ -33,7 +33,9 @@
 --     the bottom of this file (Supabase stopped granting these
 --     automatically for new tables in public on 2026-10-30). A new
 --     table needs no grant statements of its own unless it must
---     stay unreachable through the Data API.
+--     stay unreachable through the Data API. Enforced by
+--     tests/schema-grants.test.ts: every create-table statement
+--     must stay above the block.
 --
 -- If you add a statement that can't be made idempotent, stop and
 -- fix that before merging — the next `mise run sync` on a

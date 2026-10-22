@@ -226,6 +226,14 @@ Load-bearing patterns the schema uses repeatedly:
 - **Partial claim indexes.** Each claim column has a partial index
   where the holder is non-null, so the index stays tiny in steady
   state (0 rows claimed is the common case).
+- **Data API grant block.** Supabase stopped auto-granting Data API
+  access to new tables in `public` on 2026-10-30. One idempotent
+  block at the end of `supabase/schema.sql` grants DML on all
+  tables (plus sequences) to the Data API roles, so new tables need
+  no grant statements of their own - which only holds while every
+  table is created above that block. Enforced by
+  `tests/schema-grants.test.ts`. RLS remains the actual security
+  boundary.
 - **Retired `worker_leases` / browser-worker apparatus.** One row per
   `(user_id, worker_kind)` once implemented the "at most one
   device per worker kind" singleton for the retired browser
