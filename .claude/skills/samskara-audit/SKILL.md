@@ -135,6 +135,12 @@ tier-2 minter actually filters (declines exist).
   predicate, and whether graduations are actually happening under
   cap pressure (children of established compounds should be
   shrinking, not accumulating).
+- Disproven compounds with no exit: tier-2 rows under the
+  underperformer bar (health < 0.85 * p0) that still fire. Eviction
+  tiers are tier-1 only and the dead reaper needs 14 quiet days, so a
+  wrong compound that keeps firing stays forever and drags p0
+  (2026-10-22: four under the bar, worst 4 held / 31 missed, firing
+  daily). Count them and their 14-day fires.
 
 ### 7. Corpus -> firing (priming)
 

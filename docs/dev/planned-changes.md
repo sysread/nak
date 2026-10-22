@@ -102,6 +102,19 @@ against controls on the same threads; that comparison is what
 decides whether the rerank / query-rewrite option moves up. The
 fire-time cosine column is still not recorded.
 
+**Oct 22 - selection works; the retrieval question is closed.** First
+read of the control arm (109 controls, 41 threads): fired claims'
+situations arose 51.1% of the time vs 25.7% for random unfired claims
+on the same threads; held-given-engaged 64.8% vs 57.1%. The top-k is
+earning its place at roughly 2x chance. Within-cohort rank is still
+flat (51/50/48/49% engaged by band), so the top-11 is well chosen and
+internally unordered - compression inside the narrow message-vs-claim
+range, not a defect. The rerank and query-rewrite options stay
+deprioritized; the fire-time cosine column stays unrecorded unless a
+ranking question returns. The control arm keeps running as the
+standing selection metric (fired-vs-control engagement), paired with
+concentration (14% top-5 share on 190 rows at this read).
+
 **A labeled probe set, not self-calibrating thresholds.** Four
 similarity bars are hard-coded in the samskara path - the
 near-duplicate merge bar, the topical cluster floor, and two tier-2
@@ -258,6 +271,32 @@ from co-firing rather than geometry. Watch: the graduated count on
 the health panel, and whether a compound whose parts have all
 retired stops suppressing anything and lets a sibling constellation
 re-form around it (the slow loop; the sibling count is the signal).
+
+**Oct 22 - the watch condition is met, and compounds have no exit.**
+Over the 20 days since parent-wins landed, tier-2 held rate is 61.2%
+(n=608) against tier-1's 67.2% (n=787), all judged by one model -
+the held-rate edge now runs the wrong way. Mechanism, not mystery:
+the judge's held bar wants a pointable moment, compounds are broad by
+the GENERALIZE mandate, and with their parts graduated (7 of 8
+established compounds have no living children) they carry that
+evidence alone. Three things follow. (1) A disproven compound is
+immortal: cap-pressure eviction is tier-1 only, and
+`samskara_reap_dead` requires 14 quiet days, which a claim that fires
+daily never has - today's worst is at health 0.597 with 4 held / 31
+missed and 39 fires in the last 14 days, still firing. Four compounds
+sit under the 0.739 evict bar and p0 has slid 0.883 -> 0.869. Fix
+shape: a tier-2 underperformer reap on the :13 cron (health < 0.85 p0
+and evidence >= 3.0, no quiet clause) - NOT a tier-2 branch in
+`samskara_evict_for_mint`, which hands its victim's slot to a tier-1
+mint and would push tier-1 over cap into the overflow collapse. (2)
+The sibling guard is porous above three children: every new compound
+cleared the 0.50 Jaccard against older ones (max 0.40), yet 8 of 14
+share 2+ children, because 2 shared out of 3-vs-4 or 4-vs-4 scores
+0.33-0.40. Fix shape: covered when any two children already share a
+compound, regardless of group size. (3) The decline criterion re-opens
+on this evidence (0 declines in 40 compounds): the compound prompt
+should decline when the only honest generalization names no situation
+a transcript could show - the same test the judge applies.
 
 ## Ledger
 
