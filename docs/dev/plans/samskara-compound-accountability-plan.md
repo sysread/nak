@@ -660,6 +660,48 @@ the schema before the function or the caller reads an object as a
 string for the minutes in between (it logs a garbled id and the mint
 still proceeds; harmless, but it will look like a bug in the logs).
 
+### M1 readout gate - M2 and M3 wait for this
+
+M1 is judged at three points. Each readout reuses the two wide
+queries from NOTES (the daily series and the union of cuts), so it
+costs two approvals, and each is logged in the QA results tables.
+Nothing in M2 or M3 starts before the 21-day readout is written down,
+because M2's measurement is defined against M1's cohorts and M3
+changes which compounds exist.
+
+**Hour one (deploy + 1 to 2 hours).** Pass when: the `:13` and `:14`
+jobs both read `succeeded`; three compounds are gone after tick one
+and the fourth after tick two, each with a `reason = 'reaped'`
+tombstone whose key matches its provenance; `compounds_under_bar`
+reads 0; `evictable_graduated` reads 0; no fire-record foreign-key
+error in the function log in the minutes around `:14`. Fail on any
+of these and the reap job is disabled (`cron.unschedule`) while it is
+diagnosed; the floor can stay.
+
+**Day seven.** Pass when: zero graduation evictions in the week (the
+tier label on every eviction log line is how this is counted); no
+compound lost its last living part; tier-1 mints a day are at or
+above 1; compound count is at or below 37 and every reap since
+deploy had tally >= 1.9; no thread shows repeated cohort loss at
+`:14`. Expected but not a failure: at-cap skips up, new-compound
+rate down from 0.67 a day.
+
+**Day twenty-one (the readout that gates M2).** Pass when: every
+graduation eviction since deploy, if any, took a part whose parents
+were all established at the time; compounds minted after deploy hold
+at or above the baseline 59.2% at age 7-21 days, measured on that
+cohort only (if the archive shipped, measured on all of them; if not,
+on survivors, and said so); the reap rate has settled to about one a
+week or less; tier-1 mints a day did not fall under 1 for the whole
+window. The tier-2 population held rate is recorded but is NOT a
+pass criterion, for the survivor reason above. The same readout
+produces M2's input: the health, soft-miss share and age-at-reap of
+every compound minted since deploy, which is what the replay is
+compared against.
+
+The scheduled audit is re-armed to the day-21 date when M1 ships, and
+its prompt names this gate.
+
 ### M2 Decline criterion (if the measurement warrants it)
 
 Predicted: compounds minted a week fall from about 4.7 toward
@@ -865,3 +907,6 @@ the verdict label).
   tier label in M1.3 so evictions can be attributed. Validation
   dry-run expectation corrected (four compounds do carry 6.0; none
   has a living part).
+- rev 5a (2026-10-23): M1 readout gate added (hour one, day seven,
+  day twenty-one) with pass criteria; M2 and M3 wait for the day-21
+  readout, which also produces M2's input.
