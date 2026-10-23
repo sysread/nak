@@ -292,7 +292,8 @@ comment.**
   no fire stays on the dead loser and the colliding fires' verdicts
   are lost. That is the one evidence loss this plan leaves in place;
   the winner's own verdict in the same cohort survives.
-- The compound plan's `samskara_reap_compounds` -> `reap-compound`.
+- The compound plan's `samskara_reap_compounds` -> `reap-compound`,
+  when it ships.
 
 **Deliberate base-table readers (each gets a comment saying why):**
 
@@ -649,3 +650,16 @@ reachable; one sentence).
   thread-deletion cascade and the merge's colliding-fire delete
   recorded; QA docs that count the table enumerated; rev 1's wrong
   sentence about fires staying on a merged loser removed.
+- rev 3 (2026-10-23): after consensus round 1 (no blockers). The
+  fresh create names its constraints to match the renamed table so
+  the schema-dump diff is clean; a rollback note (the old file cannot
+  be re-applied) and the lock note added; `samskara_record_fires`
+  moved from "verify at build" to an edited function, since its
+  insert does not join the claims table; the schema test's token
+  rule restricted to table position with comments and strings
+  stripped; the `update ... from` sites corrected (embed claim,
+  evaluation update, merge fold; the reapers stamp the base table);
+  four deleters, not five; the DML-columns test's rename trap noted;
+  Data API reach of `samskaras_all` and judge id-list growth
+  accepted; the modal-versus-cohort-list cosmetic disagreement
+  stated; QA edits trimmed to what changes.
