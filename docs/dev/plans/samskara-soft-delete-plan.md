@@ -1,23 +1,28 @@
 # Samskara soft-deletion
 
-Status: DRAFT rev 1 (2026-10-23). Lands before M1.2 of
+Status: DRAFT rev 2 (2026-10-23), after the deep-mode lens fan-out
+(hidden problems, safe-to-modify, archaeology, alternatives). Lands
+before M1.2 of
 [the compound accountability plan](./samskara-compound-accountability-plan.md),
 whose tombstone design it replaces. Revision log at the end.
 
-Every `file:line` below was read in this session against
-`supabase/schema.sql` (17,484 lines) and the TypeScript tree. A
-premise that was not checked is marked unverified.
+Every `file:line` below was read against `supabase/schema.sql`
+(17,484 lines) and the TypeScript tree in this session. A premise
+that was not checked is marked unverified.
 
 ## SYNOPSIS
 
 Claims (`public.samskaras`) are hard-deleted today, and three child
 tables cascade with them: fires, provenance and control verdicts.
 Every release path erases the record it was judged on, which is why
-no tier comparison in the audits can be trusted. This plan replaces
-every delete with a stamp (`deleted_at`, `deleted_reason`), puts a
-live-rows view in front of the table, moves every reader that means
-"living claims" onto the view, and keeps the base table for the five
-deleters and the handful of readers that want history.
+no tier comparison in the audits can be trusted. This plan renames
+the table to `samskaras_all`, puts a live-rows view in its place
+under the old name `samskaras`, and turns every delete into a stamp
+(`deleted_at`, `deleted_reason`). Because the view keeps the old
+name, every reader and writer in SQL, in the edge functions and in
+the browser is live-only without an edit; only the five deleters,
+three deliberate history readers and the table DDL name
+`samskaras_all`.
 
 ## PROBLEM
 
@@ -27,204 +32,238 @@ deleters and the handful of readers that want history.
   `8153`). Tier-1 turns over at about two rows a day against a cap of
   150; tier-2 has never lost a row. So every tier-1 figure is a
   survivors' figure, and after the compound reap ships tier-2's will
-  be too. The compound plan's PROBLEM section has the numbers.
+  be too. The compound plan's PROBLEM section has the numbers. The
+  record never states that history should vanish with the claim: the
+  control-verdicts cascade was chosen to "share one lifecycle" with
+  fires (`8147-8148`), the merge retargets fires "so cohort history
+  is preserved" (`10164-10166`), and the browser fire queries were
+  written as if fires outlive their claim
+  (`src/lib/supabase/samskara.ts:197-203`, `262-265`). The fires and
+  provenance cascades predate the git history available here
+  (shallow clone from `dec57e55`); no reason for them is recoverable.
 - **Dead children dangle.** Provenance rows that point at deleted
-  parts survive only as ids (`ref_id` has no FK, `7962-7964`), which
-  is why the coverage test counts dead ids in its denominator and why
-  the UI renders "(removed)" from a null join.
+  parts survive only as ids (`ref_id` has no FK by design,
+  "debugging beats normalisation", `7962-7964`), which is why the
+  coverage test counts dead ids and the UI renders "(removed)" from a
+  null join (`10912-10914`).
 - **Evictions cannot be attributed after the fact.** The evictor
-  returns a bare id (`9667-9775`) and nothing records which tier
-  picked it; the compound plan infers graduation's 46 slots from
-  vanished parts.
+  returns a bare id (`9661-9662`, `9667-9775`) and nothing records
+  which tier picked it; the compound plan infers graduation's 46
+  slots from vanished parts.
+- **Precedent.** The repo already soft-deletes memories below a search
+  floor, "recoverable if the librarian later decides the
+  consolidation was wrong" (`2379-2381`, `7194-7196`). The dev doc
+  calls the graduation bar "a thin basis for an irreversible delete"
+  (`docs/dev/samskara.md:1254-1255`).
 
 ## DESIGN
 
-### Columns
+### Rename the table, give the view the old name
 
-On `public.samskaras`, added with `add column if not exists` next to
-the existing column additions (see Ordering below):
+The alternative weighed in rev 1 (a view under a new name,
+`samskaras_live`, and 24 SQL functions plus 10 app call sites
+re-pointed at it) was dropped after review. Its cost was every
+reader edited by hand, and its failure mode was a missed reader: the
+lens pass found one in the plan's own list (the merge's counter fold
+reads the loser from the base table, `10191`), and under that design
+a future function that names the table by habit is wrong by default.
+
+Under this design:
+
+- the base table becomes `public.samskaras_all`;
+- `public.samskaras` becomes a view: `select * from
+  public.samskaras_all where deleted_at is null`, `with
+  (security_invoker = true)`;
+- nothing that names `samskaras` changes: the 24-odd SQL readers, the
+  writers (`samskara_reinforce_existing` `10108`, the fire bookkeeping
+  `8664-8672`, the evaluation update `9376-9385`, the embed claim and
+  save `9199`, `9225`), the edge mint insert
+  (`supabase/functions/venice/agents/samskara.ts:932-945`), the cap
+  gate `tier1AtCap` (`1237-1241`), the compound-summary read
+  (`1807-1813`), the judge's claim lookup and control sample
+  (`samskara_evaluation.ts:501-504`, `364-368`), the intent reads
+  (`intent.ts:392-395`, `512-517`), and the browser's two reads and
+  two embeds (`src/lib/supabase/samskara.ts:373-377`, `440-447`,
+  `204-210`, `250-256`).
+
+A view with one base table, no aggregates and a plain `where` is
+automatically updatable in Postgres: `insert`, `update`, `update ...
+from`, `delete` and `returning` pass through to the base table, and
+a row whose update makes it fail the view's predicate simply leaves
+the view (no `with check option`). So the writers above keep working,
+and they become live-only: an update through the view cannot touch a
+stamped row, which closes the read-then-write race the lens pass
+found in `samskara_apply_evaluation` and the embedding save. The
+`update ... from` form used by the merge's fold and the reapers is
+**unverified** through a view until the local-stack run; if it is
+refused, those two statements name `samskaras_all` with an explicit
+`and deleted_at is null`.
+
+Invoker security keeps RLS parity: the base table's policies apply
+to the caller, so the browser sees its own rows and the service role
+sees everything. The schema already has one such view
+(`grocery_products_view`, `4521-4545`) and pins Postgres 17
+(`supabase/config.toml:36`; invoker views need 15). The grant block
+at the end of the file (`17475-17477`) covers views, so no separate
+grant is needed; the house pattern's own `grant select` on the
+grocery view (`4566`) is not copied because that view is read-only
+and this one takes writes.
+
+### Columns and constraints
+
+On `public.samskaras_all`, added with `add column if not exists`
+(the `tests/schema-dml-columns.test.ts` scanner reads columns from
+`alter table` too):
 
 - `deleted_at timestamptz` - null for a living claim.
 - `deleted_reason text` - null for a living claim; otherwise one of
   `evict-untested`, `evict-stale`, `evict-underperformer`,
   `evict-graduated`, `reap-dead`, `reap-probation`, `merge-loser`,
-  and, once the compound plan ships, `reap-compound`.
-- A named check constraint `samskaras_deleted_consistency_check`
-  (`(deleted_at is null) = (deleted_reason is null)`) and a named
-  check on the reason values, both added inside guarded `do` blocks
-  so re-apply is clean (the file's convention, header of
-  `schema.sql`).
+  and, once the compound plan ships, `reap-compound`. The values are
+  NOT a check constraint: a named check inside an if-not-exists block
+  cannot be extended on re-apply without drop-then-add, and the
+  writers are internal code. The list lives in the column comment
+  and the dev doc.
+- One named check, `samskaras_all_deleted_consistency_check`,
+  `(deleted_at is null) = (deleted_reason is null)`, added inside a
+  guarded `do` block.
 
 No backfill: every row that exists today is alive.
 
-### The view
+### Order of statements in schema.sql
 
-`public.samskaras_live` = `select <explicit column list> from
-public.samskaras where deleted_at is null`, created with
-`create or replace view ... with (security_invoker = true)`. The
-schema already has one such view (`grocery_products_view`,
-`4544-4545`), and the project pins Postgres 17 (`supabase/config.toml:36`;
-invoker views need 15).
+The file applies start to finish in one transaction
+(`scripts/lib/supabase.mjs:140` sends it as one query;
+`scripts/dev-local.mjs:210` uses `psql -f`, which is not atomic and
+only matters locally). SQL-language functions are validated when
+created, and `samskara_fire_top_k` (`8507`, `language sql` at `8520`,
+reference at `8539`) comes BEFORE the table's later column additions
+at `9104-9109` and `9121-9122`. A view also blocks `alter column ...
+type` on any column it uses. So the table's DDL is gathered and the
+view is dropped before it and created after it:
 
-- **Invoker security, NOT security barrier.** Under invoker security
-  the base table's RLS applies to the caller, so the browser client
-  sees its own rows and the service role sees everything, same as
-  today. A barrier view would stop the planner from pushing the
-  deleted-at test into the scan, which is the performance property
-  the next section depends on.
-- **Explicit column list**, not `select *`, so the view's shape is
-  under control. `create or replace view` can only append columns;
-  a future column reorder needs `drop view if exists` first, and
-  SQL-language functions that name the view do not block the drop
-  (they fail at call time until it is recreated). Documented in the
-  view's header comment.
-- The view is not a publication member (views cannot be) and the
-  table is already excluded from realtime (`14226-14244`); nothing
-  changes there.
+1. A guarded rename: if `pg_class` has `public.samskaras` with
+   `relkind = 'r'`, `alter table public.samskaras rename to
+   samskaras_all`. On a fresh database this is a no-op and the next
+   statement creates the table.
+2. `create table if not exists public.samskaras_all (...)` - the
+   existing definition at `7866-7908`, renamed.
+3. `drop view if exists public.samskaras` - so the DDL below can
+   alter column types if a future change needs to (the int-to-real
+   block at `7923-7931` is the precedent).
+4. Everything that is DDL on the table today, renamed to
+   `samskaras_all`: the indexes (see below), the int-to-real guard at
+   `7923-7931` (its `information_schema` lookup names the table), RLS
+   enable and policies at `7933-7949` (the delete policy is dropped,
+   see below), the `user_id` default at `7957-7958`, the column
+   additions moved up from `9104-9109` and the `drop not null` from
+   `9121-9122`, and the new columns and check.
+5. `create view public.samskaras with (security_invoker = true) as
+   select * from public.samskaras_all where deleted_at is null`,
+   with the header comment that states the naming rule. `select *`
+   is right here, not an explicit list: Postgres freezes the column
+   set at creation, and the file recreates the view on every apply
+   after all the table DDL, so the view can never lag the table.
+6. The provenance table at `7968` and everything after, unchanged
+   except for name fixes listed under "Everything that names the
+   table".
+
+`tests/schema-grants.test.ts:90-105` requires every `create view`
+above the single grant block; satisfied.
+
+The realtime guard at `14237-14244` (drop the table from the
+publication if present) names `samskaras`; it is renamed to
+`samskaras_all`. Publication membership follows a rename by
+identity, so prod stays out of the publication either way.
+
+### Indexes
+
+`samskaras_user_tier_idx (user_id, tier)` at `7910-7911` and
+`samskaras_user_health_idx` at `7913-7914` are replaced by partial
+twins `where deleted_at is null` under NEW names
+(`samskaras_all_live_user_tier_idx`, `samskaras_all_live_user_health_idx`)
+preceded by `drop index if exists` on the old two. Same names would
+be a silent no-op on prod (`create index if not exists` skips an
+existing name and the old full index would survive). The base-table
+readers that remain (below) look up by primary key or filter on
+`created_at`, so they lose nothing.
 
 ### Performance: the filter runs before the math
 
-The chat-turn matcher (`samskara_fire_top_k`, `8507-8584`) computes a
-cosine against every claim's embedding. The requirement is that dead
-rows never reach that expression. Three facts make it hold, and the
-third is a test:
-
-1. A non-barrier view is inlined, so `deleted_at is null` becomes an
-   ordinary scan qual on the base table, evaluated per row before
-   the select list and before the order-by expression.
-2. The embedding is a 2048-float vector, stored out of line (TOAST),
-   and is only fetched when an expression touches it. A row rejected
-   by the qual never de-TOASTs its embedding.
-3. The two indexes on the table (`samskaras_user_tier_idx` on
-   `(user_id, tier)` at `7910-7911` and `samskaras_user_health_idx`
-   at `7913-7914`) are replaced by partial twins with
-   `where deleted_at is null`, so index-driven scans never visit dead
-   rows at all. The deleters' own `where deleted_at is null`
-   predicate also uses them.
+The chat-turn matcher computes a cosine against every claim's
+embedding (`samskara_fire_top_k`). The requirement is that dead rows
+never reach that expression. A view that is not a security barrier
+is inlined, so `deleted_at is null` becomes an ordinary scan qual on
+`samskaras_all`, evaluated per row before the select list and the
+order-by. The embedding is a 2048-float vector stored out of line and
+is only fetched when an expression touches it, so a row the qual
+rejects never de-TOASTs it. The partial indexes let index-driven
+scans skip dead rows entirely. (A barrier view would still apply its
+own predicate at the scan; what it blocks is pushing the OUTER
+query's non-leakproof conditions down. Nothing here is a security
+boundary, so no barrier.) No vector index exists or can: pgvector
+caps HNSW at 2000 dimensions and the repo rule is "sequential scan is
+plenty" (`1664-1668`, `7768-7774`).
 
 Acceptance: `explain (analyze, buffers)` of the fire query on the
-local stack with a few hundred soft-deleted rows forged shows the
-filter on the scan node and no row count above the live count
-reaching the sort. Marked **unverified** until that run.
+local stack with a few hundred stamped rows forged shows the filter
+on the scan node and no more rows than the live count reaching the
+sort. Marked **unverified** until that run.
 
-Growth: at about two deletions a day the base table gains roughly
-700 rows a year. The heap tuple without its TOASTed embedding is
-small; the embedding stays (the column became nullable at
-`9121-9122`, but nothing nulls it on delete, so a reaped claim's text
-and vector remain inspectable).
+Growth: about two stamped rows a day, roughly 700 a year, embeddings
+included. Dead rows keep their embedding (the column is nullable,
+`9121-9122`, but nothing nulls it) so a reaped claim stays
+inspectable.
 
-### Ordering inside schema.sql
+### Everything that names the table
 
-The file applies start to finish, and SQL-language functions are
-validated when created, so the view must exist, with every column it
-lists, before the first SQL-language function that names it. Today:
+The rule, stated in the header comment on `samskaras_all` and on the
+view, and in `docs/dev/samskara.md`: **`samskaras` is the view and
+is what you want. Name `samskaras_all` only to stamp a row, in DDL,
+or because you deliberately want dead rows, and say why in a
+comment.**
 
-- the table is created at `7866-7908`;
-- its later column additions sit at `9104-9109` (`embedding_model`,
-  `embedding_claim_holder`, `embedding_claim_expires`) and
-  `9121-9122` (`prediction_embedding drop not null`);
-- the first SQL-language reader is `samskara_fire_top_k` at `8507`
-  (`language sql` at `8520`, reference at `8539`), which is BEFORE
-  those additions.
+**Deleters (five today, each `update public.samskaras_all set
+deleted_at = now(), deleted_reason = '<reason>' where ... and
+deleted_at is null`):**
 
-So the additions at `9104-9109` and `9121-9122` move up to directly
-after the `user_id` default at `7957-7958`, the new columns and
-constraints follow them, the partial indexes replace the two at
-`7910-7914`, and the view is defined after all of that and before the
-provenance table at `7968`. `tests/schema-grants.test.ts:90-105`
-requires every view above the single grant block; this placement
-satisfies it.
-
-### Who names what
-
-The rule, written as a header comment on the table and on the view:
-**a function names `public.samskaras` only to write it, to delete
-(stamp) it, or because it deliberately wants dead rows; everything
-else names `public.samskaras_live`.**
-
-**Deleters (base table; each becomes `update ... set deleted_at =
-now(), deleted_reason = '<reason>' where ... and deleted_at is
-null`):**
-
-- `samskara_reap_dead` (`9412-9434`, delete at `9426`) -> `reap-dead`.
+- `samskara_reap_dead` (`9412-9434`, delete at `9426`) ->
+  `reap-dead`. Its distinct-users loop at `9424` stays on `samskaras`
+  (the view) and is therefore live-only with no edit.
 - `samskara_reap_untested` (`9469-9486`, delete at `9476`) ->
   `reap-probation`.
-- `samskara_evict_for_mint` (`9667-9775`, delete at `9773`) -> one of
-  the four `evict-*` reasons; the function gains a local that records
-  which tier selected the victim, and returns `(id uuid, reason
-  text)` instead of a bare uuid (drop-and-recreate; the one caller at
-  `supabase/functions/venice/agents/samskara.ts:1269-1283` reads
-  `.id` and logs the reason). Its four tier selects (`9675`, `9699`,
-  `9725`, `9751`) read the view, and so does the compound join at
-  `9754`: a dead compound's provenance now survives, and a base-table
-  join there would let a dead compound graduate its parts.
+- `samskara_evict_for_mint` (`9667-9775`, delete at `9773`) -> one
+  of the four `evict-*` reasons; the function gains a local that
+  records which tier selected the victim. **Its return type stays
+  `uuid`**: the caller's gate is `if (evictErr || !evicted)`
+  (`agents/samskara.ts:1268-1276`), and a set-returning or composite
+  return would hand back `[]` or `{id: null}`, both truthy, so "no
+  victim" would read as "evicted" and the probe would mint past the
+  cap. The reason is on the row now, which is all attribution
+  needs. The stamp uses `returning id`; if a reaper stamped the
+  chosen victim first, zero rows return and the function returns
+  null rather than reporting a victim it did not take. The four
+  tier selects and the compound join at `9754` name `samskaras` and
+  need no edit (a dead compound stops graduating its parts on its
+  own).
 - `_samskara_merge_pair` (`10139-10198`, delete at `10196`) ->
-  `merge-loser`. Its comment at `10173-10175` says the loser's
-  remaining provenance "cascade-deletes"; it no longer does, and the
-  comment is rewritten. The loser's provenance, fires that were not
-  retargeted, and control verdicts stay on the dead row.
+  `merge-loser`. It gains an early return when the loser or the
+  winner is not in `samskaras` (the view), so the helper itself is a
+  no-op on a stamped row even if two sweeps race past the caller's
+  checks at `10340-10341` and `10387-10388`. The counter fold at
+  `10191` (`from public.samskaras l`) is then live-only on its own.
+  The comment at `10173-10175` ("loser's remaining provenance
+  cascade-deletes") becomes false and is rewritten: the loser keeps
+  its own provenance copy and its control verdicts. Note what the
+  merge still destroys: it hard-deletes the loser's fires in cohorts
+  the winner shares (`10153-10164`, to avoid self-co-firing under
+  the unique constraint) and retargets the rest (`10169-10171`), so
+  no fire stays on the dead loser and the colliding fires' verdicts
+  are lost. That is the one evidence loss this plan leaves in place;
+  the winner's own verdict in the same cohort survives.
 - The compound plan's `samskara_reap_compounds` -> `reap-compound`.
 
-**Writers (base table, unchanged):** `samskara_record_fires` update at
-`8664-8672` (but see below), `samskara_claim_next_prediction_embed`
-update at `9199`, `samskara_save_prediction_embedding_if_claimed` at
-`9225`, `samskara_apply_evaluation` update at `9376`,
-`samskara_reinforce_existing` update at `10108` (gains
-`and deleted_at is null`; its existence check at `10101` reads the
-view so dedup against a dead row returns false and the claim is
-re-minted, which is what `9467-9468` promises), the merge's winner
-update at `10185`, and the edge function's mint insert
-(`agents/samskara.ts:932-945`). None uses `on conflict` on this
-table.
-
-**Readers that move to the view (every reference listed):**
-
-- `samskara_refresh_centering` `8428-8432` (centering mean over live
-  claims only).
-- `samskara_fire_top_k` `8539`.
-- `samskara_record_fires` `8652-8662` insert and `8664-8672` update:
-  both filtered through the view. Today the FK rejects a fire for a
-  claim deleted mid-turn; after this change the base table would
-  accept it, so the function must refuse it itself.
-- `samskara_claim_next_prediction_embed` `9190` (no embed calls on
-  dead rows).
-- `samskara_population_p0` `9277`.
-- `samskara_apply_evaluation` `9373` (`computed` CTE; evidence is not
-  folded into dead rows).
-- `samskara_reap_dead` `9424` (the distinct-users loop).
-- `samskara_should_regen_compound` `9890-9892`.
-- `samskara_nearest_by_prediction` `10055`.
-- `samskara_collapse_by_cofiring`: pair joins `10315-10316`, the
-  "still exists" checks at `10340-10341` and `10387-10388` (a
-  soft-deleted loser would otherwise pass and be merged twice,
-  double-folding its counters), the tier-1 count against
-  `p_target_count` at `10352-10354`, and `10364-10365`.
-- `samskara_tier2_candidate`: `10546` (`v_active`), `10606-10607`
-  (edge joins), `10630` (the join that builds existing compounds'
-  child sets; a dead compound must stop covering its region, which
-  cascade used to do for free), `10743`.
-- `samskara_search_by_prediction` `10801`.
-- `samskara_cluster_corpus` `10855`, `10866`, `10892` (all three or
-  the slider disagrees with itself).
-- `samskara_provenance_detail` `10935`: the left join to the child
-  reads the view so a dead child still renders as "(removed)"
-  (`10912-10914`). A richer "removed: reason" display is a later UI
-  change, not this plan.
-- `samskara_health_snapshot` `11016-11167`: every population count
-  (`11041`, `11043`, `11045`, `11047`, `11049`, `11054`, `11062`,
-  `11073`, `11086`, `11105`, `11108`) and both inlined p0 copies
-  (`11093-11100`, `11118-11125`). `orphan_fires` (`11154-11158`)
-  tests the base table and would read 0 forever; it is redefined as
-  "fires whose claim is deleted" (base minus view) and its comment
-  says so.
-- `intent_mint_claim_next_user` `16334`.
-- The one-time reconcile block at `9843-9858` loops distinct users
-  from the base table and calls p0; it moves to the view. The other
-  two repair blocks (`9146-9174`, `9814-9832`) touch dead rows
-  harmlessly and stay.
-
-**Readers that stay on the base table on purpose (each gets a
-comment saying why):**
+**Deliberate base-table readers (each gets a comment saying why):**
 
 - `samskara_cluster_thread_fires` `8765`, `8793`: the thread
   diagnostics modal lists every fire in a thread; a dead claim keeps
@@ -232,228 +271,324 @@ comment saying why):**
   orphan-singleton path at `8777-8785`.
 - `samskara_rates` `11203`: mint throughput counts claims later
   deleted.
-- The judge's id-keyed claim lookup (below).
+- `samskara_health_snapshot` `orphan_fires` (`11154-11158`): a true
+  orphan check, "fires whose claim row does not exist", a "merge or
+  delete bug smell" (`10990-10991`) with panel bars at 1 and 5
+  (`src/lib/ui/samskara-health.ts:39`). It names `samskaras_all` so
+  it keeps meaning what the panel thinks it means and reads 0.
+  (Rev 1 redefined it as "fires of dead claims"; that would have put
+  the panel in alarm within days.)
 
-**Functions that never touch the table** and need nothing:
-`samskara_verdict_counts`, `samskara_expire_unjudgeable_fires`,
-`samskara_sweep_users`, `samskara_associate`,
-`samskara_association_cluster`.
+**DDL and guards that name the table by necessity:** the rename
+block, the create table, the three child-table FKs
+(`references public.samskaras_all(id)` at `7969`, `8010`, `8153`),
+the int-to-real guard, the policies, the index statements and the
+realtime guard. The three one-time repair blocks at `9146-9174`,
+`9814-9832`, `9843-9858` keep naming `samskaras` and so write through
+the view to live rows only, which is what they should do: the
+reconcile block (`9850-9853`) would otherwise rewrite every dead
+row's health-at-death on every deploy.
+
+**Functions that never touch the table:** `samskara_verdict_counts`,
+`samskara_expire_unjudgeable_fires`, `samskara_sweep_users`,
+`samskara_associate`, `samskara_association_cluster`.
 
 ### Child tables keep their rows: what changes meaning
 
-- **Fires of a claim deleted after it fired are now judged.** The
-  judge looks the fired claims up by id (`agents/samskara_evaluation.ts:501-504`);
-  that lookup reads the base table so the prediction text is found,
-  the verdict is written to the fire row (`:628`), and
-  `samskara_apply_evaluation` skips the dead row through its
-  `computed` CTE. History is complete, nothing dead is reinforced,
-  and `fires_awaiting_judgment` does not inflate. Cost: a claim
-  deleted in the day between firing and judgment (about 1-2% of
-  fires at two deletions a day) adds one entry to a judge batch.
-- **The control sample stays live** (`:364-368` reads the view): a
-  control must be fire-eligible.
-- **Collapse and tier-2 detection** join fires to the view, so dead
-  claims' fires drop out of pair enumeration (`10297-10316`,
-  `10593-10607`). The tier-2 lift denominator `v_cohorts`
-  (`10556-10558`) counts cohorts, not claims, and keeps cohorts in
-  which only dead claims fired; that counts turns, which is the
-  intended denominator, and shifts lift values slightly downward on
-  the day of deploy. Accepted and recorded in PREDICTED EFFECTS.
-- **Eviction and probation guards** that look for pending fires of an
-  already-chosen claim (`9481`, `9682-9714`, `9762`; snapshot
-  `11059-11084`, `11115`) are keyed on live ids and need nothing.
-- **The browser's two embeds through the fires table**
-  (`src/lib/supabase/samskara.ts:204-210` mood pill, `250-256` cohort
-  fires list) go through the FK and would return dead claims. The
-  mood pill adds a filter on the embedded claim's `deleted_at`
-  (PostgREST supports filtering an `!inner` embed's columns). The
-  cohort list WANTS dead claims: it is history, and
-  `CohortPanel.svelte:222` already renders "samskara deleted since
-  fire" when the embed is null. The embed gains `deleted_at` and
-  `deleted_reason`, the row type (`types/samskara.ts:158-165`) gains
-  them, and the label condition moves from "embed is null" to
-  "deleted_at is set" through a primitive in `src/lib/ui/` (the
-  component stays glue). This is a user-visible change and
-  `docs/user/samskara.md` names it.
+- **Fires of a claim stamped after it fired are not judged.** The
+  judge looks fired claims up through `samskaras`
+  (`samskara_evaluation.ts:501-504`), so a dead claim's fires drop
+  out of the batch, as they do today. Rev 1 wanted them judged for
+  completeness; the lens pass showed the judge re-rules every claim
+  that ever fired in a thread on every settle (`465-468`), so dead
+  entries would ride along forever and grow long threads' batches
+  without bound. The pending fires of a dead claim are stamped by
+  clause (2) of the expiry function (`9589-9590`) as today. What is
+  lost: verdicts for the one or two fires a day that were pending
+  when their claim died. Accepted.
+- **The control sample stays live** (`364-368`, through the view).
+- **Collapse and tier-2 detection** join fires to `samskaras` and so
+  exclude dead claims' fires from pair enumeration (`10315-10316`,
+  `10606-10607`); the existence checks at `10340-10341` and
+  `10387-10388` and the tier-2 coverage join at `10630` are live-only
+  the same way, so a dead compound stops covering its region, which
+  cascade used to do for free. The collapse's self-join on
+  `samskara_fires` (`10297-10303`) runs before that filter and now
+  carries dead claims' fires in its input; at two deletions a day
+  that is a slow growth on the table whose autovacuum is already
+  tuned (`8021-8035`). Recorded in PREDICTED EFFECTS.
+- The tier-2 lift denominator `v_cohorts` (`10556-10558`) counts
+  cohorts and keeps cohorts in which only dead claims fired; that
+  counts turns, which is the intended denominator, and shifts lift
+  slightly downward on deploy day.
+- **Eviction and probation guards** keyed on an already-chosen live
+  id (`9481`, `9682-9714`, `9762`; snapshot `11059-11084`, `11115`)
+  need nothing.
+- **The browser's two embeds through the fires table** (`204-210`,
+  `250-256`) now embed the view. PostgREST infers a view's
+  relationships from its base table's foreign keys, so
+  `samskaras!inner(...)` keeps working and drops dead claims (mood
+  pill), and the plain embed returns null for a dead claim, which
+  `CohortPanel.svelte:221-222` already renders as "samskara deleted
+  since fire". That branch has been unreachable under cascade; it
+  becomes live. No browser code changes. The comment at
+  `types/samskara.ts:156-157` is corrected. A "deleted: reason"
+  display is a later nicety, not this plan. PostgREST embedding
+  through a view is **unverified** here; the mood-pill filter on an
+  embedded column (`.not('samskaras.valence', 'is', null)`, `207`)
+  shows embed filtering works, and the local-stack run covers the
+  view case.
+- **A fire landing on a dead claim.** `samskara_record_fires` inserts
+  the cohort in one statement (`8652-8662`); today the FK rejects
+  the whole cohort if any claim was deleted mid-turn. After the
+  change the FK (on `samskaras_all`) accepts it. The insert must
+  take its ids through a join on `samskaras` so a stamped id is
+  dropped, not the cohort (**verify at build** whether the statement
+  already joins the table or inserts from `unnest` alone). A stamp
+  that commits after the statement's snapshot can still land one
+  fire on a dead claim; the judge ignores it and the expiry stamps
+  it. Accepted.
+- **History is complete except through two paths**: the merge's
+  colliding-fire delete above, and thread deletion, which cascades
+  fires and control verdicts by `thread_id` (`8011`, `8152`;
+  `src/lib/supabase/threads.ts:760-779`). Both are stated in the dev
+  doc.
 
 ### The RLS delete policy
 
 `"samskaras self-deletable"` at `7947-7949` lets a signed-in client
 hard-delete its own claims. No UI or facade path uses it
-(`SamskaraBrowseList.svelte:9` says read-only; `src/lib/supabase.ts:1648-1751`
-exposes no delete). It is dropped (`drop policy if exists`) so the
-only way a claim leaves is a stamp. Insert, update and select
-policies stay (`7935-7945`).
+(`SamskaraBrowseList.svelte:9` says read-only by design;
+`src/lib/supabase.ts:1648-1751` exposes no delete; the dev doc records
+the stance, `samskara.md:2169-2171`). It is dropped. The update policy
+stays, so a client could in principle write `deleted_at` back to
+null; there is no client path and the invariant is "no client path",
+not "impossible".
 
-### Accessor modules
+### No accessor module
 
-Two runtimes, two modules; the `$shared` alias
-(`vite.config.ts:51-59`) is restricted to code without a Supabase
-client, so only the two name constants could be shared and that is
-not worth an import.
-
-- **Browser:** `src/lib/supabase/samskara.ts` already is the data
-  module for this feature (every browser read of the table lives in
-  it, `373-377`, `440-447`, plus the two embeds). It gets the
-  module-level doc comment and its two direct reads move to the view.
-  No new file.
-- **Edge:** a new `supabase/functions/venice/agents/_samskara_data.ts`
-  (underscore prefix is the local convention for shared helpers,
-  e.g. `_curation_helpers.ts`, `_accumulator.ts`) with the doc
-  comment and one function per call-site shape, named by intent:
-  the mint insert (`samskara.ts:932-945`), the live tier-1 count
-  (`1237-1241`, the cap gate - it MUST count the view or the cap
-  never frees), the top live claims for the compound summary
-  (`1807-1813`), the live control pool (`samskara_evaluation.ts:364-368`),
-  the id-keyed lookup INCLUDING deleted rows for the judge
-  (`501-504`, named so the inclusion is visible at the call site),
-  the live valence map (`intent.ts:392-395`) and the top live claims
-  for the intent minter (`512-517`). The Deno fake client in
-  `supabase/functions/tests/samskara.test.ts:250-268` checks
-  `table === 'samskaras'` and is updated per shape.
-
-The doc comment on each module says, in a form grep finds: this is
-the data module that wraps access to the samskara tables; reads of
-living claims go through `samskaras_live`; the base table is named
-only to insert, and in one place to read deleted rows for the judge.
-
-Per the owner's call, there is no guardrail test on the app side.
+Rev 1 proposed a data module per runtime to centralize the ten app
+call sites. Under the rename those sites are correct as written and
+the name `samskaras` is safe by default, so a module would be a
+refactor with no behavior to carry. Instead: the header comment on
+the view and on `samskaras_all` state the rule; `docs/dev/samskara.md`
+gets a "Soft deletion" section written to be found by grep; and
+`src/lib/supabase/samskara.ts`, which already is the browser's data
+module for this feature, gets a module-level note. The one place an
+edge function should name `samskaras_all` is none today.
 
 ### The one guard: a schema test
 
 `tests/schema-live-view.test.ts`, modelled on
-`tests/ordering-guardrail.test.ts` (walks sources, matches a pattern,
-reports `file:line`, and pins known counts so the scan cannot go
-blind): split `schema.sql` into function bodies, and assert that a
-body naming `public.samskaras` (not `_live`) belongs to an allowlist
-(the five deleters, the writers, the three deliberate base readers,
-the view definition and the repair blocks). It also asserts the view
-is defined above the first `language sql` function that names it.
-A missed reader on the SQL side is silent and breaks the cap count;
-this is the one place the plan keeps a test over a comment.
+`tests/ordering-guardrail.test.ts` (walks sources, matches, reports
+`file:line`, pins known counts so the scan cannot go blind). It
+splits `schema.sql` into statements and dollar-quoted bodies
+(`$$`, `$q$`, `$job$`, `$fn$`, `$repair$`, `$reconcile$` and the
+rest) and asserts:
 
-### Deploy ordering
+- every token matching `samskaras\w*` is exactly `samskaras` or
+  `samskaras_all` (a typo like `samskara_live` would otherwise pass
+  silently and fail only at call time in plpgsql);
+- every body or statement naming `samskaras_all` is in the allowlist
+  (the rename block, the create table, the index and policy and
+  guard statements, the child-table FKs, the five deleters, the three
+  history readers);
+- the view is created after the last `alter table
+  public.samskaras_all` and before the first `language sql` function
+  that names `samskaras`;
+- the counts of each class are pinned.
+
+`tests/schema-dml-columns.test.ts:226-235` fails on DML whose target
+is not a `create table` name; writes through the view are exactly
+that. The test learns that a view defined as `select * from X`
+resolves to X's columns (a small addition, in the same change).
+
+### Deploy
 
 The deploy applies the schema (`.github/workflows/deploy.yml:59`)
-before it deploys the edge functions (`:79`). In the minutes between,
-the old edge code still reads the base table; if the `:13` reapers
-stamp a row in that window, the old mint gate over-counts by that
-row for a few minutes. The SQL side switches atomically. Accepted.
+before it deploys the edge functions (`:79`), and the browser build
+after that. Because the view keeps the name, old edge code and old
+cached PWA clients are live-only from the moment the schema commits;
+there is no window in which the cap over-counts or the corpus browse
+lists dead rows. The remaining gap is PostgREST's schema cache: it
+reloads on DDL, and until it does, requests that embed through
+`samskaras` may use the cached table relationship. PostgREST builds
+its SQL by name, so those requests should still resolve against the
+view; **unverified**. The two embeds that could notice both swallow
+errors into "no mood pill" and "no fire list" for that request.
+
+If the edge deploy step fails after the schema step succeeds, old edge
+code keeps running against the new schema; under this design that is
+correct behavior, not a degraded one.
 
 ### Attribution, for the compound plan
 
-`deleted_reason` is the eviction attribution the compound plan's
-M1.3 wanted from a log line, and `deleted_at` on a compound with
-`reason = 'reap-compound'` plus its surviving provenance IS the
-tombstone its M1.2 built out of the decline ledger. After this plan
-lands, M1.2 drops the `reason` column on `samskara_tier2_declines`,
-the group-key format, the distinct-on and the no-provenance path, and
-the candidate finder's 90-day one-shared-id test reads dead compounds
-with that reason from the base table. The verdict archive is
-superseded. The compound plan is revised after this one converges.
+`deleted_reason` is the eviction attribution the compound plan's M1.3
+wanted from a log line, and a compound row with `deleted_reason =
+'reap-compound'` plus its surviving provenance IS the tombstone its
+M1.2 built out of the decline ledger. After this plan lands, M1.2
+drops the `reason` column on `samskara_tier2_declines`, the group-key
+format, the distinct-on and the no-provenance path; the candidate
+finder's 90-day one-shared-id test reads `samskaras_all` for dead
+compounds with that reason; and M1.3's evictor return-type change is
+withdrawn. The verdict archive is superseded. The compound plan is
+revised after this one converges.
 
 ## DECISIONS
 
 - **Stamp, do not move.** No archive table, no trigger. The row
-  stays, with its embedding; readers choose live or all.
-- **A view, not a where-clause in 24 places.** Swapping a name is
-  mechanical; inserting a predicate into 24 different CTE shapes is
-  where a miss hides. The view also gives a future function a name
-  that is safe by default.
-- **Invoker security, no barrier.** For RLS parity and for predicate
-  pushdown.
-- **Explicit view columns.** Shape under control; the cost is one
-  line per future column.
-- **Judge fires of dead claims.** History wins; the evidence
-  application already skips dead rows, so nothing is reinforced.
-- **Cohort history shows dead claims as deleted, with the reason.**
-  Mood pill stays live-only.
-- **Drop the client delete policy.** No caller; keeps the invariant.
-- **Replace the two indexes with partial twins** rather than adding
-  two more; every hot path filters live, and the two base-table
-  readers that do not are a thread-keyed diagnostic and a windowed
-  count.
-- **Deleted rows keep their embedding.** 700 rows a year, out of
-  line; inspectable later; nothing to null.
-- **No app-side guardrail test**, per the owner. One schema-side
-  test, because that miss is silent.
+  stays, with its embedding; readers choose the view or the table.
+- **The view takes the old name.** Every reader and writer is
+  live-only by default, now and for every future function. The cost
+  is about twenty DDL lines renamed, one schema test taught about
+  views, and a name that means "view" in bodies and "nothing" in DDL,
+  which the header comments carry.
+- **Invoker security, no barrier, `select *`, drop-then-create each
+  apply**, with the drop placed before the table DDL so column type
+  changes stay possible.
+- **Evictor keeps returning `uuid`.** The caller's null gate depends
+  on it; the reason lives on the row.
+- **Fires of dead claims are not judged.** Re-judging whole threads
+  would carry dead entries forever.
+- **Cohort history shows a dead claim as deleted; mood pill stays
+  live.** Both fall out of embedding the view; no UI change.
+- **Drop the client delete policy.** No caller; the merge and the
+  reapers stamp through updates the update policy already covers.
+- **Partial indexes under new names**, old ones dropped by name.
+- **No reason check constraint.** Internal writers; a list in a
+  comment; extensible without a drop-then-add dance.
+- **No accessor module.** Nothing to carry under the rename.
+- **One schema-side test, no app-side test**, per the owner.
+- **Keep the three FKs on cascade.** A hard delete should still take
+  its children, so leftover QA cleanup SQL and a future admin delete
+  behave as today; the point of the plan is that production code no
+  longer hard-deletes.
 
 ## ACCEPTANCE CRITERIA
 
-- Gate green: the schema test, the Deno accessor tests, the existing
-  schema-grants and schema-dml-columns tests.
+- Gate green: the new schema test, the two existing schema tests
+  (grants; DML columns with the view mapping), the Deno suite (the
+  fake client in `supabase/functions/tests/samskara.test.ts:250-268`
+  keys on `'samskaras'`, which is still what `insertMint` names).
 - Local stack, in a rollback transaction, against the CHANGED
-  functions: every deleter leaves the row with a stamp and the right
-  reason; fires, provenance and control verdicts of the stamped row
-  are still present; `samskaras_live` does not return it; the fire
-  query, the nearest-by-prediction dedup, the collapse pair
+  functions: each deleter leaves the row in `samskaras_all` with a
+  stamp and the right reason; its fires, provenance and control
+  verdicts are still present; `samskaras` does not return it; the
+  fire query, the dedup nearest-neighbor, the collapse pair
   enumeration, the tier-2 coverage set and the graduation tier all
-  ignore it; the cap count equals the live count; a merge of an
-  already-stamped loser is a no-op.
+  ignore it; the cap count equals the live count; `insert ...
+  returning id` and `update ... from` through the view work (or the
+  fallback named above is applied); `_samskara_merge_pair` on a
+  stamped loser returns without touching fires, provenance or the
+  winner's counters; the evictor returns null when its chosen victim
+  was stamped first.
 - The EXPLAIN check in the performance section.
-- Prod, after deploy: `select count(*) from samskaras_live` equals
-  the pre-deploy table count; the health panel's numbers are
-  unchanged on the first read; within a day, stamped rows appear
-  with reasons spread across the eviction tiers and the reapers; no
-  fire-record FK errors; the cohort panel shows "deleted since fire"
-  with a reason for a claim that fired and was later stamped.
+- A fresh local database built from the changed file has the same
+  schema as prod after the deploy (`pg_dump --schema-only` diff,
+  ignoring ownership). This is the test that the rename-or-create
+  ordering is right for both the existing database and a fresh one.
+- Prod, after deploy: `select count(*) from samskaras` equals the
+  pre-deploy table count; the health panel's numbers are unchanged
+  on the first read; within a day, stamped rows appear with reasons
+  spread across the eviction tiers and the reapers; no fire-record
+  errors in the function log; the cohort panel shows "deleted since
+  fire" for a claim that fired and was later stamped.
 
 ## PREDICTED EFFECTS
 
 No behavior change is intended. What does move:
 
-- The judge sees one or two extra entries a day (fires of claims
-  deleted since). Verdicts on fires of dead claims appear in
-  `samskara_fires` for the first time.
 - Tier-2 lift values dip slightly on deploy day as cohorts of
   dead-only fires stay in the denominator; no compound should cross
-  the band because of it, check the candidate finder's output that
+  the band because of it; check the candidate finder's output that
   week.
-- `orphan_fires` on the panel changes meaning and starts counting
-  up at the deletion rate.
-- `samskara_rates` mint counts include later-deleted claims; the
-  number will read a little higher than before for the same window.
-- Base table grows about two rows a day.
+- `samskara_rates` counts fires, resolutions and the verdict mix from
+  `samskara_fires` (`11195-11215`); these now include fires of claims
+  deleted inside the window, where before they vanished with the
+  claim. `fires_total` on the snapshot (`11145-11146`) climbs where
+  it used to drop. The mint count includes later-deleted claims.
+- The collapse's fires self-join input grows by dead claims' fires,
+  about two claims' worth a day.
+- `samskaras_all` grows about two rows a day. `samskaras` (the view)
+  holds steady at the cap.
+- On a future embedding-model rotation the repair block nulls
+  bad-shape vectors through the view, so dead rows keep vectors of
+  the old shape; `samskara_cluster_thread_fires` then treats them as
+  orphan singletons (`8777-8785`). Cosmetic, in a diagnostic.
 
-Measure at day seven: the deleted-reason histogram (this is the first
-time evictions are attributable), the live count against the cap,
-the judge's batch sizes, and an EXPLAIN of the fire query on prod
-(read-only) to confirm the partial index is used.
+Measure at day seven: the `deleted_reason` histogram (the first time
+evictions are attributable), the live count against the cap, and an
+EXPLAIN of the fire query on prod (read-only) to confirm the partial
+index is used.
 
 ## VALIDATION
 
 Before the change, run and log (QA rules: baseline first):
-`samskara-cap-eviction.md`, `samskara-decay.md`,
-`samskara-tier2-mint.md`, and the cohort-panel steps of whichever
-use-case covers it. After the change, re-run and log. A new
-`docs/qa/use-cases/samskara-soft-delete.md` covers: stamp through
-each deleter, the live view, the history that survives, the cohort
-label, and the EXPLAIN.
+`samskara-cap-eviction.md`, `samskara-decay.md` (its step at `:106`
+expects a reaped row to be absent; after the change it is present in
+`samskaras_all` with a stamp and absent from `samskaras`, and the
+step is rewritten to say so), `samskara-tier2-mint.md`, and the
+cohort-panel steps of the use-case that covers the diagnostics
+modal. After the change, re-run and log. QA docs that count the base
+table and now need to say which name they mean:
+`samskara-association-mint.md:74`, `samskara-tier2-mint.md:76`,
+`samskara-formation.md:35`, `intent-mint-pipeline.md:40`. QA cleanup
+steps that hard-delete (`samskara-association-mint.md:138`,
+`samskara-tier2-mint.md:217`) still work through the cascade and
+say that they bypass the stamp.
+
+A new `docs/qa/use-cases/samskara-soft-delete.md` covers: stamp
+through each deleter, the view, the history that survives, the
+cohort label, the schema-dump diff, and the EXPLAIN.
 
 Docs in the same change: `docs/dev/samskara.md` (data model gains
-the two columns and the view; "Decay" says every release path stamps;
-the "who names what" rule); the audit skill's queries count the view
-or filter `deleted_at`; `docs/user/samskara.md` (cohort label);
-`docs/dev/planned-changes.md`.
+the rename, the two columns and the view; "Decay" says every release
+path stamps; a "Soft deletion" section with the naming rule and the
+two remaining evidence-loss paths; the control-verdict "same
+lifecycle" sentence at `544-545` and the schema comment at
+`8147-8148` rewritten); the audit skill's queries say which name they
+count; `docs/dev/planned-changes.md`; `docs/user/samskara.md` only if
+the cohort label is considered new (it is existing copy that becomes
+reachable; one sentence).
 
 ## ACCEPTED RISKS
 
-- **A future function reads the base table by habit.** The schema
-  test catches it in the gate; the header comments say why.
-- **PostgREST filtering on an embedded column** for the mood pill is
-  standard but unverified here; if it does not work the pill reads
-  the view through a second query. Marked unverified.
-- **The old-edge-code window on deploy** over-counts the cap by at
-  most the rows stamped in those minutes.
-- **Explicit view columns drift from the table.** A new base column
-  that a reader needs must be added to the view in the same change;
-  the schema test does not catch a missing column, the function's
-  own failure at apply time does (SQL-language functions) or at call
-  time (plpgsql).
+- **A future function names `samskaras_all` by habit.** The schema
+  test's allowlist catches it in the gate; the header comments say
+  why.
+- **`update ... from` and `insert ... returning` through the view**
+  are standard for automatically updatable views but unverified
+  here; the fallback is to name `samskaras_all` with an explicit
+  predicate in the two places that use them.
+- **PostgREST embedding through the view and its schema-cache
+  reload** are unverified here; the two embeds that depend on them
+  swallow errors for the affected request.
+- **A client can un-stamp** through the update policy. No client
+  path exists.
+- **The merge still deletes colliding fires**, and thread deletion
+  still cascades fires and control verdicts. Stated in the dev doc.
+- **One or two fires a day lose their verdict** when their claim is
+  stamped before the judge runs.
 
 ## REVISION LOG
 
 - rev 1 (2026-10-23): draft from two read-only inventories (SQL:
-  133 references in `schema.sql`, every function classified; app:
-  ten direct reads, two embeds, no UI delete path, two-runtime
-  accessor).
+  131 code references in `schema.sql`, every function classified;
+  app: ten direct reads, two embeds, no UI delete path).
+- rev 2 (2026-10-23): after the lens fan-out. Design changed from a
+  new-name view with 34 edited call sites to the view taking the old
+  name over a renamed table; accessor modules withdrawn; evictor
+  return type kept as `uuid` (a set or composite return would read
+  "no victim" as truthy and mint past the cap); `orphan_fires` kept
+  as a true-orphan check against the base table (the redefinition
+  would have held the panel in alarm); merge helper gains its own
+  liveness guard (its fold read the loser from the base table, a
+  site rev 1 missed); fires of dead claims no longer judged (the
+  judge re-rules whole threads on every settle); partial indexes
+  under new names; no reason check constraint; view dropped before
+  the table DDL and created after it, `select *`; DML-columns test
+  taught about views; schema-dump diff added as acceptance; rates
+  and fires_total meaning changes, the collapse join growth, the
+  thread-deletion cascade and the merge's colliding-fire delete
+  recorded; QA docs that count the table enumerated; rev 1's wrong
+  sentence about fires staying on a merged loser removed.
