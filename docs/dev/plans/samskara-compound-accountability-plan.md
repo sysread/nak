@@ -1,8 +1,8 @@
 # Samskara Compound Accountability Plan
 
-Status: DRAFT rev 2 (2026-10-23), after the deep-mode lens fan-out
-(hidden problems, safe-to-modify, archaeology, alternatives); awaiting
-the first fresh-context consensus round. Revision log at the end.
+Status: DRAFT rev 3 (2026-10-23), after the lens fan-out and one
+fresh-context consensus round; awaiting the second (and, for a
+personal project, final) round. Revision log at the end.
 Source: the 2026-10-22 audit and its 2026-10-23 correction
 (`docs/qa/use-cases/samskara-cap-eviction.md`,
 `samskara-tier2-mint.md`, `samskara-decay.md`; the "Oct 22" and
@@ -106,7 +106,9 @@ Three mechanisms, each with a citation:
    test first multiplies both tallies by `d = 0.5^(1/10) = 0.933`
    (`9337-9338`), so n consecutive holds sum to `(1 - d^n)/(1 - d)`:
    three holds are 2.80, four are 3.62, eight are 6.36, eleven are
-   7.97, and the ceiling is about 14.4. At a tally of 3.0 the prior
+   7.97, and the ceiling is 1/(1-d) = 14.9 (the SQL comment at
+   `9404` says 14.4; it is corrected in M1.3). At a tally of 3.0 the
+   prior
    carries 5/8 = 62% of the estimate, and four good days make a
    compound "established" forever, because the delete is permanent.
 3. **Coverage is set-overlap over possibly-dead ids.** The candidate
@@ -134,20 +136,30 @@ code M1 touches).**
   `src/lib/ui/samskara-health` primitives; a misspelled snake_case key
   in the mapper reads as 0 on the panel and nothing fails. The new
   column lands only after this test exists.
-- A pure `tier2GroupKey(ids)` helper in `samskara.ts`, used by the
-  decline writer at `1678-1686`, pinned by a Deno test (today no test
-  covers the writer; `supabase/functions/tests` has no mention of
+- A pure `tier2GroupKey(ids)` helper in
+  `supabase/functions/venice/agents/samskara.ts`, used by the decline
+  writer at `1678-1686`, pinned by a Deno test in
+  `supabase/functions/tests/samskara.test.ts` (today no test covers
+  the writer; `supabase/functions/tests` has no mention of
   `tier2_declines`). The SQL tombstone (M1.2) copies this format:
   ids sorted as text under `collate "C"`, joined with `,`, which is
   what JavaScript's default sort produces for lowercase hex uuids.
 - The graduation predicate moves into one shared SQL helper,
-  `_samskara_graduation_candidates(p_user_id uuid, p_p0 real)`
-  (security invoker, returns the eligible part ids in eviction
-  order), called by `samskara_evict_for_mint` with
-  `samskara_population_p0(user)` and by `samskara_health_snapshot`
-  with its inlined `auth.uid()`-scoped p0 (the pattern at
-  `schema.sql:11089-11100`; `samskara_population_p0` is service-role
-  only, `9280`). The predicate is hand-copied in two places today
+  `_samskara_graduation_candidates(p_user_id uuid, p_p0 real)`,
+  security invoker, returning `(id uuid, rank int)` - a rank column,
+  because a set-returning function's row order does not survive a
+  caller's `limit 1`; the evictor takes the minimum rank. Called by
+  `samskara_evict_for_mint` with `samskara_population_p0(user)` and
+  by `samskara_health_snapshot` with its inlined `auth.uid()`-scoped
+  p0 (the pattern at `schema.sql:11089-11100`;
+  `samskara_population_p0` is service-role only, `9280`). Grants:
+  execute to `authenticated` AND `service_role` (the snapshot runs as
+  the signed-in user; the usual revoke-from-authenticated pattern
+  would break it). Under invoker security the helper sees only rows
+  the caller's RLS allows; the self-select policies on `samskaras`,
+  `samskara_provenance` (`7751-7753`) and `samskara_fires`
+  (`7890-7892`) cover the owner (verify the `samskaras` policy at
+  build time). The predicate is hand-copied in two places today
   (`9750-9768` and `11101-11125`); the anchor rule below is a ranked
   pick, which makes drift between copies likelier.
 
@@ -173,39 +185,52 @@ code M1 touches).**
   the coverage guard still sees a live id, and a reaped compound's
   region keeps a live anchor to resume from. Both texts are rewritten.
 
-Ordering within the tier is unchanged: least-tally part first, then
-strongest compound, then oldest.
+Ordering within the tier: least-tally part first, then the highest
+tally among the part's parent compounds (a part can have several
+parents, so "strongest compound" needs an aggregate), then oldest.
 
 **M1.2 Compound reap.** A new SQL function,
 `samskara_reap_compounds(p_bar_ratio real default 0.85, p_min_tally
-real default 2.0)` returning the count, scheduled as its OWN cron job
-(`nak-samskara-reap-compounds`, `14 * * * *`), not appended to the
-`:13` statement at `schema.sql:15757-15758`. Reason: that statement is
+real default 1.9)` returning the count, `security definer`, with the
+same grant block every reaper carries: drop the function if it
+exists, revoke all from public, anon and authenticated, and grant
+execute to the service role only (as `samskara_reap_dead` does at
+`9436-9437`). This
+is not optional: a new function is executable by `anon` and
+`authenticated` by default, and this one deletes across every user
+with caller-supplied thresholds. It is scheduled as its OWN cron job
+(`nak-samskara-reap-compounds`, `14 * * * *`, minute 14 is free),
+written as the same guarded block the `:13` job uses (`15745-15763`:
+skip without pg_cron, unschedule if present, schedule), not appended
+to the `:13` statement at `15757-15758`. Reason: that statement is
 one transaction, so a raise in the new function would roll back the
 fire expiry and both existing reapers every hour; a separate job
 fails alone and shows its own failure in `cron.job_run_details`.
 
-Per user: delete tier-2 rows with `health < p_bar_ratio *
-samskara_population_p0(user_id)` and `confirm_count + disconfirm_count
->= p_min_tally`. No quiet-day clause and no pending-fire guard: this
+Per user: delete tier-2 rows whose health is below p_bar_ratio times
+that user's p0 and whose tally (confirm plus disconfirm) is at or
+above p_min_tally. No quiet-day clause and no pending-fire guard: this
 deliberately reverses the dead reaper's "never reap mid-re-evaluation"
 intent for compounds only, for the reason in ROOT CAUSE 1, and
 matches what the tier-1 underperformer tier already does (`9719-9728`,
 guard dropped on purpose). The tally floor is new in rev 2. With the
 prior strength at 5 and p0 at 0.87, the bar health < 0.85 x p0 works
 out to m > 0.354 c + 0.882 in tally units (m = miss mass, c = hold
-mass), so a single contradiction with no holds (health
-0.724) would reap a compound on its first genuine verdict. The 2.0
-floor means at least two contradictions, or one plus four soft
-misses, or eight soft misses, before deletion. The four under-bar
-compounds today carry tallies 4.0 / 2.5 / 3.9 / 4.8 and all qualify.
-The dev doc's "roughly two full contradictions' worth" at
-`samskara.md` ("Release of never-tested claims") and the SQL header
-at `schema.sql:9646-9649` state the arithmetic wrong; both are
-corrected.
+mass), so a single contradiction with no holds (health 0.724) would
+reap a compound on its first genuine verdict. The floor is 1.9, in
+discounted units: two consecutive contradictions sum to 1 + d = 1.93
+and clear it; one contradiction plus four soft misses (1.66) and
+eight soft misses (1.59) do not; about eleven soft misses do. The
+four under-bar compounds today carry tallies 4.0 / 2.5 / 3.9 / 4.8
+and all qualify. Two existing texts state this arithmetic wrong and
+are corrected: the dev doc's claim of roughly two full contradictions
+worth of misses in `samskara.md` ("Release of never-tested claims"),
+and the SQL header at `schema.sql:9646-9649`.
 
 Before deleting, the function writes a *tombstone* into
-`samskara_tier2_declines` (`schema.sql:7732-7738`):
+`samskara_tier2_declines` (`schema.sql:7732-7738`), reading the
+provenance BEFORE the delete (provenance cascades with the compound,
+`7969`):
 
 - `group_key` = the compound's child ids from provenance, sorted as
   text `collate "C"`, joined with `,` (the writer's format via
@@ -236,12 +261,16 @@ TTL is also what clears dead child ids out of the Jaccard denominator
 `v_reap_ttl = 90 days`, in the candidate finder's decline read
 (`10647-10651`: declined within 7 days, OR reaped within 90). Within
 that window the finder treats a candidate group as covered when it
-shares **two or more ids** with any reaped row, in addition to the
+shares **one or more ids** with any reaped row, in addition to the
 Jaccard test. Jaccard alone does not protect a reaped region: two
 living parts plus three new neighbours score 2/7 against a four-child
 tombstone and pass, and the co-fire edges already exist, so a sibling
-could mint at the very next sweep. The two-shared-ids rule is scoped
-to reaped rows only; M3 handles existing compounds.
+could mint at the very next sweep. Two shared ids is not enough
+either, because a reaped compound often has exactly one living part
+left (its anchor), so the test is one. The effect on that part: it
+fires on its own again, but cannot be compounded for 90 days. The
+one-shared-id rule is scoped to reaped rows only; M3 handles existing
+compounds.
 
 What the reap does to the rest: fires and control verdicts of the
 deleted compound cascade away (FKs at `schema.sql:8010` and
@@ -252,25 +281,34 @@ bar a little each time; that ratchet is small per reap and is
 documented rather than engineered around.
 
 **M1.3 Observability, comments, docs.** Snapshot gains
-`compounds_under_bar int` (tier-2 rows under 0.85 x inlined p0),
-mapped and shown beside the four eviction pools
+`compounds_under_bar int` (tier-2 rows under 0.85 x inlined p0 AND at
+or above the 1.9 tally floor - it mirrors the reaper exactly, or the
+panel shows a count that never drains), mapped and shown beside the
+four eviction pools
 (`src/components/SamskaraHealthPanel.svelte:288-290`,
 `src/lib/supabase/types/samskara.ts:73`, `src/lib/supabase/samskara.ts:535`).
 Comments that become false and are rewritten in the same change: the
 parent-wins comment that names `samskara_reap_dead` as the compound's
 exit (`schema.sql:8558-8561`, and `samskara.md` "Fire ranking formula");
-the graduation header (`9735-9749`); the declines table comment
-(`7716-7731`) and the candidate finder's TTL comments (`10637-10642`);
+the graduation header (`9735-9749`); the "two full contradictions"
+arithmetic in the evictor header (`9646-9649`) and the 14.4 ceiling at
+`9404`; the declines table comment (`7716-7731`), the candidate
+finder's preamble (about `10475`) and its TTL comments (`10637-10642`);
+the snapshot's header comment listing its columns (`10990-11010`);
 the "three tiers" panel comment (`SamskaraHealthPanel.svelte:274-282`);
 the "deliberate omission" comment in `src/lib/ui/samskara-browse.ts:219-228`
 (gains the fourth tier and the compound reap); the types comment at
-`types/samskara.ts:67-72` (says 3.0). Docs: `samskara.md` ("Release
-of never-tested claims" gains the floor rules; "Decay" gains a
-"Compound reap" paragraph; the tier-2 gotcha is rewritten);
+`types/samskara.ts:67-72` (says 3.0); the audit skill
+(`.claude/skills/samskara-audit/SKILL.md:120-140`, which hand-runs the
+3.0 predicate and names the no-exit gap). Docs: `samskara.md`
+("Release of never-tested claims" gains the floor rules; "Decay" gains
+a "Compound reap" paragraph; "Tier-2 detection formula" gains the
+90-day and one-shared-id rules; the tier-2 gotcha is rewritten);
 `planned-changes.md` records M1 shipped; `docs/user/samskara.md`
 names the new panel number; QA: `samskara-cap-eviction.md` step 3b
-becomes three sub-cases (below) and `samskara-decay.md` gains a reap
-step.
+becomes three sub-cases (below), `samskara-decay.md` gains a reap
+step, and `samskara-tier2-mint.md` gets a before/after pass because
+the candidate finder's coverage behavior changes.
 
 ### M2 - The compound minter declines when it should
 
@@ -331,9 +369,14 @@ that exists is not mistaken for it.
   reaped compound whose parts are all dead can only re-form after new
   tier-1 claims form from substrate and co-fire ten times, which takes
   weeks and is accepted (see risks).
-- **Reap bar 0.85 x p0 with tally >= 2.0.** The bar matches tier-1's
+- **Reap bar 0.85 x p0 with tally >= 1.9.** The bar matches tier-1's
   underperformer tier; the floor stops a single contradiction from
-  deleting a compound.
+  deleting a compound and admits two.
+- **A reaped region is not re-compounded for 90 days, even around
+  its anchor.** The anchor exists so the part keeps firing alone and
+  parent-wins and coverage keep a live id; it does not exist to seed
+  a replacement compound. So the tombstone test is "shares one or
+  more ids", which the anchor case needs.
 - **Graduation tally 6.0 (discounted units), all parents, one
   anchor.** Chosen over pausing graduation outright: pausing re-pins
   the cap with nothing freeing slots, and the tier-1 evict gate
@@ -364,8 +407,8 @@ M1, verified on prod after deploy and at the next scheduled audit:
 - `evictable_graduated` on the snapshot equals the hand-run predicate
   (the shared helper makes this a tautology; the check is that the
   snapshot calls it).
-- Within 90 days of a reap, no new compound's child list shares two or
-  more ids with that reaped row's children.
+- Within 90 days of a reap, no new compound's child list shares any
+  id with that reaped row's children.
 - The `:13` job and the `:14` job both show `succeeded` in
   `cron.job_run_details` on the first tick after deploy.
 
@@ -386,7 +429,7 @@ Prod, read-only, before merge:
 - Dry-run the M1.1 predicate as a count (expect 0 today; no compound
   carries a 6.0 tally yet).
 - Dry-run the M1.2 predicate (expect the four compounds under 0.739
-  with tally >= 2.0); list their child keys; check whether any two
+  with tally >= 1.9); list their child keys; check whether any two
   share a child set and whether any has empty provenance (decides
   whether the distinct-on and no-provenance paths fire on tick one).
 - Confirm no row in `samskara_tier2_declines` exists today (none did
@@ -403,20 +446,19 @@ functions first for the before/after pair the QA rules require
 - a compound forged at tally 5.9: nothing qualifies.
 
 And for the reap (`samskara-decay.md`): forge a compound under the
-bar with tally >= 2.0; confirm the row, its fires and its provenance
+bar with tally >= 1.9; confirm the row, its fires and its provenance
 are gone, a `reason = 'reaped'` row with the right key exists, and the
-candidate finder skips a group sharing two of its ids.
+candidate finder skips a group sharing one of its ids.
 
 Unit tests, in the gate: the mapper vitest and the `tier2GroupKey`
 Deno test (M1.0).
 
 ## ACCEPTED RISKS
 
-- **Reaped regions can re-form after 90 days**, and sooner through
-  three-or-more new parts that share at most one id with the
-  tombstone. The sibling count at the next audit is the signal.
-  Storing the compound embedding in the tombstone would close it and
-  is deferred.
+- **Reaped regions can re-form after 90 days**, or sooner from parts
+  that were never in the reaped compound. The sibling count at the
+  next audit is the signal. Storing the compound embedding in the
+  tombstone would close the rest and is deferred.
 - **Reaping deletes a compound's fire history**, including the
   verdicts behind its low health. Same as every deletion today.
 - **A compound deleted mid-turn.** If the reap removes a compound
@@ -457,3 +499,16 @@ few wide results and compute locally.
   comments enumerated. Acceptance criteria scoped to graduation
   deletes. Citations fixed: fires FK is `8010`, underperformer tier
   `9719-9728`.
+- rev 3 (2026-10-23): after consensus round 1. Blocker: the reaper
+  had no grant block; it now carries the standard revoke/grant and is
+  security definer. Floor arithmetic corrected (two contradictions
+  sum to 1.93 under the discount, so the floor is 1.9, not 2.0; the
+  tally ceiling is 14.9, not 14.4). The anchor-vs-tombstone
+  contradiction resolved: a reaped region is covered on one shared
+  id, so an anchor cannot seed a re-mint for 90 days. The snapshot
+  counter now mirrors the floor. The shared helper returns a rank
+  column and has explicit grants; multi-parent ordering defined as
+  the parents' maximum tally; provenance read before the cascade.
+  Surfaces added: the audit skill, the snapshot header comment, the
+  candidate preamble, the tier-2 detection doc section, and a
+  before/after pass on the tier-2 QA use-case.
