@@ -1,10 +1,11 @@
 # Samskara Compound Accountability Plan
 
-Status: REVIEWED rev 4 (2026-10-23). Deep-mode lens fan-out plus two
-fresh-context consensus rounds (the personal-project cap). Round 2
-reported no blockers and five should-fixes, all folded in here
-without a third round. Awaiting the owner's go-ahead to build M1.
-Revision log at the end.
+Status: REVIEWED rev 5 (2026-10-23). Deep-mode lens fan-out plus two
+fresh-context consensus rounds (the personal-project cap), then a
+rival-interpretation pass against fresh prod data that rewrote the
+evidence section and demoted M2. Awaiting the owner's go-ahead to
+build M1 and a decision on the verdict archive. Revision log at the
+end.
 Source: the 2026-10-22 audit and its 2026-10-23 correction
 (`docs/qa/use-cases/samskara-cap-eviction.md`,
 `samskara-tier2-mint.md`, `samskara-decay.md`; the "Oct 22" and
@@ -19,8 +20,8 @@ eviction tiers), and "Tier-2 detection formula" (the coverage guard).
 
 Compounds (tier-2 claims) now stand in for their parts at fire time,
 but nothing holds a compound to account afterwards. A compound that
-is wrong keeps firing forever, because every release path is written
-for tier-1. Meanwhile the graduation tier deletes parts faster and
+does not predict keeps firing forever, because every release path is
+written for tier-1. Meanwhile the graduation tier deletes parts faster and
 wider than intended: it fires on a thin evidence bar, it reaches
 through sibling compounds, and it has no floor, so established
 compounds have lost every part they had. This plan puts a floor under
@@ -37,18 +38,27 @@ graduation tier landed (PR #554, deployed 2026-10-02 00:13Z):
   ever picks tier-1 rows (`supabase/schema.sql:9667-9775`; every tier
   filters `s.tier = 1` at `9673`, `9697`, `9723`, `9757`). The dead
   reaper requires 14 quiet days (`schema.sql:9431`), and a compound
-  that fires daily never has them. The worst compound sits at health
-  0.597 with 4 held and 31 missed, fired 39 times in the last 14 days,
-  and has no living parts. Four compounds sit under the 0.85 x p0 bar
-  (0.739); p0 slid from 0.883 to 0.869 over the window. p0 averages
-  over every row of every tier (`schema.sql:9270-9278`), so wrong
-  compounds that stay alive lower every bar derived from it.
-- **Graduation is a sell-off.** The tier deleted 29 of 58 distinct
-  parts in 20 days; 7 of 8 established compounds have no parts left;
-  18 of 40 compounds have none. It freed 46 mint slots while roughly
-  470 association edges arrived and 62 were consumed, and the last
-  day shows 24 at-cap skips against 4 evictions. The supply of parts
-  is nearly spent.
+  that fires daily never has them; this corpus has not had two
+  consecutive quiet days since August. The worst compound sits at
+  health 0.598 after 59 judged fires since deploy: 23% held, 73%
+  not-borne-out, one contradicted. It fired 39 times in the last 14
+  days and has no living parts. Four compounds sat under the 0.85 x
+  p0 bar (0.739) on 2026-10-22; three do on the 23rd, with a fourth
+  at 0.737 against a bar of 0.736. "Does not predict" is the right
+  phrase, not "disproven": across every compound with ten or more
+  judged fires there are 260 not-borne-out verdicts and 5
+  contradicted, and tier-1 is the same (0.8% contradicted). Health is
+  driven entirely by the situation arising and the tendency not
+  showing.
+- **Graduation deletes the wrong rows, on thin evidence.** The tier
+  deleted 29 of 58 distinct parts in 20 days; 7 of 8 established
+  compounds have no parts left; 18 of 40 compounds have none. The
+  supply of parts is nearly spent. This is not a throughput
+  complaint: edge consumption fell from 25-70 a day to about 4 a day
+  on 2026-09-14, two and a half weeks before graduation existed, so
+  the backlog is a cap problem the tier neither caused nor dented
+  (46 slots freed in 20 days). The objection is which rows it picks
+  and on what evidence.
 - **Graduation leaks through siblings.** Of the 30 parts deleted by
   2026-10-23 (29 on the 22nd; one more overnight), 19 were shared by
   two or more compounds, and the predicate deletes a
@@ -72,18 +82,54 @@ graduation tier landed (PR #554, deployed 2026-10-02 00:13Z):
   parts with another compound. The child lists include dead ids
   (`10627-10634` builds them from provenance with no liveness check),
   which inflates the Jaccard denominator and understates overlap.
-- **The compound minter never declines.** 0 declines in 40 mints
-  ever. Compounds engage far more often than tier-1 (64.1% vs 42.4%
-  of judged fires since deploy) and miss softly more often (37.0% vs
-  30.8% of genuine verdicts). Since deploy, tier-2 held 61.2% (n=608)
-  against tier-1 67.2% (n=787); without the single worst compound
-  the gap is 3 points (64.0%, n=713).
+- **The compound minter never declines.** 0 declines in 41 mints
+  ever. Whether that is a problem is NOT established; see the
+  caveats below. The tier comparison that motivated M2 in earlier
+  revisions does not survive them.
+
+**Every tier-1 figure in this plan is a survivors' figure.** Fires
+cascade when a claim is deleted (`schema.sql:8010`), tier-1 turns
+over hard (the pool has been at its cap of 150 since mid September
+and 47 tier-1 rows minted since 2026-10-02 survive, so at least that
+many left in the window and took their verdicts with them), and
+tier-2 has never lost a row (collapse at `10319-10320`, every
+eviction tier and the dead reaper are tier-1 only; all 41 compounds
+ever minted are alive). The bias is visible in the time series:
+tier-1 fires per user message read 4.1 in September and 6.3 in
+October with usage flat at about 16 messages a day and no mechanism
+that raises them. September's history has been thinned by deletions
+since. Tier-1's raw since-deploy held rate is 68.4% (626 of 915
+genuine verdicts) against tier-2's 62.3% (463 of 743); a modest
+assumption about the departed rows (a few hundred verdicts at a 40%
+held rate) closes the gap. Rank, thread length, cohort size and
+claim age were each tested as confounders and none moves either
+tier's number by more than a point; the survivor bias is the one
+that cannot be bounded from retained data.
+
+**The engagement gap is parent-wins, not compounds.** Within tier-2,
+whose history is complete, engagement ran 38-43% in the weeks before
+2026-10-02 and 50-70% after; tier-1's did not move. A compound that
+fires alone collects the engagement its children used to split with
+it. "Compounds engage far more" (64.1% vs 42.4%) is the deploy
+working as designed and is not evidence of breadth.
+
+**Usage is flat.** Messages a day by week since the September wipe:
+17.9, 14.6, 15.1, 10.9, 18.9, 15.0, 15.0; 16.7 before the deploy and
+16.4 after. The longest run of silent days since August 25 is one.
+No count in this plan is a usage artifact.
+
+**Compounds dragging p0 is real and negligible.** The population mean
+is 0.866 with tier-2 and 0.871 without; the three under-bar compounds
+move it by 0.003 and the bar by 0.0025. It is not a reason for the
+reap.
 
 The last audit's "selection works" read is NOT a premise here. The
 fired-vs-control comparison (51.1% vs 25.7% engagement) mixes "chosen"
 with "shown to the chat model", and the controls are drawn from claims
 that fired nowhere in the thread. The measurement that would settle
-it (a shadow arm) is scoped in M4 and deferred.
+it (a shadow arm) is scoped in M4 and deferred, and it has the same
+precondition as every other tier comparison: verdicts must outlive
+the claim they were made about.
 
 ## ROOT CAUSE
 
@@ -306,6 +352,14 @@ panel shows a count that never drains), mapped and shown beside the
 four eviction pools
 (`src/components/SamskaraHealthPanel.svelte:288-290`,
 `src/lib/supabase/types/samskara.ts:73`, `src/lib/supabase/samskara.ts:535`).
+The evictor names the tier it used: `samskara_evict_for_mint` returns
+`(id uuid, tier text)` instead of a bare uuid (drop-and-recreate, since
+the return type changes; the one caller at `samskara.ts:1269-1283`
+reads `.id` and logs the label). Today an eviction is unattributable
+after the fact, which is why the 46 graduation slots in PROBLEM are
+inferred from vanished parts rather than counted. Durable attribution
+across the weeks between audits needs a table, which is the verdict
+archive decision in DECISIONS; the label in the log line is the floor.
 Comments that become false and are rewritten in the same change: the
 parent-wins comment that names `samskara_reap_dead` as the compound's
 exit (`schema.sql:8558-8561`, and `samskara.md` "Fire ranking formula");
@@ -333,25 +387,33 @@ becomes three sub-cases (below), `samskara-decay.md` gains a reap
 step, and `samskara-tier2-mint.md` gets a before/after pass because
 the candidate finder's coverage behavior changes.
 
-### M2 - The compound minter declines when it should
+### M2 - A decline criterion for the compound minter (measure first)
 
-`TIER2_MINTER_PROMPT` (`samskara.ts:347-389`) lists three
-confirm:false conditions (`367-372`) and then mandates GENERALIZE
-(`377-384`); the original tier-2 plan set no upper limit on breadth.
-Add a fourth decline condition and a positive requirement: decline
-when the generalization names no situation a transcript could visibly
-show, and require the "in situations like X" clause to be something a
+Demoted in rev 5. Earlier revisions motivated this with "compounds
+engage more and miss softly more, so the minter overgeneralizes"; the
+engagement half is a parent-wins artifact and the soft-miss half (37%
+vs 31% of genuine verdicts, about 5 points after standardizing on rank
+and age) sits on top of the unmeasured survivor bias. What remains is
+a structural observation: `TIER2_MINTER_PROMPT` (`samskara.ts:347-389`)
+lists three confirm:false conditions (`367-372`), then mandates
+GENERALIZE (`377-384`), and the original tier-2 plan set no upper
+limit on breadth, so a decline has never happened and nothing says it
+should.
+
+Proposed criterion, if the measurement warrants it: a fourth decline
+condition and a positive requirement - decline when the
+generalization names no situation a transcript could visibly show,
+and require the "in situations like X" clause to be something a
 reader of a conversation could point to. This is the judge's own
 pointable-moment test, applied at mint time. Pinned by Deno.
 
-Validation: replay the new prompt over the surviving child lists of
-existing compounds (29 of 58 child texts are gone, so the replay is
-partial); success is a non-zero decline share, concentrated on
-compounds whose held rate trails tier-1. Count declines with
+Measurement first: replay the candidate prompt over the surviving
+child lists of existing compounds (29 of 58 child texts are gone, so
+the replay is partial) and compare the declined set against each
+compound's own record (health, soft-miss share, time to the reap bar
+once M1.2 runs). The criterion ships only if the declines land on the
+compounds that went on to miss. Count declines with
 `reason = 'declined'` only; reaped tombstones share the ledger.
-Forward: tier-2's soft-miss
-share of genuine verdicts drops toward tier-1's over three weeks under
-the same judge model.
 
 ### M3 - Coverage by containment over living parts; merges repoint
 
@@ -376,6 +438,19 @@ collapse, tier-2 detection, concentration, evidence application,
 cohort panel) has to exclude shadow rows. The blast radius is wide
 enough that it is its own plan; it is recorded here so the control arm
 that exists is not mistaken for it.
+
+**Precondition, shared with every tier comparison: verdicts outlive
+the claim.** Today a deletion erases the fire rows and control
+verdicts behind it (`schema.sql:8010`, `8153`), so any held-rate
+comparison across tiers, or before and after a change, is a
+survivors' comparison. The smallest fix is a verdict archive:
+a `before delete` trigger on `samskaras` copies that row's judged
+fires (samskara id, tier, thread, fired_at, score, verdict) into an
+append-only table that nothing else reads. It is a schema-only
+change with one writer and no reader in the app, and it is the
+difference between M1's effects being measurable and not. Whether it
+rides with M1 is an open decision (see DECISIONS); it is listed here
+because M4 cannot be built without it.
 
 ## DECISIONS
 
@@ -414,17 +489,25 @@ that exists is not mistaken for it.
   the ratchet is documented instead.
 - **M4 deferred** despite the audit's open question. Nothing in M1-M3
   depends on it.
+- **OPEN: whether the verdict archive (M4's precondition) rides with
+  M1.** For: M1.2 deletes the four compounds with the richest miss
+  records in the corpus, and after that tier-2 carries the same
+  survivor bias as tier-1, so the before/after comparison in
+  PREDICTED EFFECTS can only be made from numbers written down in
+  this plan. Against: it widens M1 by a table and a trigger. The
+  owner decides; the baseline numbers below are recorded either way.
 
 ## ACCEPTANCE CRITERIA
 
 M1, verified on prod after deploy and at the next scheduled audit:
 
-- The four compounds under the bar on 2026-10-22 are gone within one
-  hour of deploy, each with a `reason = 'reaped'` row in the decline
+- The compounds under the bar at deploy (three on 2026-10-23, with a
+  fourth at 0.737 against a 0.736 bar) are gone within two ticks of
+  the `:14` job, each with a `reason = 'reaped'` row in the decline
   ledger (or no row, if it had no provenance); `compounds_under_bar`
-  drains to 0 within a few ticks (each reap nudges p0 up, which can
-  push one more compound under the bar on the next tick) AND the
-  mapper test proves the column is wired.
+  drains to 0 (each reap nudges p0 up, which is what pulls the fourth
+  under on the second tick) AND the mapper test proves the column is
+  wired.
 - No part deleted BY GRADUATION after deploy had a non-established
   parent at deletion time (other release paths - underperformer,
   dead reaper, probation, merge - may still remove a part, including
@@ -443,6 +526,205 @@ decline share. M3: the containment predicate blocks 2-of-3 and 2-of-4
 on fixture pairs and passes 2-of-6; after a forced merge in a rollback
 transaction, no compound provenance references the loser.
 
+## PREDICTED EFFECTS
+
+What each milestone should do to the running system, how to tell, and
+what else may move. Measure cohorts by mint date, not population
+means: every deletion rewrites the population's history, so a mean
+that improves after a change may only be showing which rows the change
+removed.
+
+### Baseline, prod, 2026-10-02 00:13Z to 2026-10-23
+
+Written down here because M1.2 deletes the rows behind several of
+these numbers and they cannot be recomputed afterwards.
+
+| Measure | Tier-1 | Tier-2 |
+|---|---|---|
+| judged fires | 2159 | 1160 |
+| genuine verdicts (held + contradicted + not-borne-out) | 915 | 743 |
+| held, share of genuine | 626 (68.4%) | 463 (62.3%) |
+| not-borne-out, share of genuine | 282 (30.8%) | 275 (37.0%) |
+| contradicted | 7 | 5 |
+| engaged, share of judged | 42.4% | 64.1% |
+| held at claim age 7-21 days | 71.6% | 59.2% |
+| held at claim age 21-45 days | 69.0% | 66.1% |
+
+Population: 150 tier-1 (at cap, 0 under the bar); 41 tier-2, all
+ever minted, 3 under the bar (0.598, 0.691, 0.703) and one at 0.737
+against 0.736; 4 compounds with tally 6.0 or more, none with a
+living part; p0 0.8662. Rates: 16.4 user messages a day; about 110
+tier-1 and 55 tier-2 fires a day; 47 surviving tier-1 mints in 21
+days (2.2 a day); 46 slots freed by graduation in 20 days; about 4
+association edges consumed a day; 14 compounds minted since deploy
+(0.67 a day), 8 of them sharing two or more parts with an older one;
+0 compounds minted since deploy under the bar at 21 days of age.
+
+### M1.1 Graduation floor
+
+Predicted: graduation evictions stop at deploy and stay at zero for
+two to four weeks. Every compound that clears 6.0 today has no parts
+left, and the compounds with living parts were minted 2026-10-11 or
+later; at one to two genuine verdicts a day and a 60% held rate, a
+discounted tally of 6.0 is ten to twenty firing days away. When
+graduation resumes it is rarer, it never takes a compound's last
+part, and every part it takes has only established parents. Tier-1
+mint supply falls: 46 of the slots freed in the last 20 days were
+graduation's, so surviving tier-1 mints a day drop from about 2.2
+toward about 1 and the at-cap skip count rises.
+
+Measure: tier-1 mints a day (rows by created_at); at-cap skips from
+the function log; the evictor's new tier label; `evictable_graduated`
+on the snapshot (reads 0 at deploy); at the next audit, the parent
+set of every part that left, checked against the established test at
+its deletion time.
+
+Side effects to watch:
+
+- The cap re-pins and the tier-1 pool ages. Watch the age
+  distribution of tier-1 and the untested-tier count; if slots stop
+  opening, the next lever is the tier-1 evict gate (14 days plus 10
+  judged fires), not a looser graduation.
+- Anchors go quiet. Each compound's anchor is suppressed by
+  parent-wins whenever its compound makes the top-k, so it gathers no
+  verdicts and its last-fired date ages; at 90 days the stale tier is
+  entitled to it. Watch anchors' last-fired dates; an anchor
+  released by the stale tier is a slower version of the problem M1.1
+  closes.
+- Multi-parent parts go last. A part shared by several compounds
+  waits for all of them, which is the intent; it also means the
+  parts most worth keeping are the ones graduation keeps longest.
+
+### M1.2 Compound reap
+
+Predicted: three compounds reaped on the first `:14` tick after
+deploy and the fourth on the second (its 0.737 sits one p0 nudge
+above the bar), taking the compound count from 41 to 37. Over the
+following month two to four more follow - the ones already trending
+there read 0.754 (76% soft misses), 0.799 (82%), 0.812, 0.815 and
+0.841 - and after that roughly one reap every week or two as new
+compounds mature. The compound count stops rising monotonically. The
+four reaped compounds fire ten to twelve times a day between them;
+those top-k slots go to other claims, and the two living parts among
+them (one each in two compounds) fire on their own again. Tier-2's
+share of daily fires falls from about a third toward a quarter.
+
+Measure: the `:14` job's return count; `compounds_under_bar` on the
+panel (3 or 4 for one hour, then 0); `reason = 'reaped'` rows in the
+decline ledger with the right child keys; tier-2 count and tier-2
+fires a day over the following weeks; the held rate of compounds
+minted AFTER deploy at 21 and 45 days of age, against the baseline
+59.2% and 66.1%.
+
+Side effects to watch:
+
+- The measured tier-2 health improves without any compound changing.
+  Removing the four worst records lifts the tier-2 mean from 0.847
+  to about 0.86 and the retained held rate from 62.3% to about 65%.
+  That is deletion, not improvement; it is the reason the baseline
+  table above exists and the reason the verdict archive is an open
+  decision.
+- The p0 ratchet. Each reap raises p0 by about a thousandth and the
+  tier-1 underperformer bar with it. No tier-1 row is under the bar
+  today; watch the first `:13` after a reap for a tier-1 eviction
+  that would not have happened the hour before.
+- A compound deleted between the fire query and the fire record. Look
+  for the record RPC's foreign-key error in the logs around `:14` and
+  for threads active at that minute with a missing cohort. Also
+  confirm a thread whose cached priming payload still names the
+  reaped id recovers on its next turn rather than failing on every
+  turn until the cache refreshes; the plan's mid-turn risk assumes
+  once per compound, which depends on that.
+- The tombstone blocks little for part-less compounds (their child
+  ids are dead and cannot co-fire) and blocks the one living part of
+  the others from compounding for 90 days. Watch the new-compound
+  rate against the 0.67-a-day baseline.
+- Control verdicts of a reaped compound vanish with it, which moves
+  the fired-versus-control denominator in the audit's selection
+  query.
+
+### M1.3 Observability
+
+Predicted: no behavior change. The panel shows the under-bar count;
+the evictor's log line carries a tier label so the next audit can say
+which tier freed each slot instead of inferring it from vanished
+parts.
+
+Measure: the mapper test; the panel reading 3 or 4 then 0; a tier
+label on every eviction log line.
+
+Side effects: one more subquery in the snapshot RPC (negligible); a
+fifth number in the panel's Evictable row (check it fits at phone
+width); the evictor's return type changes, so the deploy must apply
+the schema before the function or the caller reads an object as a
+string for the minutes in between (it logs a garbled id and the mint
+still proceeds; harmless, but it will look like a bug in the logs).
+
+### M2 Decline criterion (if the measurement warrants it)
+
+Predicted: compounds minted a week fall from about 4.7 toward
+perhaps 2 to 3, and the ones minted reach the reap bar less often.
+The replay over existing compounds declines a non-zero share, and the
+declined ones are the ones with the worst records.
+
+Measure: declines a week with `reason = 'declined'`; compounds minted
+a week; the share of each month's new compounds under the bar by day
+30 (baseline: 0 of 14 by day 21 for the post-deploy cohort; 4 of 27
+by roughly day 30 to 40 for the pre-deploy cohort); the replay's
+decline set against each compound's own health and soft-miss share.
+
+Side effects to watch:
+
+- Declines are re-offered after 7 days, so a high decline share spends
+  a minter call per declined group per week. Watch the mint-tier2
+  call count.
+- The candidate finder advances past declined groups to weaker ones.
+  Watch the lift and co-fire weight of what does get minted.
+- A criterion that is too strict stalls tier-2 minting outright. Two
+  weeks with no compound minted is the alarm.
+
+### M3 Containment over living parts; merge repoint
+
+Predicted: the sibling share among new compounds falls from 8 of 14
+toward 1 or 2 of 14. Part-less compounds cover nothing under the new
+rule (their live set is empty), so regions they covered become
+mintable and a small burst of new compounds near old regions follows
+deploy. After the repoint, no new provenance row dangles from a
+merge.
+
+Measure: siblings sharing two or more parts, by mint month; count of
+compound provenance rows whose child no longer exists, split by
+whether the child left by merge (should stop growing) or by eviction
+(unchanged by M3); new compounds a week in the fortnight after
+deploy.
+
+Side effects to watch:
+
+- Hub parts that co-fire with everything make containment stricter
+  than Jaccard for compounds with three or four living parts; a
+  group that shares two hubs with any of them is blocked. Watch for
+  tier-2 minting stalling, the same alarm as M2.
+- A repointed child list can shrink (the winner was already a child),
+  so the live `group_key` no longer matches a decline written against
+  the old list; harmless at a 7-day TTL, but it means a declined
+  group can be re-offered early once.
+- Winners of merges inherit parents and become harder to graduate
+  under the all-parents rule, which is the intent, but it is one more
+  way the cap re-pins.
+
+### M4 Shadow arm precondition (verdict archive)
+
+Predicted: no behavior change. Every comparison above becomes
+reproducible after deletions, and the shadow arm becomes buildable.
+
+Measure: archive rows appear for every deletion path (evictor, both
+reapers, merges, the compound reap); row counts match the deleted
+rows' judged-fire counts.
+
+Side effects: table growth of a few dozen rows per deletion at the
+current 165 fires a day, which is nothing; a trigger on a hot table,
+which fires only on delete.
+
 ## VALIDATION
 
 Nothing in the gate exercises SQL. The cloud session has no local
@@ -452,12 +734,14 @@ and the two new unit tests.
 
 Prod, read-only, before merge:
 
-- Dry-run the M1.1 predicate as a count (expect 0 today; no compound
-  carries a 6.0 tally yet).
-- Dry-run the M1.2 predicate (expect the four compounds under 0.739
-  with tally >= 1.9); list their child keys; check whether any two
-  share a child set and whether any has empty provenance (decides
-  whether the distinct-on and no-provenance paths fire on tick one).
+- Dry-run the M1.1 predicate as a count (expect 0 today: four
+  compounds carry a tally of 6.0 or more, and none of them has a
+  living part).
+- Dry-run the M1.2 predicate (expect three compounds under the bar
+  with tally >= 1.9, and one more once p0 moves); list their child
+  keys; check whether any two share a child set and whether any has
+  empty provenance (decides whether the distinct-on and no-provenance
+  paths fire on tick one).
 - Confirm no row in `samskara_tier2_declines` exists today (none did
   on 2026-10-22), so the column default needs no backfill.
 
@@ -486,7 +770,10 @@ Deno test (M1.0).
   next audit is the signal. Storing the compound embedding in the
   tombstone would close the rest and is deferred.
 - **Reaping deletes a compound's fire history**, including the
-  verdicts behind its low health. Same as every deletion today.
+  verdicts behind its low health. Same as every deletion today, and
+  the reason the verdict archive is an open decision rather than a
+  later nicety: once M1.2 runs, the tier-2 record is a survivors'
+  record too.
 - **A compound deleted mid-turn.** If the reap removes a compound
   between the fire query and the fire record, the record RPC fails on
   the FK and that turn's cohort is lost (`schema.sql:8652`); the
@@ -504,7 +791,24 @@ Deno test (M1.0).
 
 The audit that produced this plan ran about 25 database queries, each
 needing an approval. The next audit should read each table once into a
-few wide results and compute locally.
+few wide results and compute locally. The rev 5 rival-interpretation
+pass needed two: one daily series (messages, substrate, edges, mints,
+fires and verdicts by tier) and one union of cuts over judged fires
+(rank in cohort, thread length, claim age, prediction length, cohort
+size, per-compound verdicts, population by tier). Reuse that shape.
+
+Rival interpretations tested in rev 5 and their status: usage change
+(rejected: flat); rank position, thread length, cohort size, claim
+age, prediction length as drivers of the tier gaps (rejected: direct
+standardization moves nothing by more than a point); period effects
+from the 2026-09-07 prompt change or the 2026-10-02 control arm
+(rejected for tier-1 held rate: 76.8 / 63.7 / 71.9 / 70.1 / 72.9 /
+62.5 / 72.4 by week, no step); parent-wins as the source of the
+engagement gap (accepted); survivor bias in every tier-1 figure
+(accepted, unbounded); soft misses read as "untestable" rather than
+"failed" (partly accepted: the words changed, the conclusion did not,
+because a 59-fire sample at 23% held is a failure to predict whatever
+the verdict label).
 
 ## REVISION LOG
 
@@ -548,3 +852,16 @@ few wide results and compute locally.
   model entry added to the surfaces; the acceptance criterion reads
   "drains" to allow the p0 ratchet; the 29-vs-30 deleted-parts figures
   dated.
+- rev 5 (2026-10-23): rival interpretations tested against prod
+  (usage, survivor bias, parent-wins, rank, thread length, age,
+  period effects, soft-vs-hard misses, p0 drag). PROBLEM rewritten:
+  survivor-bias caveat on every tier-1 figure, engagement gap
+  attributed to parent-wins, usage shown flat, p0 drag downgraded,
+  "disproven" replaced by "does not predict", the sell-off reframed
+  from throughput to row choice. M2 demoted to measure-first. Verdict
+  archive added as M4's precondition and as an open decision for M1.
+  PREDICTED EFFECTS section added with baselines, per-milestone
+  predictions, measurements and side effects; the evictor gains a
+  tier label in M1.3 so evictions can be attributed. Validation
+  dry-run expectation corrected (four compounds do carry 6.0; none
+  has a living part).
