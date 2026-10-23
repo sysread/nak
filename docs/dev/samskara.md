@@ -1247,8 +1247,13 @@ be the first genuine test, and the next-day judge hasn't ruled).
   those qualifies, a **fourth tier graduates the parts of an
   established compound**: a tier-1 claim in the `'samskara'`
   provenance of a tier-2 whose health is at or above the user's `p0`,
-  whose evidence tally is at least 3.0 (its own record now outweighs
-  the k=5 prior), and which is at least 14 days old. Parent-wins at
+  whose evidence tally is at least 3.0, and which is at least 14 days
+  old. Note what that bar does and does not mean: at 3.0 evidence
+  against the k=5 prior, the prior still carries 62% of the posterior,
+  so "established" reads as "started at p0 and has not been disproven
+  in three tests" - a thin basis for an irreversible delete, and the
+  2026-10-22 audit found it too thin (see planned-changes).
+  Parent-wins at
   fire time means such a part no longer fires when its compound does,
   so its posterior is frozen and the slot it holds does nothing the
   compound is not already doing; once the compound has earned its

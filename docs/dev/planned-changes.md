@@ -102,18 +102,26 @@ against controls on the same threads; that comparison is what
 decides whether the rerank / query-rewrite option moves up. The
 fire-time cosine column is still not recorded.
 
-**Oct 22 - selection works; the retrieval question is closed.** First
-read of the control arm (109 controls, 41 threads): fired claims'
-situations arose 51.1% of the time vs 25.7% for random unfired claims
-on the same threads; held-given-engaged 64.8% vs 57.1%. The top-k is
-earning its place at roughly 2x chance. Within-cohort rank is still
-flat (51/50/48/49% engaged by band), so the top-11 is well chosen and
-internally unordered - compression inside the narrow message-vs-claim
-range, not a defect. The rerank and query-rewrite options stay
-deprioritized; the fire-time cosine column stays unrecorded unless a
-ranking question returns. The control arm keeps running as the
-standing selection metric (fired-vs-control engagement), paired with
-concentration (14% top-5 share on 190 rows at this read).
+**Oct 22 - selection beats an unfired baseline; the question is
+narrowed, not closed.** First read of the control arm (109 controls,
+41 threads): fired claims' situations arose 51.1% of the time vs
+25.7% for random unfired claims on the same threads. Two independent
+reviews (2026-10-23) cut that down to size, and they are right. The
+arms are not comparable: a fired claim was SHOWN to the chat model,
+which can steer the conversation toward its situation; a control
+never was, so the gap mixes "chosen" with "shown". And the controls
+are anti-selected (drawn from claims that fired nowhere in the
+thread), so 26% is a low baseline, not chance. The held-given-engaged
+comparison (64.8% vs 57.1%) rests on 28 engaged controls and is
+noise. What survives: the top-k is not random, and ordering inside it
+is flat (51/50/48/49% engaged by band). What the flat curve also
+says, which the Oct 22 row did not: about half of each turn's 11 are
+not engaged, and the score cannot tell those from the rest - that is
+an argument for a better scorer or a smaller k, not against one. The
+clean control is a SHADOW arm: claims that make the top-k but are
+withheld from the model at random and still judged. That isolates
+selection from priming and is the next measurement to build. The
+rerank / query-rewrite option stays open, behind that measurement.
 
 **A labeled probe set, not self-calibrating thresholds.** Four
 similarity bars are hard-coded in the samskara path - the
@@ -297,6 +305,58 @@ compound, regardless of group size. (3) The decline criterion re-opens
 on this evidence (0 declines in 40 compounds): the compound prompt
 should decline when the only honest generalization names no situation
 a transcript could show - the same test the judge applies.
+
+**Oct 23 - two independent reviews, and what they changed.** Both
+reviewers (a different model, briefed from the recorded rows only)
+were asked to argue against the Oct 22 conclusions and proposals. The
+verified corrections:
+
+- *Graduation is a sell-off, not a release path.* 46 mints in 20
+  days against ~470 arriving associations; 24 at-cap skips to 4
+  evictions in the last day; backlog 848 -> 1,211. It freed slots by
+  spending stored claims, and the supply is nearly gone (7 of 8
+  established compounds have no parts left). The evidence bar of 3.0
+  leaves the k=5 prior carrying 62% of the estimate, so "established"
+  is thin for an irreversible delete.
+- *It leaks across siblings.* Verified: of 30 deleted children, 19
+  were shared by two or more compounds, and the predicate deletes a
+  child if ANY compound holding it is established - so non-established
+  compounds lost parts through a sibling. 13 of the 30 had no
+  established parent at all and died by other paths (merges,
+  eviction tiers, probation); `_samskara_merge_pair` does not repoint
+  compound provenance when a child loses a merge, which leaves dead
+  ids behind as a second leak.
+- *The tier-2 held gap is small and fragile.* Dropping the single
+  worst compound, tier-2 reads 64.0% (n=713) against tier-1's 67.2% -
+  three points, inside the week-to-week swing. But the mechanism is
+  now SUPPORTED, which the Oct 22 row asserted without checking:
+  since deploy, compounds engage 64.1% of the time vs 42.4% for
+  tier-1 (broad claims' situations arise more), and 37.0% of their
+  genuine verdicts are soft misses vs 30.8% - broad enough to arise,
+  too broad to be pointable.
+- *No exit for a disproven compound* holds, and "its parts resume"
+  was wrong for the cases that matter: the worst compound has no
+  parts left. Three compounds minted since deploy already hold
+  references to deleted children, so re-formation over a reaped
+  region is live, not hypothetical.
+- *"Any two shared children" is the wrong coverage rule* - 40
+  compounds draw on 58 children, so it would freeze tier-2 minting
+  outright. Containment against LIVE children (shared / candidate
+  size >= 0.5) blocks 2-of-3 and 2-of-4 while letting 2-of-6 through.
+
+Revised order of operations, none built: (1) graduation fix - a child
+graduates only if EVERY compound holding it is established, the
+compound evidence bar rises to >= 8.0, and the highest-evidenced child
+of each compound is always kept as a live anchor; shipped together
+with a tier-2 underperformer reap (health < 0.85 p0, evidence >= 5.0,
+no quiet clause) that writes the reaped child-set into the decline
+ledger with a long TTL so detection does not re-mint it next sweep.
+(2) The compound minter's decline criterion, verified by replaying the
+new prompt over surviving child-sets and watching tier-2's soft-miss
+share for three weeks. (3) Live-children containment as the coverage
+rule, and merge_pair repointing compound provenance to the winner.
+(4) The shadow control arm (top-k claims withheld at random and
+judged) to measure selection without the priming confound.
 
 ## Ledger
 
