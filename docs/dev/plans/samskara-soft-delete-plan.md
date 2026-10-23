@@ -1,7 +1,8 @@
 # Samskara soft-deletion
 
-Status: DRAFT rev 2 (2026-10-23), after the deep-mode lens fan-out
-(hidden problems, safe-to-modify, archaeology, alternatives). Lands
+Status: DRAFT rev 3 (2026-10-23), after the deep-mode lens fan-out
+(hidden problems, safe-to-modify, archaeology, alternatives) and one
+fresh-context consensus round (no blockers). Lands
 before M1.2 of
 [the compound accountability plan](./samskara-compound-accountability-plan.md),
 whose tombstone design it replaces. Revision log at the end.
@@ -92,12 +93,17 @@ from`, `delete` and `returning` pass through to the base table, and
 a row whose update makes it fail the view's predicate simply leaves
 the view (no `with check option`). So the writers above keep working,
 and they become live-only: an update through the view cannot touch a
-stamped row, which closes the read-then-write race the lens pass
-found in `samskara_apply_evaluation` and the embedding save. The
-`update ... from` form used by the merge's fold and the reapers is
-**unverified** through a view until the local-stack run; if it is
-refused, those two statements name `samskaras_all` with an explicit
-`and deleted_at is null`.
+stamped row (the row is re-checked against the view's predicate when
+the update takes its lock), which closes the read-then-write race
+the lens pass found in `samskara_apply_evaluation` and the embedding
+save. Three statements use `update ... from` through the view and
+one uses `select ... for update skip locked`: the embed claim at
+`9199` (a `language sql` function, so it fails at apply time rather
+than call time if the form is refused), the evaluation update at
+`9376`, and the merge's fold at `10185-10191`. All are standard for
+an automatically updatable view and **unverified** here until the
+local-stack run; the fallback is to name `samskaras_all` with an
+explicit `and deleted_at is null` in whichever statement is refused.
 
 Invoker security keeps RLS parity: the base table's policies apply
 to the caller, so the browser sees its own rows and the service role
@@ -145,9 +151,16 @@ view is dropped before it and created after it:
 1. A guarded rename: if `pg_class` has `public.samskaras` with
    `relkind = 'r'`, `alter table public.samskaras rename to
    samskaras_all`. On a fresh database this is a no-op and the next
-   statement creates the table.
+   statement creates the table. A rename keeps the table's constraint
+   names (`samskaras_pkey`, `samskaras_tier_check`,
+   `samskaras_user_id_fkey`), and a fresh create would invent
+   `samskaras_all_*` names, so the two databases would differ.
 2. `create table if not exists public.samskaras_all (...)` - the
-   existing definition at `7866-7908`, renamed.
+   existing definition at `7866-7908`, renamed, with its three
+   constraints named explicitly (`constraint samskaras_pkey primary
+   key`, `constraint samskaras_tier_check check (...)`, `constraint
+   samskaras_user_id_fkey references ...`) so a fresh database matches
+   prod name for name.
 3. `drop view if exists public.samskaras` - so the DDL below can
    alter column types if a future change needs to (the int-to-real
    block at `7923-7931` is the precedent).
@@ -170,6 +183,24 @@ view is dropped before it and created after it:
 
 `tests/schema-grants.test.ts:90-105` requires every `create view`
 above the single grant block; satisfied.
+
+**Rollback is not "re-apply the old file".** The old file's `create
+table if not exists public.samskaras` skips silently because the
+name exists as a view, and its `create index if not exists
+samskaras_user_tier_idx on public.samskaras` then errors because
+that index name was dropped; the transaction rolls back and prod
+stays on the new schema, with the deploy stuck. The reverse is a
+short manual block, recorded in the dev doc: `drop view
+public.samskaras; alter table public.samskaras_all rename to
+samskaras;` and recreate the two old indexes. Stamped rows stay
+stamped and invisible to nothing after that, so the reverse is only
+for a broken apply, not a change of mind.
+
+**Lock.** The rename takes an exclusive lock on the table at about
+line 7866 and holds it until the whole one-transaction apply commits.
+The current file already does that (`enable row level security`,
+`alter column set default`), so this is not new; it is why a failed
+apply blocks claim writes for the run's duration and nothing more.
 
 The realtime guard at `14237-14244` (drop the table from the
 publication if present) names `samskaras`; it is renamed to
@@ -223,9 +254,9 @@ is what you want. Name `samskaras_all` only to stamp a row, in DDL,
 or because you deliberately want dead rows, and say why in a
 comment.**
 
-**Deleters (five today, each `update public.samskaras_all set
-deleted_at = now(), deleted_reason = '<reason>' where ... and
-deleted_at is null`):**
+**Deleters (four today, a fifth when the compound plan ships; each
+`update public.samskaras_all set deleted_at = now(), deleted_reason =
+'<reason>' where ... and deleted_at is null`):**
 
 - `samskara_reap_dead` (`9412-9434`, delete at `9426`) ->
   `reap-dead`. Its distinct-users loop at `9424` stays on `samskaras`
@@ -339,15 +370,23 @@ row's health-at-death on every deploy.
   shows embed filtering works, and the local-stack run covers the
   view case.
 - **A fire landing on a dead claim.** `samskara_record_fires` inserts
-  the cohort in one statement (`8652-8662`); today the FK rejects
-  the whole cohort if any claim was deleted mid-turn. After the
-  change the FK (on `samskaras_all`) accepts it. The insert must
-  take its ids through a join on `samskaras` so a stamped id is
-  dropped, not the cohort (**verify at build** whether the statement
-  already joins the table or inserts from `unnest` alone). A stamp
-  that commits after the statement's snapshot can still land one
-  fire on a dead claim; the judge ignores it and the expiry stamps
-  it. Accepted.
+  the cohort in one statement from `jsonb_array_elements(p_fires)`
+  alone, with no join to the claims table (`8652-8662`); today the
+  FK rejects the whole cohort if any claim was deleted mid-turn.
+  After the change the FK (on `samskaras_all`) would accept it. So
+  this function IS edited: the insert joins `samskaras` on id and
+  `user_id = p_user_id` (the function runs as service role, which the
+  view hides nothing from, so the user filter must be explicit), and
+  a stamped id is dropped while the rest of the cohort records. The
+  bookkeeping update at `8664-8672` goes through the view and needs
+  nothing. A stamp that commits after the statement's snapshot can
+  still land one fire on a dead claim; the judge ignores it and the
+  expiry stamps it. Accepted.
+- **Two readers disagree about a dead claim, cosmetically.** The
+  thread diagnostics modal reads the base table and clusters a dead
+  claim normally, while the cohort list embeds the view and labels
+  the same claim "deleted since fire" with no text. Both are
+  diagnostics; stated here so nobody files it as a bug.
 - **History is complete except through two paths**: the merge's
   colliding-fire delete above, and thread deletion, which cascades
   fires and control verdicts by `thread_id` (`8011`, `8152`;
@@ -386,22 +425,32 @@ splits `schema.sql` into statements and dollar-quoted bodies
 (`$$`, `$q$`, `$job$`, `$fn$`, `$repair$`, `$reconcile$` and the
 rest) and asserts:
 
-- every token matching `samskaras\w*` is exactly `samskaras` or
-  `samskaras_all` (a typo like `samskara_live` would otherwise pass
-  silently and fail only at call time in plpgsql);
-- every body or statement naming `samskaras_all` is in the allowlist
-  (the rename block, the create table, the index and policy and
-  guard statements, the child-table FKs, the five deleters, the three
-  history readers);
+- with comments and string literals stripped, every identifier in a
+  table position (after `from`, `join`, `update`, `into`, `table`,
+  `on`, `references`) that starts with `samskaras` is exactly
+  `samskaras` or `samskaras_all` (a typo like `samskara_live` would
+  otherwise pass silently and fail only at call time in plpgsql).
+  Index names, constraint names, policy names and the realtime topic
+  literal `'samskaras:'` are not in table position and are not
+  checked;
+- every body or statement naming `samskaras_all` in table position
+  is in the allowlist (the rename block, the create table, the index
+  and policy and guard statements, the child-table FKs, the four
+  deleters, the three history readers);
 - the view is created after the last `alter table
   public.samskaras_all` and before the first `language sql` function
   that names `samskaras`;
-- the counts of each class are pinned.
+- the counts of each class are pinned (deleters: 4 until the
+  compound plan lands).
 
-`tests/schema-dml-columns.test.ts:226-235` fails on DML whose target
+`tests/schema-dml-columns.test.ts:225-236` fails on DML whose target
 is not a `create table` name; writes through the view are exactly
 that. The test learns that a view defined as `select * from X`
-resolves to X's columns (a small addition, in the same change).
+resolves to X's columns. One trap: the rename statement `alter table
+public.samskaras rename ...` matches the scanner's `alter table`
+regex and registers `samskaras` as a known table with no columns, so
+the view mapping must overwrite that entry rather than merge into
+it, or every update through the view fails the test.
 
 ### Deploy
 
@@ -524,18 +573,20 @@ index is used.
 ## VALIDATION
 
 Before the change, run and log (QA rules: baseline first):
-`samskara-cap-eviction.md`, `samskara-decay.md` (its step at `:106`
-expects a reaped row to be absent; after the change it is present in
-`samskaras_all` with a stamp and absent from `samskaras`, and the
-step is rewritten to say so), `samskara-tier2-mint.md`, and the
-cohort-panel steps of the use-case that covers the diagnostics
-modal. After the change, re-run and log. QA docs that count the base
-table and now need to say which name they mean:
-`samskara-association-mint.md:74`, `samskara-tier2-mint.md:76`,
-`samskara-formation.md:35`, `intent-mint-pipeline.md:40`. QA cleanup
-steps that hard-delete (`samskara-association-mint.md:138`,
+`samskara-cap-eviction.md` (its queries at `:53` and `:62` go through
+`samskaras` and keep meaning "live"), `samskara-decay.md` (`:75-104`
+likewise; its step at `:106` expects a reaped row to be absent from
+`samskaras`, which stays true, and gains a second check that the
+row is present in `samskaras_all` with a stamp),
+`samskara-tier2-mint.md`, and the cohort-panel steps of the use-case
+that covers the diagnostics modal. After the change, re-run and log.
+QA count queries that name `samskaras`
+(`samskara-association-mint.md:74`, `samskara-tier2-mint.md:76`,
+`samskara-formation.md:35`, `intent-mint-pipeline.md:40`) still mean
+"live" through the view and need no edit. QA cleanup steps that
+hard-delete (`samskara-association-mint.md:138`,
 `samskara-tier2-mint.md:217`) still work through the cascade and
-say that they bypass the stamp.
+gain a note that they bypass the stamp.
 
 A new `docs/qa/use-cases/samskara-soft-delete.md` covers: stamp
 through each deleter, the view, the history that survives, the
@@ -569,6 +620,12 @@ reachable; one sentence).
   still cascades fires and control verdicts. Stated in the dev doc.
 - **One or two fires a day lose their verdict** when their claim is
   stamped before the judge runs.
+- **`samskaras_all` is reachable through the Data API** for a signed-
+  in user, owner-scoped by the same RLS, dead rows included. No
+  client names it; a later diagnostics surface may want to.
+- **The judge's id list grows** on long threads, because fired ids
+  now include dead claims; bounded by the distinct claims that ever
+  fired in the thread.
 
 ## REVISION LOG
 
