@@ -1,8 +1,10 @@
 # Samskara Compound Accountability Plan
 
-Status: DRAFT rev 3 (2026-10-23), after the lens fan-out and one
-fresh-context consensus round; awaiting the second (and, for a
-personal project, final) round. Revision log at the end.
+Status: REVIEWED rev 4 (2026-10-23). Deep-mode lens fan-out plus two
+fresh-context consensus rounds (the personal-project cap). Round 2
+reported no blockers and five should-fixes, all folded in here
+without a third round. Awaiting the owner's go-ahead to build M1.
+Revision log at the end.
 Source: the 2026-10-22 audit and its 2026-10-23 correction
 (`docs/qa/use-cases/samskara-cap-eviction.md`,
 `samskara-tier2-mint.md`, `samskara-decay.md`; the "Oct 22" and
@@ -47,8 +49,9 @@ graduation tier landed (PR #554, deployed 2026-10-02 00:13Z):
   470 association edges arrived and 62 were consumed, and the last
   day shows 24 at-cap skips against 4 evictions. The supply of parts
   is nearly spent.
-- **Graduation leaks through siblings.** 19 of the 30 deleted parts
-  were shared by two or more compounds, and the predicate deletes a
+- **Graduation leaks through siblings.** Of the 30 parts deleted by
+  2026-10-23 (29 on the 22nd; one more overnight), 19 were shared by
+  two or more compounds, and the predicate deletes a
   part if ANY compound holding it is established
   (`schema.sql:9752-9760`, a plain join). 13 of the 30 had no
   established parent at all and left by other routes (merges,
@@ -155,11 +158,17 @@ code M1 touches).**
   `samskara_population_p0` is service-role only, `9280`). Grants:
   execute to `authenticated` AND `service_role` (the snapshot runs as
   the signed-in user; the usual revoke-from-authenticated pattern
-  would break it). Under invoker security the helper sees only rows
-  the caller's RLS allows; the self-select policies on `samskaras`,
-  `samskara_provenance` (`7751-7753`) and `samskara_fires`
-  (`7890-7892`) cover the owner (verify the `samskaras` policy at
-  build time). The predicate is hand-copied in two places today
+  would break it). Grant order matters: functions are executable by
+  `public` by default, so revoke all from `public` and `anon` first,
+  then grant. Add `drop function if exists` ahead of the create.
+  Define the helper ABOVE `samskara_health_snapshot` in `schema.sql`:
+  the snapshot is a SQL-language function, which Postgres validates at
+  creation, so a helper defined after it fails the deploy's schema
+  apply and nothing in the gate would catch it. Under invoker security
+  the helper sees only rows the caller's RLS allows; the self-select
+  policies on `samskaras` (`7936`), `samskara_provenance` (`7980`) and
+  `samskara_fires` (`8119`) cover the owner. The predicate is
+  hand-copied in two places today
   (`9750-9768` and `11101-11125`); the anchor rule below is a ranked
   pick, which makes drift between copies likelier.
 
@@ -182,8 +191,9 @@ code M1 touches).**
   header (`schema.sql:9744-9746`) both say a compound "does not need
   its scaffolding" and that an all-parts-gone compound was foreseen.
   The anchor exists so that parent-wins still suppresses something,
-  the coverage guard still sees a live id, and a reaped compound's
-  region keeps a live anchor to resume from. Both texts are rewritten.
+  the coverage guard still sees a live id, and the part itself keeps
+  firing alone; it is not there to seed a replacement compound (see
+  the tombstone rule in M1.2). Both texts are rewritten.
 
 Ordering within the tier: least-tally part first, then the highest
 tally among the part's parent compounds (a part can have several
@@ -228,9 +238,13 @@ worth of misses in `samskara.md` ("Release of never-tested claims"),
 and the SQL header at `schema.sql:9646-9649`.
 
 Before deleting, the function writes a *tombstone* into
-`samskara_tier2_declines` (`schema.sql:7732-7738`), reading the
-provenance BEFORE the delete (provenance cascades with the compound,
-`7969`):
+`samskara_tier2_declines` (`schema.sql:7732-7738`). Victim selection,
+tombstone insert and delete run as ONE statement (a victims CTE that
+reads the provenance and feeds both the insert and the delete), so a
+judge commit between two separate statements cannot leave a tombstone
+for a compound that survived, or delete a compound with no tombstone;
+provenance cascades with the compound (`7969`), which is the other
+reason it must be read in the same statement:
 
 - `group_key` = the compound's child ids from provenance, sorted as
   text `collate "C"`, joined with `,` (the writer's format via
@@ -241,7 +255,8 @@ provenance BEFORE the delete (provenance cascades with the compound,
   `'reaped'`) added inside a guarded `do` block so re-apply is clean.
 - `insert ... on conflict (user_id, group_key) do update set reason =
   'reaped', declined_at = now(), children = excluded.children`, over
-  a `select distinct on (group_key)` so two reaped compounds with the
+  a `select distinct on (user_id, group_key)` (the reaper runs across
+  all users) so two reaped compounds with the
   same child set do not touch one row twice in one statement (which
   Postgres rejects).
 - A compound with NO provenance rows (possible: `insertMint` keeps the
@@ -252,7 +267,11 @@ provenance BEFORE the delete (provenance cascades with the compound,
   sending no `reason`; a later decline on the same key refreshes
   `declined_at` and leaves `reason = 'reaped'` in place (PostgREST
   updates only the columns it is sent). Noted in the writer's comment
-  so nobody "fixes" it.
+  so nobody "fixes" it. Consequence, accepted: a minter decline on a
+  reaped key after day 90 re-arms the 90-day one-shared-id block
+  instead of a 7-day Jaccard block. The ledger's "writes come
+  exclusively from the venice function's service-role client" comment
+  (`7741-7742`) becomes false and is rewritten.
 
 Reaped tombstones are NOT permanent. The ledger's recorded principle
 is that only verdicts that "can never change" are permanent, and the
@@ -324,7 +343,9 @@ pointable-moment test, applied at mint time. Pinned by Deno.
 Validation: replay the new prompt over the surviving child lists of
 existing compounds (29 of 58 child texts are gone, so the replay is
 partial); success is a non-zero decline share, concentrated on
-compounds whose held rate trails tier-1. Forward: tier-2's soft-miss
+compounds whose held rate trails tier-1. Count declines with
+`reason = 'declined'` only; reaped tombstones share the ledger.
+Forward: tier-2's soft-miss
 share of genuine verdicts drops toward tier-1's over three weeks under
 the same judge model.
 
@@ -397,8 +418,9 @@ M1, verified on prod after deploy and at the next scheduled audit:
 - The four compounds under the bar on 2026-10-22 are gone within one
   hour of deploy, each with a `reason = 'reaped'` row in the decline
   ledger (or no row, if it had no provenance); `compounds_under_bar`
-  reads 0 on the panel AND the mapper test proves the column is
-  wired.
+  drains to 0 within a few ticks (each reap nudges p0 up, which can
+  push one more compound under the bar on the next tick) AND the
+  mapper test proves the column is wired.
 - No part deleted BY GRADUATION after deploy had a non-established
   parent at deletion time (other release paths - underperformer,
   dead reaper, probation, merge - may still remove a part, including
@@ -512,3 +534,13 @@ few wide results and compute locally.
   Surfaces added: the audit skill, the snapshot header comment, the
   candidate preamble, the tier-2 detection doc section, and a
   before/after pass on the tier-2 QA use-case.
+- rev 4 (2026-10-23): after consensus round 2 (no blockers). Victim
+  selection, tombstone and delete made one statement; distinct-on
+  keyed per user; helper placed above the snapshot (SQL-language
+  functions validate at create) with drop-if-exists and revoke before
+  grant; RLS policy citations corrected; anchor wording aligned with
+  the tombstone decision; decline counts filtered to minter declines
+  in M2 and the audit skill; the ledger's writer comment and data
+  model entry added to the surfaces; the acceptance criterion reads
+  "drains" to allow the p0 ratchet; the 29-vs-30 deleted-parts figures
+  dated.
