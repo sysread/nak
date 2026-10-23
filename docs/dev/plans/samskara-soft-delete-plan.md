@@ -1,8 +1,10 @@
 # Samskara soft-deletion
 
-Status: DRAFT rev 3 (2026-10-23), after the deep-mode lens fan-out
-(hidden problems, safe-to-modify, archaeology, alternatives) and one
-fresh-context consensus round (no blockers). Lands
+Status: REVIEWED rev 4 (2026-10-23). Deep-mode lens fan-out (hidden
+problems, safe-to-modify, archaeology, alternatives) and two
+fresh-context consensus rounds, the personal-project cap; round 2
+reported no blockers and five should-fixes, folded in here. Awaiting
+the owner's go-ahead to build. Lands
 before M1.2 of
 [the compound accountability plan](./samskara-compound-accountability-plan.md),
 whose tombstone design it replaces. Revision log at the end.
@@ -46,7 +48,11 @@ three deliberate history readers and the table DDL name
   parts survive only as ids (`ref_id` has no FK by design,
   "debugging beats normalisation", `7962-7964`), which is why the
   coverage test counts dead ids and the UI renders "(removed)" from a
-  null join (`10912-10914`).
+  null join (`10912-10914`). This plan makes the child's row and text
+  survive; it does not change what the UI shows for it
+  (`samskara_provenance_detail` keeps joining the view and keeps
+  rendering "(removed)"). Showing the dead child's text and reason
+  is a later UI change.
 - **Evictions cannot be attributed after the fact.** The evictor
   returns a bare id (`9661-9662`, `9667-9775`) and nothing records
   which tier picked it; the compound plan infers graduation's 46
@@ -189,12 +195,19 @@ table if not exists public.samskaras` skips silently because the
 name exists as a view, and its `create index if not exists
 samskaras_user_tier_idx on public.samskaras` then errors because
 that index name was dropped; the transaction rolls back and prod
-stays on the new schema, with the deploy stuck. The reverse is a
-short manual block, recorded in the dev doc: `drop view
-public.samskaras; alter table public.samskaras_all rename to
-samskaras;` and recreate the two old indexes. Stamped rows stay
-stamped and invisible to nothing after that, so the reverse is only
-for a broken apply, not a change of mind.
+stays on the new schema, with the deploy stuck. A failed apply needs
+no reverse at all, because it rolls back whole. So a manual reverse
+only ever runs after a successful deploy, when stamped rows exist,
+and it has to decide what happens to them: once the view is gone
+every stamped row is live again, fireable, counted against the cap
+and included in p0. The recorded reverse, in the dev doc, is: `drop
+view public.samskaras; delete from public.samskaras_all where
+deleted_at is not null;` (the children cascade, as they would have
+under the old code) `alter table public.samskaras_all rename to
+samskaras;` recreate the two old indexes under their old names, and
+recreate the delete policy if the old file will not be re-applied.
+Resurrecting the stamped rows instead is a choice someone makes on
+purpose, not the default.
 
 **Lock.** The rename takes an exclusive lock on the table at about
 line 7866 and holds it until the whole one-transaction apply commits.
@@ -273,15 +286,24 @@ comment.**
   cap. The reason is on the row now, which is all attribution
   needs. The stamp uses `returning id`; if a reaper stamped the
   chosen victim first, zero rows return and the function returns
-  null rather than reporting a victim it did not take. The four
+  null rather than reporting a victim it did not take; the caller
+  then logs "nothing evictable" (`agents/samskara.ts:1276`) although
+  a slot was just freed, and the next cap hit picks it up. A comment
+  at the log line says so. The four
   tier selects and the compound join at `9754` name `samskaras` and
   need no edit (a dead compound stops graduating its parts on its
   own).
 - `_samskara_merge_pair` (`10139-10198`, delete at `10196`) ->
-  `merge-loser`. It gains an early return when the loser or the
-  winner is not in `samskaras` (the view), so the helper itself is a
-  no-op on a stamped row even if two sweeps race past the caller's
-  checks at `10340-10341` and `10387-10388`. The counter fold at
+  `merge-loser`. It gains a guard at the top that locks both rows
+  through the view (`perform 1 from public.samskaras where id in
+  (p_winner_id, p_loser_id) and user_id = p_user_id for update`) and
+  returns unless both come back. A plain existence check would be
+  check-then-act: the reapers run from pg_cron (`15758`) while the
+  collapse runs from the edge sweep (`agents/samskara.ts:1762`), so
+  a reaper could stamp the loser after the check passed, and the
+  helper would then retarget a dead loser's fires onto the winner
+  while the fold and the final stamp both matched nothing. Holding
+  the row locks until commit closes that. The counter fold at
   `10191` (`from public.samskaras l`) is then live-only on its own.
   The comment at `10173-10175` ("loser's remaining provenance
   cascade-deletes") becomes false and is rewritten: the loser keeps
@@ -388,11 +410,20 @@ row's health-at-death on every deploy.
   claim normally, while the cohort list embeds the view and labels
   the same claim "deleted since fire" with no text. Both are
   diagnostics; stated here so nobody files it as a bug.
-- **History is complete except through two paths**: the merge's
-  colliding-fire delete above, and thread deletion, which cascades
-  fires and control verdicts by `thread_id` (`8011`, `8152`;
-  `src/lib/supabase/threads.ts:760-779`). Both are stated in the dev
-  doc.
+- **History is complete except through three paths**: the merge's
+  colliding-fire delete above; thread deletion, which cascades fires
+  and control verdicts by `thread_id` (`8011`, `8152`;
+  `src/lib/supabase/threads.ts:760-779`); and account deletion,
+  which cascades everything by `user_id` (`7868`). All three are
+  stated in the dev doc.
+- **A stamp does not bump `updated_at`.** The stamp is its own
+  timestamp; `updated_at` keeps meaning "last content or counter
+  change".
+- **The control-verdict insert stops losing whole batches.** Today
+  the insert (`samskara_evaluation.ts:638-649`) fails its FK check
+  when one sampled claim was deleted mid-judge and the batch is lost;
+  with rows surviving, it records. An improvement, listed so the
+  rising control-row count is not read as a bug.
 
 ### The RLS delete policy
 
@@ -441,17 +472,28 @@ rest) and asserts:
 - the view is created after the last `alter table
   public.samskaras_all` and before the first `language sql` function
   that names `samskaras`;
+- `samskaras` never appears as a DDL target (`alter table`, `create
+  index ... on`, `create policy ... on`, `references
+  public.samskaras(`) except in the rename statement and the drop
+  and create of the view. Nothing in the gate runs SQL, so DDL aimed
+  at the view name would otherwise pass every other rule and fail
+  only at deploy;
+- there is no `delete from public.samskaras` and no `delete from
+  public.samskaras_all` anywhere in the file (pinned at zero), so a
+  hard delete cannot come back quietly with its cascade;
 - the counts of each class are pinned (deleters: 4 until the
   compound plan lands).
 
 `tests/schema-dml-columns.test.ts:225-236` fails on DML whose target
 is not a `create table` name; writes through the view are exactly
 that. The test learns that a view defined as `select * from X`
-resolves to X's columns. One trap: the rename statement `alter table
+resolves to X's columns. Two traps: the rename statement `alter table
 public.samskaras rename ...` matches the scanner's `alter table`
-regex and registers `samskaras` as a known table with no columns, so
-the view mapping must overwrite that entry rather than merge into
-it, or every update through the view fails the test.
+regex (`:95`) and registers `samskaras` as a known table with no
+columns, so the view must not be skipped as "already known"; and the
+view must be resolved only after every `alter table
+public.samskaras_all add column` has been collected, or its column
+set is short.
 
 ### Deploy
 
@@ -568,8 +610,11 @@ No behavior change is intended. What does move:
 
 Measure at day seven: the `deleted_reason` histogram (the first time
 evictions are attributable), the live count against the cap, and an
-EXPLAIN of the fire query on prod (read-only) to confirm the partial
-index is used.
+EXPLAIN of the fire query on prod (read-only) to confirm the
+deleted-at filter sits on the scan node. At about 150 live rows per
+user the planner may well choose a sequential scan over the partial
+index; that is fine, the check is where the filter runs, not which
+access path is used.
 
 ## VALIDATION
 
@@ -579,8 +624,10 @@ Before the change, run and log (QA rules: baseline first):
 likewise; its step at `:106` expects a reaped row to be absent from
 `samskaras`, which stays true, and gains a second check that the
 row is present in `samskaras_all` with a stamp),
-`samskara-tier2-mint.md`, and the cohort-panel steps of the use-case
-that covers the diagnostics modal. After the change, re-run and log.
+`samskara-tier2-mint.md`. No existing use-case walks the cohort panel
+or the thread diagnostics modal; the new soft-delete use-case below
+carries those steps, and its before-run on the unchanged code is the
+baseline. After the change, re-run and log.
 QA count queries that name `samskaras`
 (`samskara-association-mint.md:74`, `samskara-tier2-mint.md:76`,
 `samskara-formation.md:35`, `intent-mint-pipeline.md:40`) still mean
@@ -663,3 +710,16 @@ reachable; one sentence).
   Data API reach of `samskaras_all` and judge id-list growth
   accepted; the modal-versus-cohort-list cosmetic disagreement
   stated; QA edits trimmed to what changes.
+- rev 4 (2026-10-23): after consensus round 2 (no blockers; the
+  personal-project cap). The merge guard locks both rows `for
+  update` instead of checking existence (a reaper could stamp the
+  loser between check and act); the rollback note now says the
+  reverse resurrects stamped rows unless they are deleted first;
+  the "dead children" bullet states that the UI keeps rendering
+  "(removed)" and the richer display is later; the schema test
+  forbids DDL aimed at the view name and pins zero hard deletes;
+  the day-7 EXPLAIN check asks where the filter runs, not which
+  access path; account deletion recorded as the third history-loss
+  path; `updated_at` and the control-verdict batch improvement
+  noted; the evictor-lost-a-race log line gets a comment; the
+  DML-columns trap reworded; SYNOPSIS says four deleters.
