@@ -319,10 +319,14 @@ the "deliberate omission" comment in `src/lib/ui/samskara-browse.ts:219-228`
 (gains the fourth tier and the compound reap); the types comment at
 `types/samskara.ts:67-72` (says 3.0); the audit skill
 (`.claude/skills/samskara-audit/SKILL.md:120-140`, which hand-runs the
-3.0 predicate and names the no-exit gap). Docs: `samskara.md`
+3.0 predicate and names the no-exit gap; its decline count must
+filter `reason = 'declined'` so tombstones do not read as minter
+declines). Docs: `samskara.md`
 ("Release of never-tested claims" gains the floor rules; "Decay" gains
 a "Compound reap" paragraph; "Tier-2 detection formula" gains the
-90-day and one-shared-id rules; the tier-2 gotcha is rewritten);
+90-day and one-shared-id rules; the `samskara_tier2_declines` data
+model entry gains the `reason` column and the second writer; the
+tier-2 gotcha is rewritten);
 `planned-changes.md` records M1 shipped; `docs/user/samskara.md`
 names the new panel number; QA: `samskara-cap-eviction.md` step 3b
 becomes three sub-cases (below), `samskara-decay.md` gains a reap
