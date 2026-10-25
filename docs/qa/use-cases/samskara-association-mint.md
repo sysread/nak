@@ -3,7 +3,7 @@
 ## Covers
 
 The association-mint sweep phase
-(`mintTier1FromAssociationsProbe`) and its supporting pieces: the
+(`mintFromAssociationsProbe`) and its supporting pieces: the
 `samskara_association_cluster` hub-selection RPC, the per-edge
 `minted_at` consumption stamp (set on mint / dedup-hit / decline,
 never on a non-verdict), `'association'` provenance with
@@ -71,7 +71,7 @@ dev shim's tick of it), never a chat turn.
    select count(*) filter (where minted_at is null) as unconsumed,
           count(*) as total
      from samskara_associations where user_id = '<user>';
-   select count(*) from samskaras where user_id = '<user>' and tier = 1;
+   select count(*) from samskaras where user_id = '<user>';
    ```
 
    Open the Samskara tab, click the **Health** button in the top row:
@@ -80,7 +80,7 @@ dev shim's tick of it), never a chat turn.
 
 3. **Tick the sweep.** Hit the `nak-samskara-sweep` route (dev
    shim tick, or `curl` the local function). Watch the Logs drawer
-   for the `mint-tier1-assoc` phase line.
+   for the `mint-from-associations` phase line.
 
 4. **Tick the sweep a second time** after the first completes,
    without adding new associations.
@@ -88,7 +88,7 @@ dev shim's tick of it), never a chat turn.
 ## Expected
 
 - **First tick mints (or dedup-reinforces).** A
-  `mint-tier1-assoc: minted samskara` log line (or
+  `mint-from-associations: minted samskara` log line (or
   `dedup-reinforced existing`), and either way the fed edges are
   now stamped:
 
@@ -113,7 +113,7 @@ dev shim's tick of it), never a chat turn.
   observations" - not one mislabeled list. (Mixed-kind is the
   case the old first-row heading got wrong.)
 
-- **`sample_labels` reached the minter.** The `mint-tier1-assoc`
+- **`sample_labels` reached the minter.** The `mint-from-associations`
   trace/info carries the cluster; the minted prediction should
   reflect the relation labels, not just raw situations. (Soft
   check - prompt-dependent.)

@@ -3,7 +3,7 @@
   "what": "Hand-labeled samskara similarity probe set: 80 claim pairs sampled stratified across the centered claim-pair similarity range, each labeled into one of four classes.",
   "sampled": "2026-09-05 from the prod corpus (104 survivor claims, post threshold-collapse; survivorship-biased toward low similarity - re-sample on rotation)",
   "embedded_with": "gte-small (384-dim, Supabase.ai.Session), padded to 2048 storage dims",
-  "scored_under": "CLAIM-mean centering: both prediction vectors normalized, the mean of all 104 claim vectors subtracted, renormalized; sim = centered cosine. The claim-space bars (MINT_DEDUP_COSINE 0.50, collapse 0.30/0.40, tier-2 band [0.10, 0.35)) are solved on THIS scale. Centering claims with the substrate mean instead is a different scale - measured NN median 0.648 vs 0.404 here.",
+  "scored_under": "CLAIM-mean centering: both prediction vectors normalized, the mean of all 104 claim vectors subtracted, renormalized; sim = centered cosine. The claim-space bars (MINT_DEDUP_COSINE 0.50, collapse 0.30/0.40) are solved on THIS scale. Centering claims with the substrate mean instead is a different scale - measured NN median 0.648 vs 0.404 here.",
   "sampling": "Stratified random (seed 42) over centered-similarity bands [0.40,1.01)x25, [0.15,0.40)x25, [-0.05,0.15)x15, [-1.01,-0.05)x15",
   "labeler": "operator (Jeff), reading both claim texts per pair",
   "labels": "duplicate = same predictive claim, a rewording; same-topic = shared domain and strongly overlapping behavior, not interchangeable; related = shared theme/register, distinct behavior; unrelated = neither",

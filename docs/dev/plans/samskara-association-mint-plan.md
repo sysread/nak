@@ -1,5 +1,9 @@
 # Samskara Association-Mint Implementation Plan
 
+> **Retired 2026-10-25 with the tier-2 (compound) layer.** This plan
+> is the historical design record; the tier-2 machinery it
+> describes was removed outright.
+
 Status: LANDED. The consumer side of the associative layer -
 minting tier-1 samskaras from the association graph pair-relate
 writes - is implemented (`mintTier1FromAssociationsProbe` +

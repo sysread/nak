@@ -2,7 +2,7 @@
  * Shared current-mood state, read by both the persistent mood pill
  * (top-right glance, `SamskaraToasts.svelte`) and the diagnostics
  * modal's legend overlay (`Samskara.svelte`'s "you are here" red
- * dot). Lifting the triple to a single Svelte 5 rune keeps the
+ * dot). Lifting the pair to a single Svelte 5 rune keeps the
  * modal's dot perfectly aligned with the pill the user clicked to
  * open it - no separate fetch, no listener race.
  *
@@ -43,7 +43,7 @@ let _visual = $state<MoodVisual | null>(null);
  * seed query has not returned). Consumers should treat null as the
  * "no dot, no overlay" case.
  *
- * The setter accepts the full triple at once because the three
+ * The setter accepts the full pair at once because both
  * scalars are read together by every consumer (the dot's row is
  * picked from valence and its column from confidence) and
  * splitting them into separate setters would invite a half-updated

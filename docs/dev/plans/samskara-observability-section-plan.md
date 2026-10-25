@@ -1,5 +1,9 @@
 # Samskara Observability Section Plan
 
+> **Retired 2026-10-25 with the tier-2 (compound) layer.** This plan
+> is the historical design record; the tier-2 machinery it
+> describes was removed outright.
+
 Status: IMPLEMENTED and superseded - this is a historical proposal, kept
 for the design rationale. The shipped feature is the living reference:
 [`../samskara.md`](../samskara.md). Where the implementation diverged

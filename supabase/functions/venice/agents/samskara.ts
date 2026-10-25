@@ -1,7 +1,7 @@
 // Samskara formation pipeline: assimilate chat rounds into substrate,
 // relate and cluster them into predictive claims, collapse redundancy,
-// and keep the per-user compound summary prose fresh. docs/dev/
-// samskara.md is the design doc. (Scoring the user's reactions to
+// and keep the per-user compound summary prose fresh. The design
+// doc is docs/dev/samskara.md. (Scoring the user's reactions to
 // fired cohorts moved to the next-day evaluation sweep - see agents/
 // samskara_evaluation.ts. A tier-2 "compound" layer over co-firing
 // claims was retired 2026-10-25; the summary prose block stays and is
@@ -874,7 +874,7 @@ async function insertMint(
   log: EdgeLogger,
   minted: MintResult,
   predEmbedding: number[],
-  provenance: { kind: 'substrate' | 'samskara' | 'association'; refId: string; weight: number }[],
+  provenance: { kind: 'substrate' | 'association'; refId: string; weight: number }[],
 ): Promise<string | null> {
   const { data, error } = await admin
     .from('samskaras')

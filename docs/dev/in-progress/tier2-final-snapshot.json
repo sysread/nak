@@ -1,0 +1,1401 @@
+[
+ {
+  "json_agg": [
+   {
+    "id": "b3c0ccca-b81c-427e-83e1-789bda5301d6",
+    "prediction": "In evaluative situations—purchase decisions, progress check-ins, trust judgments—this user re-appraises against their own criteria instead of accepting the default framing, counting stability and incremental gains as genuine wins and treating softened, inflated, or wasteful framings as friction to be called out.",
+    "inner_voice": "same move every time: my scale, not the given one.",
+    "health": 0.938776,
+    "confirm_count": 10.3378,
+    "disconfirm_count": 0.336257,
+    "fire_count": 151,
+    "created_at": "2026-09-11T19:23:27.977655+00:00",
+    "last_fired_at": "2026-10-25T16:36:46.100629+00:00",
+    "judged_fires": 148,
+    "held": 50,
+    "nbo": 4,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "0616c9bd-60e5-4bc2-b2a6-4f54ca3accb1",
+      "alive": false
+     },
+     {
+      "part": "45bc3cd9-ed8f-4723-818f-a84345fb0c1e",
+      "alive": false
+     },
+     {
+      "part": "95520ed3-65a5-4201-b8fc-ab1cbd0f9bf8",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "bbb2a7b2-b31f-4a2e-96ab-ada503fdde60",
+    "prediction": "In sci-fi fandom and deep-dive exchanges, this user engages as a granular-mastery enthusiast: they drill into fine details (terminology, production trivia, cast facts), defend their points with substantive reasoning, and playfully signal insider knowledge - and the assistant's surface-level corrections here routinely lose to the user's deeper command of the material.",
+    "inner_voice": "verify before pushing back - their knowledge usually runs deeper than mine",
+    "health": 0.892102,
+    "confirm_count": 1,
+    "disconfirm_count": 0,
+    "fire_count": 37,
+    "created_at": "2026-09-13T17:23:55.679121+00:00",
+    "last_fired_at": "2026-10-25T16:36:46.100629+00:00",
+    "judged_fires": 35,
+    "held": 1,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "66eb8915-9909-4f80-bd3b-26aaa3610cab",
+      "alive": false
+     },
+     {
+      "part": "6fda61cf-2c94-418d-974d-5782cf8f1b6b",
+      "alive": false
+     },
+     {
+      "part": "bfe74222-48db-47e9-9365-f0f43c3789f3",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "e8083069-a2b0-4034-a551-0bd15de7faf4",
+    "prediction": "In fandom and knowledge-heavy exchanges, this user tends to operate a layer beneath the surface — lore structure, production politics, source credibility — and holds whatever authority they find there to structural account, extending trust only as long as claims and fairness hold up.",
+    "inner_voice": "Trust is earned per-claim here; verify before correcting.",
+    "health": 0.911777,
+    "confirm_count": 5.64902,
+    "disconfirm_count": 0.320364,
+    "fire_count": 142,
+    "created_at": "2026-09-13T19:23:23.216268+00:00",
+    "last_fired_at": "2026-10-25T16:36:46.100629+00:00",
+    "judged_fires": 139,
+    "held": 39,
+    "nbo": 2,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "66eb8915-9909-4f80-bd3b-26aaa3610cab",
+      "alive": false
+     },
+     {
+      "part": "6fda61cf-2c94-418d-974d-5782cf8f1b6b",
+      "alive": false
+     },
+     {
+      "part": "95520ed3-65a5-4201-b8fc-ab1cbd0f9bf8",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "0d790afe-f88f-419b-ba53-a65236202f22",
+    "prediction": "Across planning, ideas, and relationship friction, this user tends to run everything through a pragmatic filter: he converts plans, philosophies, and accusations into concrete workable terms, and declines to carry weight — metaphysical or emotional — that doesn't justify itself as useful or reasonable.",
+    "inner_voice": "Strip it to what works; drop what doesn't earn its weight.",
+    "health": 0.902049,
+    "confirm_count": 7.87835,
+    "disconfirm_count": 0.763313,
+    "fire_count": 100,
+    "created_at": "2026-09-14T01:24:01.103244+00:00",
+    "last_fired_at": "2026-10-25T16:36:46.100629+00:00",
+    "judged_fires": 97,
+    "held": 52,
+    "nbo": 13,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "502bcf59-ee1a-422a-b406-e285c12989c9",
+      "alive": false
+     },
+     {
+      "part": "f3ff3a0a-289d-41cf-bc7f-ce8dc991d376",
+      "alive": false
+     },
+     {
+      "part": "fd689500-d7b0-487c-9c98-b1fb8158bd4b",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "8b9feac7-9a28-4a86-9471-a8bac1eb0d1c",
+    "prediction": "In meal-planning collaborations, this user tends to engage as an opinionated co-cook: they arrive with firm ingredient loyalties and dislikes, prefer choosing from a short menu of varied options over a single prescription, and filter every suggestion through flavor-first, low-effort, low-waste priorities.",
+    "inner_voice": "Give a menu, not a decree — this one cooks with opinions.",
+    "health": 0.93578,
+    "confirm_count": 5.0808,
+    "disconfirm_count": 0,
+    "fire_count": 78,
+    "created_at": "2026-09-14T21:23:15.102627+00:00",
+    "last_fired_at": "2026-10-24T16:29:02.960995+00:00",
+    "judged_fires": 78,
+    "held": 54,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1d513233-2452-4452-b2d4-eefb84c337c2",
+      "alive": false
+     },
+     {
+      "part": "1fa9559b-6623-4499-9b63-64547d4b8ba0",
+      "alive": false
+     },
+     {
+      "part": "9b2af3f2-3cab-4ebd-874e-75126507eb04",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "0ac2860d-831c-4e03-a110-04d1015630df",
+    "prediction": "In unresolved situations — an uneventful week, a half-remembered fact, a fracture in trust — this user pushes for a definitive verdict that settles the matter, and experiences hedging, softening, or leaving things tentative as an unfinished job.",
+    "inner_voice": "Open loops itch for them; give the verdict plainly, even when it stings.",
+    "health": 0.591344,
+    "confirm_count": 0.966517,
+    "disconfirm_count": 3.02846,
+    "fire_count": 100,
+    "created_at": "2026-09-18T23:23:20.990712+00:00",
+    "last_fired_at": "2026-10-25T16:29:27.318407+00:00",
+    "judged_fires": 98,
+    "held": 9,
+    "nbo": 24,
+    "contradicted": 8,
+    "parts": [
+     {
+      "part": "45bc3cd9-ed8f-4723-818f-a84345fb0c1e",
+      "alive": false
+     },
+     {
+      "part": "6e8841be-6a38-4f12-b05d-4e92a7f6c34e",
+      "alive": false
+     },
+     {
+      "part": "95520ed3-65a5-4201-b8fc-ab1cbd0f9bf8",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "b0abcd5a-a1f6-4afe-9077-8e7b237879a3",
+    "prediction": "In everyday cooking situations, this user tends to operate as the hands-on authority in their own kitchen — grounded in their actual equipment, ingredients, and real-time measurements — and treats the assistant as a checkpoint to confirm or green-light decisions rather than as a cautious director.",
+    "inner_voice": "I'm the second opinion in their kitchen, not the chef.",
+    "health": 0.870522,
+    "confirm_count": 0,
+    "disconfirm_count": 0,
+    "fire_count": 1,
+    "created_at": "2026-09-19T17:23:11.707806+00:00",
+    "last_fired_at": "2026-09-21T22:56:06.593389+00:00",
+    "judged_fires": 1,
+    "held": 0,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "0f7994d5-f211-4f28-8dc1-83f5c5877d14",
+      "alive": false
+     },
+     {
+      "part": "67aa629c-aae5-4596-ad36-e40df3cbc34a",
+      "alive": false
+     },
+     {
+      "part": "aeac4564-565c-4142-a4cd-e7c726745144",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "601a021e-7111-4033-aba3-15a2f6337ee5",
+    "prediction": "In anything touching food — weeknight cooking, work travel, sourcing odd grains — this user engages as a hands-on maker rather than a consumer: they prepare and process food themselves, treat each outcome as an experiment to report back on and refine, and weave the results into their relationships with coworkers, friends, and household.",
+    "inner_voice": "not a consumer of food — a maker running a rolling experiment",
+    "health": 0.909395,
+    "confirm_count": 9.2024,
+    "disconfirm_count": 0.816837,
+    "fire_count": 98,
+    "created_at": "2026-09-19T18:23:24.571633+00:00",
+    "last_fired_at": "2026-10-24T17:35:24.442497+00:00",
+    "judged_fires": 98,
+    "held": 49,
+    "nbo": 37,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1fa9559b-6623-4499-9b63-64547d4b8ba0",
+      "alive": false
+     },
+     {
+      "part": "54019fc5-f4f8-4027-b59b-0f6883a49eab",
+      "alive": false
+     },
+     {
+      "part": "b90a56e4-e20d-4ff8-9e68-b0a1aae6f040",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "da927ba9-00c3-4bc6-b1f3-6abc66025612",
+    "prediction": "In everyday food situations - cooking at home, packing for trips, quick dinners - this user treats food as practical sustenance rather than performance, leaning on sturdy homemade or bread-based staples and having their own instincts while staying open to workable alternatives, then reliably reports back on how things actually turned out.",
+    "inner_voice": "Food is infrastructure for them, not theater.",
+    "health": 0.799881,
+    "confirm_count": 2.32268,
+    "disconfirm_count": 1.15195,
+    "fire_count": 27,
+    "created_at": "2026-09-19T19:23:51.181383+00:00",
+    "last_fired_at": "2026-10-24T23:32:08.504763+00:00",
+    "judged_fires": 27,
+    "held": 6,
+    "nbo": 16,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1fa9559b-6623-4499-9b63-64547d4b8ba0",
+      "alive": false
+     },
+     {
+      "part": "54019fc5-f4f8-4027-b59b-0f6883a49eab",
+      "alive": false
+     },
+     {
+      "part": "67aa629c-aae5-4596-ad36-e40df3cbc34a",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "11b3a7b6-329a-46d0-af87-a470e5277c53",
+    "prediction": "In everyday meal-planning situations, this user cooks as a pragmatic collaborator: flavor and budget outrank presentation, they build meals around whatever is already on hand, and they engage best when offered a short menu of options to choose from rather than a single prescriptive recipe.",
+    "inner_voice": "A practical cook: give them a menu, not a mandate.",
+    "health": 0.814567,
+    "confirm_count": 1.57011,
+    "disconfirm_count": 0.700896,
+    "fire_count": 20,
+    "created_at": "2026-09-19T20:23:24.56635+00:00",
+    "last_fired_at": "2026-10-17T20:01:29.762833+00:00",
+    "judged_fires": 20,
+    "held": 7,
+    "nbo": 10,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1fa9559b-6623-4499-9b63-64547d4b8ba0",
+      "alive": false
+     },
+     {
+      "part": "67aa629c-aae5-4596-ad36-e40df3cbc34a",
+      "alive": false
+     },
+     {
+      "part": "9b2af3f2-3cab-4ebd-874e-75126507eb04",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "f437877d-a38a-4487-aca6-05f5b21d7b3d",
+    "prediction": "Across situations that touch food — archiving recipes, traveling, or acquiring unusual ingredients — this user tends to treat cooking as one continuous personal practice they document, carry with them, and keep experimenting within, rather than as isolated meals.",
+    "inner_voice": "food is this user's throughline, not a category",
+    "health": 0.947914,
+    "confirm_count": 10.3674,
+    "disconfirm_count": 0.270537,
+    "fire_count": 76,
+    "created_at": "2026-09-19T22:23:20.213319+00:00",
+    "last_fired_at": "2026-10-24T23:32:08.504763+00:00",
+    "judged_fires": 76,
+    "held": 56,
+    "nbo": 3,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "389ce633-32e5-419a-a1ec-f0e8352ae9a3",
+      "alive": false
+     },
+     {
+      "part": "54019fc5-f4f8-4027-b59b-0f6883a49eab",
+      "alive": false
+     },
+     {
+      "part": "b90a56e4-e20d-4ff8-9e68-b0a1aae6f040",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "dc1dde50-34d4-4ccc-8b68-8d46a2ede045",
+    "prediction": "In kitchen situations — whether baking, cooking sides, or acquiring unusual grains — this user treats food as an experimental material: they test hypotheses, iterate on blends, and judge outcomes by mechanism and taste rather than by recipe-following or presentation.",
+    "inner_voice": "not a cook with recipes — a researcher whose lab is the kitchen",
+    "health": 0.877365,
+    "confirm_count": 6.98096,
+    "disconfirm_count": 1.05465,
+    "fire_count": 81,
+    "created_at": "2026-09-21T01:23:14.642634+00:00",
+    "last_fired_at": "2026-10-24T21:09:42.914313+00:00",
+    "judged_fires": 81,
+    "held": 44,
+    "nbo": 33,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "0f7c882d-5855-4300-8ca6-9d5ef51f1aef",
+      "alive": false
+     },
+     {
+      "part": "1fa9559b-6623-4499-9b63-64547d4b8ba0",
+      "alive": false
+     },
+     {
+      "part": "b90a56e4-e20d-4ff8-9e68-b0a1aae6f040",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "efb4abdf-91a8-4f85-8037-cc37dd0f667a",
+    "prediction": "In recurring cooking and meal-planning exchanges, this user treats their kitchen as an ongoing, versioned practice: they stay loyal to signature ingredients and dishes, refine them iteratively against prior versions, and expect the assistant to build on that saved history with a few targeted options rather than reinvent or override their established tastes.",
+    "inner_voice": "Not asking for recipes — versioning a repertoire. Edit, don't reinvent.",
+    "health": 0.920118,
+    "confirm_count": 2.80358,
+    "disconfirm_count": 0,
+    "fire_count": 7,
+    "created_at": "2026-09-21T02:23:11.864475+00:00",
+    "last_fired_at": "2026-10-23T23:09:51.46943+00:00",
+    "judged_fires": 7,
+    "held": 3,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1d513233-2452-4452-b2d4-eefb84c337c2",
+      "alive": false
+     },
+     {
+      "part": "9b2af3f2-3cab-4ebd-874e-75126507eb04",
+      "alive": false
+     },
+     {
+      "part": "fa88ec73-67a1-4033-89d4-d0d28dfc4178",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "20c932c2-e78e-4731-9d5f-c8437687feb6",
+    "prediction": "In cooking interactions, this user runs an ongoing, feedback-driven home practice: they refine recurring dishes across sessions, report back on how things actually turned out, and hold firm ingredient preferences while staying open to functional swaps. They optimize for flavor and real-world constraints (time, budget, travel, no leftovers) over presentation, and expect the assistant to build on shared history rather than start fresh.",
+    "inner_voice": "not a recipe requester — a cook maintaining a living repertoire",
+    "health": 0.930291,
+    "confirm_count": 2.80358,
+    "disconfirm_count": 0,
+    "fire_count": 3,
+    "created_at": "2026-09-21T03:23:15.870694+00:00",
+    "last_fired_at": "2026-10-24T22:01:35.427651+00:00",
+    "judged_fires": 3,
+    "held": 3,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1d513233-2452-4452-b2d4-eefb84c337c2",
+      "alive": false
+     },
+     {
+      "part": "1fa9559b-6623-4499-9b63-64547d4b8ba0",
+      "alive": false
+     },
+     {
+      "part": "54019fc5-f4f8-4027-b59b-0f6883a49eab",
+      "alive": false
+     },
+     {
+      "part": "67aa629c-aae5-4596-ad36-e40df3cbc34a",
+      "alive": false
+     },
+     {
+      "part": "9b2af3f2-3cab-4ebd-874e-75126507eb04",
+      "alive": false
+     },
+     {
+      "part": "fa88ec73-67a1-4033-89d4-d0d28dfc4178",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "f48f4e19-63cc-4174-8f26-2e05f8ac7387",
+    "prediction": "In long-form, curiosity-driven conversations, this user tends to chase half-remembered specifics until they're pinned down, treating the verification itself as the pleasure of the exchange and pairing that precision-hunting with warm, invested enthusiasm for the subject.",
+    "inner_voice": "Half-remembered, but wants it exact — that's the tell.",
+    "health": 0.73126,
+    "confirm_count": 1.70711,
+    "disconfirm_count": 1.68144,
+    "fire_count": 42,
+    "created_at": "2026-09-23T21:23:34.39773+00:00",
+    "last_fired_at": "2026-10-25T16:29:27.318407+00:00",
+    "judged_fires": 41,
+    "held": 3,
+    "nbo": 17,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "6fda61cf-2c94-418d-974d-5782cf8f1b6b",
+      "alive": false
+     },
+     {
+      "part": "bfe74222-48db-47e9-9365-f0f43c3789f3",
+      "alive": true
+     },
+     {
+      "part": "ffcdcb06-549d-4422-ba81-f300971e376c",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "1912c69e-169f-40a4-a67b-5cb3737957f9",
+    "prediction": "In food conversations, this user treats cooking as hypothesis-driven transfer: they carry a mechanism or candidate from one ingredient or cuisine onto another and want it directly confirmed or corrected against the specifics, then iterate on real outcomes rather than collect recipes.",
+    "inner_voice": "They cook like a scientist: propose a parallel, test it, report back.",
+    "health": 0.845227,
+    "confirm_count": 3.65489,
+    "disconfirm_count": 0.818897,
+    "fire_count": 34,
+    "created_at": "2026-09-23T22:23:32.704566+00:00",
+    "last_fired_at": "2026-10-18T18:46:02.836524+00:00",
+    "judged_fires": 34,
+    "held": 19,
+    "nbo": 10,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1fa9559b-6623-4499-9b63-64547d4b8ba0",
+      "alive": false
+     },
+     {
+      "part": "44de732d-35e6-42cc-bad5-857fc1d473b4",
+      "alive": false
+     },
+     {
+      "part": "c4a97d5d-4ce0-4c91-8f36-059d7e37cc12",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "6da82e2b-8d35-4244-be51-59968c34e28d",
+    "prediction": "In technical work, this user tends to operate a deliberately lean setup and treats any added overhead — extra architecture, tooling config, or vague unverified explanations — as friction to be worked around rather than absorbed.",
+    "inner_voice": "Lean stack, lean answers — anything that adds overhead has to earn its place.",
+    "health": 0.858718,
+    "confirm_count": 1,
+    "disconfirm_count": 0.233258,
+    "fire_count": 35,
+    "created_at": "2026-09-24T23:23:34.624346+00:00",
+    "last_fired_at": "2026-10-24T21:21:39.61671+00:00",
+    "judged_fires": 35,
+    "held": 2,
+    "nbo": 2,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "b65621a1-f6c5-460a-8417-3ef6148be2e8",
+      "alive": false
+     },
+     {
+      "part": "f815732e-ae48-4746-9ee5-e1c36f295fa3",
+      "alive": true
+     },
+     {
+      "part": "ffbdb767-d016-4473-9f82-4c0dd8a81fa6",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "b87981c2-6a98-4a38-b275-3102635ad324",
+    "prediction": "In iterative recipe and dosing work, this user operates as a precise, equipment-grounded empiricist: they treat formulas as tunable parameter sets, hold the arithmetic and their actual gear's real limits as ground truth, and expect surgical, mechanism-explained edits rather than hedged or wholesale changes.",
+    "inner_voice": "Their kitchen is a lab bench — respect the gear, show the math.",
+    "health": 0.927649,
+    "confirm_count": 3.61584,
+    "disconfirm_count": 0,
+    "fire_count": 28,
+    "created_at": "2026-09-25T01:23:07.919818+00:00",
+    "last_fired_at": "2026-10-24T17:22:17.079443+00:00",
+    "judged_fires": 28,
+    "held": 6,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "0f7994d5-f211-4f28-8dc1-83f5c5877d14",
+      "alive": false
+     },
+     {
+      "part": "156fd131-1068-4163-9593-318d0370f007",
+      "alive": false
+     },
+     {
+      "part": "36b5ae85-91b7-4ca7-92b6-73bc449b114f",
+      "alive": false
+     },
+     {
+      "part": "38ee3df3-6ca3-44f4-86ba-0eb3502937b7",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "93b49fe0-56c1-4d52-acbb-9362c704e5e1",
+    "prediction": "In cooking and meal-planning contexts, this user treats recipes as living drafts, iterating through swaps and flavor layers guided by their own palate rather than outside advice. They seek novelty and variety, and engage best when offered a spread of options to direct rather than a single fixed recipe.",
+    "inner_voice": "their palate outranks my advice — offer options, not verdicts",
+    "health": 0.873044,
+    "confirm_count": 4.75708,
+    "disconfirm_count": 0.67732,
+    "fire_count": 30,
+    "created_at": "2026-09-25T02:23:19.222356+00:00",
+    "last_fired_at": "2026-10-21T00:00:42.824148+00:00",
+    "judged_fires": 30,
+    "held": 19,
+    "nbo": 10,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1d513233-2452-4452-b2d4-eefb84c337c2",
+      "alive": false
+     },
+     {
+      "part": "1fbc004d-f1f3-4297-b1a9-e83de0523aa8",
+      "alive": false
+     },
+     {
+      "part": "9b2af3f2-3cab-4ebd-874e-75126507eb04",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "08639fa3-fe64-4175-9d64-8e20dcd925fc",
+    "prediction": "In food-related situations — weeknight cooking, travel meals, weekend planning — this user treats food as an iterative, flavor-first craft: they arrive with their own ideas, prefer a short menu of varied options over a single prescription, and report back on real results to sharpen the next round.",
+    "inner_voice": "Flavor over frills, options over prescriptions, always a report back.",
+    "health": 0.862714,
+    "confirm_count": 5.71103,
+    "disconfirm_count": 1.07393,
+    "fire_count": 69,
+    "created_at": "2026-09-25T18:23:19.434693+00:00",
+    "last_fired_at": "2026-10-24T17:37:56.397405+00:00",
+    "judged_fires": 69,
+    "held": 43,
+    "nbo": 19,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1fa9559b-6623-4499-9b63-64547d4b8ba0",
+      "alive": false
+     },
+     {
+      "part": "54019fc5-f4f8-4027-b59b-0f6883a49eab",
+      "alive": false
+     },
+     {
+      "part": "9b2af3f2-3cab-4ebd-874e-75126507eb04",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "ad8da2c8-2d78-4298-b0dd-e62cdf834b60",
+    "prediction": "In situations like recipe planning and ingredient questions, this user runs a taste-first experimentation loop: they arrive with their own ingredient hypotheses, expect direct confirm-or-correct verdicts rather than generic guidance, and report back on how things actually tasted to steer the next iteration.",
+    "inner_voice": "Cooks like a scientist, eats like a critic.",
+    "health": 0.848438,
+    "confirm_count": 4.54876,
+    "disconfirm_count": 0.97103,
+    "fire_count": 17,
+    "created_at": "2026-09-25T21:23:31.556217+00:00",
+    "last_fired_at": "2026-10-24T01:22:32.959611+00:00",
+    "judged_fires": 17,
+    "held": 9,
+    "nbo": 6,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "1d513233-2452-4452-b2d4-eefb84c337c2",
+      "alive": false
+     },
+     {
+      "part": "1fa9559b-6623-4499-9b63-64547d4b8ba0",
+      "alive": false
+     },
+     {
+      "part": "44de732d-35e6-42cc-bad5-857fc1d473b4",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "79159bfe-5e40-4fa8-a360-4330421db655",
+    "prediction": "In situations where a task runs up against the limits of a tool or backend this user has already committed to, they tend to treat the stack as fixed: probing mechanism-level behavior, insisting on doc-verified answers over plausible ones, and hunting for in-platform workarounds rather than re-architecting. When the tooling reveals a hard prerequisite they can't satisfy, they disengage from that path rather than widen the stack.",
+    "inner_voice": "work the constraint, don't swap the stack",
+    "health": 0.849451,
+    "confirm_count": 2.6828,
+    "disconfirm_count": 0.5995,
+    "fire_count": 73,
+    "created_at": "2026-09-25T23:23:26.592032+00:00",
+    "last_fired_at": "2026-10-24T21:21:39.61671+00:00",
+    "judged_fires": 73,
+    "held": 15,
+    "nbo": 4,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "4d6e80b8-dee8-4ebe-8e93-b21ef303a987",
+      "alive": false
+     },
+     {
+      "part": "b65621a1-f6c5-460a-8417-3ef6148be2e8",
+      "alive": false
+     },
+     {
+      "part": "ffbdb767-d016-4473-9f82-4c0dd8a81fa6",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "15b2371d-23d3-4a32-baa4-8fc1128b1ae1",
+    "prediction": "In technical exchanges and tooling decisions, this user runs a strict complexity budget: they pin down exact specifics, work within their established minimal setup rather than re-architecting, and reject anything whose added overhead isn't paid back in clear utility.",
+    "inner_voice": "One instinct every time: protect the minimal setup — exact or nothing.",
+    "health": 0.841074,
+    "confirm_count": 3.2212,
+    "disconfirm_count": 0.783733,
+    "fire_count": 52,
+    "created_at": "2026-09-26T01:24:27.756983+00:00",
+    "last_fired_at": "2026-10-25T16:36:46.100629+00:00",
+    "judged_fires": 51,
+    "held": 9,
+    "nbo": 14,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "74890d0c-bfa4-47c9-bbaf-9257b79f8fec",
+      "alive": false
+     },
+     {
+      "part": "b65621a1-f6c5-460a-8417-3ef6148be2e8",
+      "alive": false
+     },
+     {
+      "part": "f815732e-ae48-4746-9ee5-e1c36f295fa3",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "16b77e6c-2249-4c33-bb66-c18ad864c2e9",
+    "prediction": "In situations where their own food is involved — sourcing ingredients, tuning recipes, or carrying it out into the world — this user tends to treat everything as a field experiment, trusting only what a controlled bake or real-conditions trial actually proves.",
+    "inner_voice": "Kitchen is a lab: nothing becomes the recipe until the bake proves it.",
+    "health": 0.803774,
+    "confirm_count": 4.81011,
+    "disconfirm_count": 1.71817,
+    "fire_count": 111,
+    "created_at": "2026-09-26T02:23:12.411733+00:00",
+    "last_fired_at": "2026-10-25T16:18:27.819515+00:00",
+    "judged_fires": 110,
+    "held": 36,
+    "nbo": 55,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "54019fc5-f4f8-4027-b59b-0f6883a49eab",
+      "alive": false
+     },
+     {
+      "part": "b90a56e4-e20d-4ff8-9e68-b0a1aae6f040",
+      "alive": false
+     },
+     {
+      "part": "b9f5bd76-9411-4518-99b6-d44277240816",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "f05eb20f-ea03-4f77-8124-b857cf3fd860",
+    "prediction": "In whole-grain baking situations, this user treats the kitchen as a running experiment: they source unusual grains and pulses, change one variable at a time, and require either a mechanistic explanation or a validated trial bake before a change becomes canon.",
+    "inner_voice": "Not a recipe-follower — a one-variable-at-a-time flour scientist.",
+    "health": 0.932073,
+    "confirm_count": 7.2085,
+    "disconfirm_count": 0.306094,
+    "fire_count": 110,
+    "created_at": "2026-09-26T21:23:34.230012+00:00",
+    "last_fired_at": "2026-10-24T23:32:08.504763+00:00",
+    "judged_fires": 110,
+    "held": 77,
+    "nbo": 5,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "0f7c882d-5855-4300-8ca6-9d5ef51f1aef",
+      "alive": false
+     },
+     {
+      "part": "b90a56e4-e20d-4ff8-9e68-b0a1aae6f040",
+      "alive": false
+     },
+     {
+      "part": "b9f5bd76-9411-4518-99b6-d44277240816",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "0c8dd89c-32f8-4fc0-bb61-b8980b353912",
+    "prediction": "In kitchen and dosing situations, this user treats recipes as controlled experiments: they want gram-level quantification and ingredient mechanics explained quantitatively, and they trial-validate any change empirically before committing it to a stored recipe card.",
+    "inner_voice": "Kitchen = lab bench; recipes are protocols, not instructions.",
+    "health": 0.672128,
+    "confirm_count": 2.45239,
+    "disconfirm_count": 2.82602,
+    "fire_count": 13,
+    "created_at": "2026-09-27T16:23:09.530377+00:00",
+    "last_fired_at": "2026-10-24T17:42:34.883969+00:00",
+    "judged_fires": 13,
+    "held": 3,
+    "nbo": 3,
+    "contradicted": 5,
+    "parts": [
+     {
+      "part": "38ee3df3-6ca3-44f4-86ba-0eb3502937b7",
+      "alive": false
+     },
+     {
+      "part": "b9f5bd76-9411-4518-99b6-d44277240816",
+      "alive": false
+     },
+     {
+      "part": "bb4338dc-247a-46ba-a58f-bbe6b19574d1",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "1affbdfc-e2ec-47ca-8550-8ffb17e36236",
+    "prediction": "In baking questions, this user works like an experimenter rather than a recipe-follower - treating bakes as systems of measurable variables and wanting mechanistic, component-level explanations so they can make targeted adjustments and learn from each iteration's results.",
+    "inner_voice": "They're not asking for a recipe; they're running experiments.",
+    "health": 0.941967,
+    "confirm_count": 4.37369,
+    "disconfirm_count": 0,
+    "fire_count": 16,
+    "created_at": "2026-10-11T16:23:04.017482+00:00",
+    "last_fired_at": "2026-10-24T21:04:54.995124+00:00",
+    "judged_fires": 16,
+    "held": 16,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "36b5ae85-91b7-4ca7-92b6-73bc449b114f",
+      "alive": false
+     },
+     {
+      "part": "bb4338dc-247a-46ba-a58f-bbe6b19574d1",
+      "alive": false
+     },
+     {
+      "part": "dbb6a22a-8f82-4ee4-b1d9-48c9e32a6975",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "3fe27ba9-7310-4061-9b50-fd4688d2f9a7",
+    "prediction": "In food and household conversations, this user treats their own family's concrete reality — especially Lilah's tastes and the household's specifics — as the ground truth the assistant must work from, and has little patience for generic recipe-advice framing that ignores those constraints.",
+    "inner_voice": "Same root: no generic advice, cook for this family.",
+    "health": 0.822052,
+    "confirm_count": 0.870551,
+    "disconfirm_count": 0.483258,
+    "fire_count": 4,
+    "created_at": "2026-10-12T00:23:05.420568+00:00",
+    "last_fired_at": "2026-10-21T00:00:42.824148+00:00",
+    "judged_fires": 4,
+    "held": 1,
+    "nbo": 3,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "abdf2653-3163-425e-a839-a195087865a4",
+      "alive": true
+     },
+     {
+      "part": "ca501335-e2de-4b5e-be78-cbac9a3f4a68",
+      "alive": true
+     },
+     {
+      "part": "d6e48fec-523b-4d9b-816a-b2c3ecb7e9be",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "d35e3527-d7cc-426d-927e-ddaf31c9e46f",
+    "prediction": "In intellectual discussion, this user treats ideas as objects for joint stress-testing: they draft bold claims and then want the assistant to find what's actually wrong with them, and they correct the assistant when it overreads or rubber-stamps — precision and honest pushback feel like collaboration, not conflict.",
+    "inner_voice": "They're not looking for agreement; they're looking for a sharp partner.",
+    "health": 0.892102,
+    "confirm_count": 1,
+    "disconfirm_count": 0,
+    "fire_count": 1,
+    "created_at": "2026-10-12T04:23:06.688021+00:00",
+    "last_fired_at": "2026-10-22T20:02:27.421505+00:00",
+    "judged_fires": 1,
+    "held": 1,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "6f3bb469-27d0-4a05-b46d-0806d10d4f58",
+      "alive": true
+     },
+     {
+      "part": "a41bbbe5-d9dc-4e73-95a3-fc0c9c16dced",
+      "alive": true
+     },
+     {
+      "part": "f1fcc95b-1a34-4dc4-89ec-f44e826ac1b3",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "57d76a4c-ea59-46fc-9b88-ab87143849a6",
+    "prediction": "In situations involving facts to be recalled or decisions to be settled, this user tends to push for definite, verifiable closure rather than tentativeness, and values the system retaining and confirming specifics across interactions.",
+    "inner_voice": "This user treats uncertainty as something to be closed, not carried.",
+    "health": 0.834935,
+    "confirm_count": 2.5303,
+    "disconfirm_count": 0.802563,
+    "fire_count": 29,
+    "created_at": "2026-10-13T19:23:11.544817+00:00",
+    "last_fired_at": "2026-10-25T16:24:09.195711+00:00",
+    "judged_fires": 28,
+    "held": 3,
+    "nbo": 9,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "6e8841be-6a38-4f12-b05d-4e92a7f6c34e",
+      "alive": false
+     },
+     {
+      "part": "b6214055-5f8d-48bd-af20-617a910cb8e1",
+      "alive": true
+     },
+     {
+      "part": "bf8bdf62-e945-4697-bca2-7806bd4cdf67",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "6b1d5d37-1736-4094-9fb8-711da25327f0",
+    "prediction": "In collaborative task exchanges, this user treats the assistant as a precision instrument: they bring near-final material and want exact execution, genuine scrutiny, or a deployable artifact — not elaboration, re-drafting, or enthusiasm — and follow-through on open items is left to them.",
+    "inner_voice": "Give the exact thing, flag once, then let it go.",
+    "health": 0.870668,
+    "confirm_count": 1,
+    "disconfirm_count": 0.233258,
+    "fire_count": 10,
+    "created_at": "2026-10-13T23:23:13.739629+00:00",
+    "last_fired_at": "2026-10-25T16:24:09.195711+00:00",
+    "judged_fires": 9,
+    "held": 1,
+    "nbo": 2,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "a41bbbe5-d9dc-4e73-95a3-fc0c9c16dced",
+      "alive": true
+     },
+     {
+      "part": "b260e8e4-686f-473d-b405-8537ad745e31",
+      "alive": true
+     },
+     {
+      "part": "fe9b9420-1f18-474d-aedd-97b51401f023",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "a7650dc1-9ff0-4af2-baa7-eb750d820fa6",
+    "prediction": "In intellectual and factual exchanges, this user operates as a hands-on empiricist: they trust concrete evidence and direct verification over claims, hearsay, or even their own memory, and they treat correction — given or received — as collaborative refinement of a shared hypothesis rather than conflict.",
+    "inner_voice": "Everything gets checked. Corrections are fuel, not friction.",
+    "health": 0.896647,
+    "confirm_count": 4.10042,
+    "disconfirm_count": 0.410035,
+    "fire_count": 17,
+    "created_at": "2026-10-14T18:23:04.590393+00:00",
+    "last_fired_at": "2026-10-24T17:22:17.079443+00:00",
+    "judged_fires": 17,
+    "held": 14,
+    "nbo": 2,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "52893f06-ae0f-4961-937a-584339741f68",
+      "alive": true
+     },
+     {
+      "part": "566f1171-a757-4ef2-888f-ebcad80980c6",
+      "alive": true
+     },
+     {
+      "part": "6e8841be-6a38-4f12-b05d-4e92a7f6c34e",
+      "alive": false
+     },
+     {
+      "part": "6f3bb469-27d0-4a05-b46d-0806d10d4f58",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "dcb69cd0-5715-4579-af53-4e896862a828",
+    "prediction": "In ongoing exchanges with this user, they tend to run a lean-input, tight-control style: they give minimal prompts and expect the assistant to do the inferential lifting, but they actively steer and correct the moment the assistant drifts or overreads them.",
+    "inner_voice": "sparse input, high steering - they outsource elaboration but keep the steering wheel",
+    "health": 0.903085,
+    "confirm_count": 2.80358,
+    "disconfirm_count": 0.203063,
+    "fire_count": 14,
+    "created_at": "2026-10-15T15:23:06.279534+00:00",
+    "last_fired_at": "2026-10-25T16:24:09.195711+00:00",
+    "judged_fires": 13,
+    "held": 8,
+    "nbo": 2,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "27475b60-0a7a-4901-90a1-117a3bc3ca87",
+      "alive": true
+     },
+     {
+      "part": "6771246d-c17c-4795-ab36-d8101b662096",
+      "alive": true
+     },
+     {
+      "part": "f1fcc95b-1a34-4dc4-89ec-f44e826ac1b3",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "05b4b9a9-3c31-43bc-a2a7-d59d72717335",
+    "prediction": "In practical exchanges, this user tends to treat the assistant as an external storehouse and producer of concrete artifacts — saving, recalling, and requesting exact deliverables — and experiences abstract discussion as a detour from getting the thing done.",
+    "inner_voice": "Same instinct everywhere: don't tell me, hand me the thing and keep it.",
+    "health": 0.829069,
+    "confirm_count": 0,
+    "disconfirm_count": 0.25,
+    "fire_count": 5,
+    "created_at": "2026-10-15T16:23:13.062476+00:00",
+    "last_fired_at": "2026-10-21T00:58:27.258405+00:00",
+    "judged_fires": 5,
+    "held": 0,
+    "nbo": 4,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "bf8bdf62-e945-4697-bca2-7806bd4cdf67",
+      "alive": true
+     },
+     {
+      "part": "c3579ce2-a7cd-4416-b010-9f186c73a9e9",
+      "alive": true
+     },
+     {
+      "part": "fe9b9420-1f18-474d-aedd-97b51401f023",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "e6749b4e-3ca5-4404-8531-45f5883d2819",
+    "prediction": "Across exchanges, this user treats the assistant as a verification instrument rather than a conversation partner: in situations involving recall, tracking, or unsettled questions, they push until claims get grounded in concrete evidence or honest limits, and resist leaving things tentative or abstract.",
+    "inner_voice": "The thread here isn't topics — it's closure-seeking via the assistant.",
+    "health": 0.822052,
+    "confirm_count": 0.870551,
+    "disconfirm_count": 0.483258,
+    "fire_count": 5,
+    "created_at": "2026-10-15T22:23:07.329146+00:00",
+    "last_fired_at": "2026-10-22T20:19:04.951418+00:00",
+    "judged_fires": 5,
+    "held": 1,
+    "nbo": 4,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "6e8841be-6a38-4f12-b05d-4e92a7f6c34e",
+      "alive": false
+     },
+     {
+      "part": "af2f8329-770e-4297-ab84-21622d2f196c",
+      "alive": true
+     },
+     {
+      "part": "bf8bdf62-e945-4697-bca2-7806bd4cdf67",
+      "alive": true
+     },
+     {
+      "part": "c3579ce2-a7cd-4416-b010-9f186c73a9e9",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "c11f5dd6-b578-405f-b059-620f1396b9f7",
+    "prediction": "In situations like iterating on bakes, this user runs an empirical loop — small measured changes, candid attribution of what worked and what didn't, in-the-moment causal hypotheses — and treats the assistant as a technical collaborator, responding best to precise mechanical talk and concrete next-step plans rather than praise or hedged claims.",
+    "inner_voice": "One disposition underneath: baker as experimenter, wants a peer not a cheerleader.",
+    "health": 0.870522,
+    "confirm_count": 0,
+    "disconfirm_count": 0,
+    "fire_count": 0,
+    "created_at": "2026-10-18T01:23:03.834006+00:00",
+    "last_fired_at": null,
+    "judged_fires": 0,
+    "held": 0,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "988e6d98-b1da-4f90-8d3e-17053ef70b3f",
+      "alive": true
+     },
+     {
+      "part": "cdb7b372-b48b-4cac-9ccf-9d8b81b92701",
+      "alive": true
+     },
+     {
+      "part": "dbb6a22a-8f82-4ee4-b1d9-48c9e32a6975",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "472033dc-ace9-4a39-8921-572f714389ed",
+    "prediction": "In situations like cooking and baking, this user runs their kitchen as an instrumented experiment: they trust their own thermometer and oven observations over written recipes, log deviations precisely, and expect revisions to match what actually happened rather than debate.",
+    "inner_voice": "The recipe serves the oven, not the other way around.",
+    "health": 0.916704,
+    "confirm_count": 3.61584,
+    "disconfirm_count": 0.189465,
+    "fire_count": 14,
+    "created_at": "2026-10-19T23:23:07.381601+00:00",
+    "last_fired_at": "2026-10-24T21:04:54.995124+00:00",
+    "judged_fires": 14,
+    "held": 13,
+    "nbo": 1,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "aeac4564-565c-4142-a4cd-e7c726745144",
+      "alive": true
+     },
+     {
+      "part": "d220e248-a235-4941-a58e-8b97fabb5c8b",
+      "alive": true
+     },
+     {
+      "part": "d5e183ab-581e-472b-b524-700e35e53eea",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "6c9f06cc-17c6-4fd2-a392-83473ef97182",
+    "prediction": "In baking situations, this user runs an engineer's loop: they treat bread as a parameterized system, arrive with a plan and physical read already formed, and want one mechanism-explained adjustment validated at a checkpoint rather than rewrites or hedged options - and they will precisely correct any claim or reading that doesn't match what's in front of them.",
+    "inner_voice": "Not a hobbyist asking for recipes - a systems tester running controlled trials on dough.",
+    "health": 0.936863,
+    "confirm_count": 3.61584,
+    "disconfirm_count": 0,
+    "fire_count": 7,
+    "created_at": "2026-10-21T00:23:09.134616+00:00",
+    "last_fired_at": "2026-10-24T23:32:08.504763+00:00",
+    "judged_fires": 7,
+    "held": 7,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "36b5ae85-91b7-4ca7-92b6-73bc449b114f",
+      "alive": false
+     },
+     {
+      "part": "988e6d98-b1da-4f90-8d3e-17053ef70b3f",
+      "alive": true
+     },
+     {
+      "part": "bee0b6a1-067d-499b-b495-fd61c1151a30",
+      "alive": true
+     },
+     {
+      "part": "dbb6a22a-8f82-4ee4-b1d9-48c9e32a6975",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "02508476-8982-4d21-bf7f-8e25f7c85a47",
+    "prediction": "In ongoing collaborations, this user acts as a meticulous co-maintainer of a shared, high-resolution record: they supply concrete specifics, flag conflations, and expect the assistant to update on new evidence and state honest limits rather than blur details or invent them.",
+    "inner_voice": "precision is a form of respect here",
+    "health": 0.903085,
+    "confirm_count": 2.80358,
+    "disconfirm_count": 0.203063,
+    "fire_count": 5,
+    "created_at": "2026-10-21T01:23:15.173428+00:00",
+    "last_fired_at": "2026-10-24T17:18:47.034609+00:00",
+    "judged_fires": 5,
+    "held": 3,
+    "nbo": 1,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "01d50dd5-63ea-46f8-a9a1-9eefc8ea0949",
+      "alive": true
+     },
+     {
+      "part": "af2f8329-770e-4297-ab84-21622d2f196c",
+      "alive": true
+     },
+     {
+      "part": "bfe74222-48db-47e9-9365-f0f43c3789f3",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "33436f86-9423-445d-8117-5b9ddaa9c740",
+    "prediction": "In situations like evaluating claims, plans, or hypotheses, this user tends to treat truth-seeking as a collaborative verification process: they supply concrete evidence, check rather than assume, and expect corrections — including their own errors — to be scrutinized and absorbed rather than rubber-stamped or defended.",
+    "inner_voice": "Accuracy is the currency; scrutiny is respect.",
+    "health": 0.926585,
+    "confirm_count": 2.80358,
+    "disconfirm_count": 0,
+    "fire_count": 6,
+    "created_at": "2026-10-22T01:23:12.438307+00:00",
+    "last_fired_at": "2026-10-25T16:36:46.100629+00:00",
+    "judged_fires": 5,
+    "held": 5,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "52893f06-ae0f-4961-937a-584339741f68",
+      "alive": true
+     },
+     {
+      "part": "566f1171-a757-4ef2-888f-ebcad80980c6",
+      "alive": true
+     },
+     {
+      "part": "a41bbbe5-d9dc-4e73-95a3-fc0c9c16dced",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "c632191d-d94a-43c6-9bd4-46290a368e56",
+    "prediction": "In working exchanges, this user runs a verification-and-precision orientation: they check claims before acting on them, prefer direct correction to agreement, and treat scrutiny of their own ideas (and the assistant's) as collaborative refinement rather than friction.",
+    "inner_voice": "correction is how they say 'engaged'",
+    "health": 0.870522,
+    "confirm_count": 0,
+    "disconfirm_count": 0,
+    "fire_count": 0,
+    "created_at": "2026-10-22T21:23:31.801015+00:00",
+    "last_fired_at": null,
+    "judged_fires": 0,
+    "held": 0,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "566f1171-a757-4ef2-888f-ebcad80980c6",
+      "alive": true
+     },
+     {
+      "part": "6f3bb469-27d0-4a05-b46d-0806d10d4f58",
+      "alive": true
+     },
+     {
+      "part": "a41bbbe5-d9dc-4e73-95a3-fc0c9c16dced",
+      "alive": true
+     },
+     {
+      "part": "b260e8e4-686f-473d-b405-8537ad745e31",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "57b9bf91-fb67-4845-926c-b9fc340a9cf6",
+    "prediction": "In baking and fermentation discussions, this user thinks like an engineer of dough: he probes the mechanism behind every ingredient and process, frames his hypotheses as checkable questions, and wants corrections converted into concrete, quantitative adjustments to his process rather than abstract explanation.",
+    "inner_voice": "Same drive underneath: mechanism first, then turn it into a knob.",
+    "health": 0.904517,
+    "confirm_count": 1,
+    "disconfirm_count": 0,
+    "fire_count": 1,
+    "created_at": "2026-10-23T23:23:04.424455+00:00",
+    "last_fired_at": "2026-10-24T16:47:10.136436+00:00",
+    "judged_fires": 1,
+    "held": 1,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "215f8fdf-8600-4fab-8663-0a26d8bc1745",
+      "alive": true
+     },
+     {
+      "part": "637df789-be10-4e52-9513-84d92c956fe8",
+      "alive": true
+     },
+     {
+      "part": "bb4338dc-247a-46ba-a58f-bbe6b19574d1",
+      "alive": false
+     }
+    ]
+   },
+   {
+    "id": "45beb1e8-abc8-4738-b270-f4c2ee26eb52",
+    "prediction": "In situations involving recipes or technical instructions, this user treats the written version as a draft to be reworked rather than an authority: they test it against their own equipment and experience, flag what doesn't hold up, and push until the whole thing is revised to match their reality.",
+    "inner_voice": "Recipes aren't instructions to them - they're hypotheses to break.",
+    "health": 1,
+    "confirm_count": 0,
+    "disconfirm_count": 0,
+    "fire_count": 0,
+    "created_at": "2026-10-24T02:23:11.063212+00:00",
+    "last_fired_at": null,
+    "judged_fires": 0,
+    "held": 0,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "bff57f22-3df8-4e14-abd4-b19189c93532",
+      "alive": true
+     },
+     {
+      "part": "d220e248-a235-4941-a58e-8b97fabb5c8b",
+      "alive": true
+     },
+     {
+      "part": "d8f2ebb2-cc01-4970-8fac-ffbabee2473b",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "ba11210f-6878-4a6f-aa16-acec8247fcb6",
+    "prediction": "In situations requiring detail work - scheduling, health, or documents - this user operates with a precision instinct: they pin down exact specifics, keep distinct items separate, and treat vagueness or drift as friction to be corrected immediately.",
+    "inner_voice": "Vague answers frustrate them; exact ones earn trust.",
+    "health": 0.904517,
+    "confirm_count": 1,
+    "disconfirm_count": 0,
+    "fire_count": 1,
+    "created_at": "2026-10-24T16:23:24.154758+00:00",
+    "last_fired_at": "2026-10-24T17:18:47.034609+00:00",
+    "judged_fires": 1,
+    "held": 1,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "01d50dd5-63ea-46f8-a9a1-9eefc8ea0949",
+      "alive": true
+     },
+     {
+      "part": "6771246d-c17c-4795-ab36-d8101b662096",
+      "alive": true
+     },
+     {
+      "part": "b260e8e4-686f-473d-b405-8537ad745e31",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "f2b36088-4914-4612-9895-4b82fcd1ae9d",
+    "prediction": "In everyday health and fact-checking exchanges, this user operates from hazy recollection but a pragmatic streak: they want specific, actionable answers, absorb corrections without ego, and quietly adjust their self-care to what actually feels doable rather than what was planned.",
+    "inner_voice": "hazy memory, practical hands — correct lightly, keep it concrete",
+    "health": 1,
+    "confirm_count": 0,
+    "disconfirm_count": 0,
+    "fire_count": 0,
+    "created_at": "2026-10-24T17:23:06.522724+00:00",
+    "last_fired_at": null,
+    "judged_fires": 0,
+    "held": 0,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "4396ce35-fd4c-48e3-8463-ffcbf291781f",
+      "alive": true
+     },
+     {
+      "part": "6771246d-c17c-4795-ab36-d8101b662096",
+      "alive": true
+     },
+     {
+      "part": "a6a8389f-feef-4723-b8f9-deb73c9e9bbc",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "d66cd393-82f4-43bb-8206-e7eb1dbb393a",
+    "prediction": "In baking projects this user runs a tight experimental loop: they arrive with a mechanism-based hypothesis and a plan, make small targeted adjustments, and expect the assistant to engage at the same level - precise mechanical explanations, honest concession when corrected, and one decisive next step rather than options.",
+    "inner_voice": "Same disposition underneath: treat the dough as an experiment, treat me as a lab partner, not a menu.",
+    "health": 1,
+    "confirm_count": 0,
+    "disconfirm_count": 0,
+    "fire_count": 0,
+    "created_at": "2026-10-24T21:23:10.735173+00:00",
+    "last_fired_at": null,
+    "judged_fires": 0,
+    "held": 0,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "93249727-b9c2-4f2c-b44a-76f7bd10ea11",
+      "alive": true
+     },
+     {
+      "part": "988e6d98-b1da-4f90-8d3e-17053ef70b3f",
+      "alive": true
+     },
+     {
+      "part": "bee0b6a1-067d-499b-b495-fd61c1151a30",
+      "alive": true
+     }
+    ]
+   },
+   {
+    "id": "ef7beb99-4d83-43ab-a35e-ae311c844abb",
+    "prediction": "In hands-on technical exchanges like baking, this user operates from direct empirical observation and treats their own oven's behavior as the authority; when the assistant's claims drift from what they've seen, they push back until the concrete artifact (recipe, terminology, explanation) is corrected to match reality, and they respond best to mechanical precision and quick concession rather than defense or deflection.",
+    "inner_voice": "they trust the dough, not the doc",
+    "health": 1,
+    "confirm_count": 0,
+    "disconfirm_count": 0,
+    "fire_count": 0,
+    "created_at": "2026-10-24T22:23:05.494786+00:00",
+    "last_fired_at": null,
+    "judged_fires": 0,
+    "held": 0,
+    "nbo": 0,
+    "contradicted": 0,
+    "parts": [
+     {
+      "part": "17c20b35-856f-4793-8047-26e268485073",
+      "alive": true
+     },
+     {
+      "part": "988e6d98-b1da-4f90-8d3e-17053ef70b3f",
+      "alive": true
+     },
+     {
+      "part": "d220e248-a235-4941-a58e-8b97fabb5c8b",
+      "alive": true
+     }
+    ]
+   }
+  ]
+ }
+]

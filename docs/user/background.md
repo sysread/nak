@@ -146,8 +146,8 @@ background pipeline on the server. Right after each exchange
 completes, a job on your Supabase project summarizes the round,
 relates it to earlier rounds, and occasionally mints a new
 instinct; an hourly catch-up pass picks up anything the per-turn
-pass missed and does the slower work (higher-order compounds,
-de-duplication, rebuilding the always-on summary). None of it
+pass missed and does the slower work (de-duplication and
+rebuilding the always-on summary). None of it
 needs a tab open.
 
 What you see: the mood emoji in the bottom-right pill updates when

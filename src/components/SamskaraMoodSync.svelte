@@ -55,7 +55,7 @@
     // diagnostics-modal "you are here" dot reads `current` directly so
     // it follows raw mints rather than the de-duplicated pill animation.
     moodState.set(transition.storeUpdate);
-    // visual is null when dedup applies (same band, same tier).
+    // visual is null when dedup applies (same band).
     if (transition.visual !== null) {
       moodState.setVisual({ id: ++nextId, ...transition.visual });
     }

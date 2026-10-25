@@ -394,8 +394,8 @@ export async function listSamskarasPage(
 /**
  * Corpus semantic search: nearest samskaras by cosine on
  * `prediction_embedding`. Plain cosine, NOT the fire-ranking formula -
- * browse wants closest-to-query, not most-likely-to-fire. Optional
- * Returns the same shape as the browse list plus a
+ * browse wants closest-to-query, not most-likely-to-fire. Returns
+ * the same shape as the browse list plus a
  * `cosine` relevance score.
  */
 export async function searchSamskarasByEmbedding(
@@ -415,8 +415,7 @@ export async function searchSamskarasByEmbedding(
  * Substring fallback for corpus search: ILIKE on prediction text.
  * Every samskara is embedded (the column is NOT NULL), so unlike
  * memories there is no disjoint unembedded set - this is purely to
- * surface exact-phrase matches a cosine ranking might bury. Optional
- *
+ * surface exact-phrase matches a cosine ranking might bury.
  */
 export async function searchSamskarasByText(
   client: SupabaseClient,
@@ -440,8 +439,7 @@ export async function searchSamskarasByText(
  * Greedy cosine clustering of the corpus for the "hide similar"
  * slider. Returns a map keyed by samskara id; each entry names the
  * cluster sequence (representative shares the lowest seq) and the
- * cluster's size so the UI can render "+N similar"
- * filter must match the list's filter so the assignments line up.
+ * cluster's size so the UI can render "+N similar".
  */
 export async function samskaraClusterCorpus(
   client: SupabaseClient,

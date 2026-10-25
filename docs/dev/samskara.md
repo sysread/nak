@@ -190,10 +190,9 @@ toast is just a glance cue that the bias model is forming.
   `localEmbed` (Supabase.ai.Session), and saves under a guard.
   Mirrors the memories source entry.
 - `supabase/functions/venice/agents/samskara.ts` - the formation
-  pipeline. The five agent prompts (`ASSIMILATOR_PROMPT`,
-  `RELATOR_PROMPT`, `MINTER_PROMPT`, `TIER2_MINTER_PROMPT`,
-  `COMPOUND_SUMMARY_PROMPT` - terse on
-  purpose: the fast model pays tokens for inputs, not
+  pipeline. The four agent prompts (`ASSIMILATOR_PROMPT`,
+  `RELATOR_PROMPT`, `MINTER_PROMPT`, `COMPOUND_SUMMARY_PROMPT` -
+  terse on purpose: the fast model pays tokens for inputs, not
   instructions), one non-streaming `toolComplete` call per
   phase, the math helpers (`cosine`, `buildTopicalCluster`,
   `parseVector`) and tuning constants, and the two exported
@@ -1188,10 +1187,10 @@ be the first genuine test, and the next-day judge hasn't ruled).
   rows carried a fire awaiting next-day judgment). If no tier
   qualifies the probe skips at cap exactly as it did before eviction
   existed. (A fourth "graduation" tier - retiring the parts of
-  established compounds - was removed with the compound layer; it
-  deleted a specific claim whenever any compound built on it looked
-  established, and in twenty days it stripped every established
-  compound of all its parts.)
+  established compounds - was removed with the compound layer; the
+  tier deleted the least-evidenced part whenever a compound built
+  on that claim met the bar, and in twenty days it stripped every
+  established compound of all its parts.)
 
 Eviction is reachable from BOTH mint probes on purpose. When only the
 recency probe could evict, sweep order decided who minted: recency
@@ -1409,12 +1408,14 @@ summarizer reads samskaras to feed the agent.
   `health < X` from the fire query; that defeats the design.
   Three near-dead samskaras co-firing is exactly the signal we
   want to surface, because cohort reinforcement can pull them
-  back from the brink and the formation pipeline can mint a
-  merged later. The fire RPC ranks by
-  `cosine^1.3 * sqrt(health * confidence) * (1 + 0.1 * ln(1 +
-  N))` so weak-but-relevant samskaras break through (the 1.3
-  power on the cosine factor is a relevance nudge, not a
-  threshold - matches still rank smoothly down toward zero). The
+  back from the brink, and the co-fire dedup pass can later
+  merge near-duplicates the cohort reveals. The fire RPC ranks by
+  a centered-cosine ramp to saturation over [0, 0.30], times
+  `sqrt(health * confidence)`, times the sample-size bonus
+  `(1 + 0.1 * ln(1 + N))`, so weak-but-relevant samskaras break
+  through (the ramp is a relevance nudge, not a threshold -
+  matches still rank smoothly down toward zero; see "Fire ranking
+  formula"). The
   token budget in `formatPriming` is what bounds the long tail,
   not a SQL filter. The one filter that DOES apply is client-side
   in `fireSamskaras`: rows scoring below `FIRE_SCORE_FLOOR`
@@ -1604,8 +1605,8 @@ summarizer reads samskaras to feed the agent.
   (repeated real failure), the Hebbian dedup pass (true duplicates),
   and eviction of provably-useless rows. Without the gate,
   every mint at cap forced the collapse RPC's overflow pass to
-  greedy-merge two DISTINCT claims at its 0.40 centered-cosine floor - the
-  same "related but distinct" band - and a
+  greedy-merge two DISTINCT claims at its 0.40 centered-cosine floor -
+  the "related but distinct" band - and a
   2026-07 prod audit measured 49 mints/week churning through that
   treadmill: Venice spend to mint a claim, then a merge that blurs
   two others to make room for it. The gate fails OPEN on a count

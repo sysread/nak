@@ -125,5 +125,8 @@ describe('schema Data API grant guardrail', () => {
     const names = new Set(tables.map((t) => t.name));
     expect(names.has('profiles'), 'scanner lost the profiles create-table').toBe(true);
     expect(names.has('mcp_integration_tools'), 'scanner lost the mcp_integration_tools create-table').toBe(true);
+    // The tier-2 (compound) layer was retired 2026-10-25; its declines
+    // table must not re-appear (e.g. via a partial revert).
+    expect(names.has('samskara_tier2_declines'), 'retired samskara_tier2_declines must not re-appear').toBe(false);
   });
 });

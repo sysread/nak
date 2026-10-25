@@ -7324,8 +7324,8 @@ $$;
 --
 -- The chat model's progressively-built predictive model of the user.
 -- Per-round observations (substrate) compound through background
--- clustering into emergent predictive claims (samskaras); cohorts of
--- samskaras. The accumulated set is summarised into prose that lives
+-- clustering into emergent predictive claims (samskaras). The
+-- accumulated set is summarised into prose that lives
 -- always-on in the system prompt; per-turn cosine fire surfaces
 -- situationally-relevant samskaras on top.
 --
@@ -7716,7 +7716,7 @@ drop table if exists public.samskara_tier2_declines;
 -- the NEWEST embedded substrate row and ranked partners within just the
 -- 40 most-recent rows - a recency-pinned walk that left associations
 -- among older observations permanently unexplored (the association
--- graph, which feeds mint-tier1-assoc, only ever grew near the recency
+-- graph, which feeds the association mint, only ever grew near the recency
 -- frontier).
 --
 -- Seed = the embedded row that has waited longest since it was last
@@ -9564,7 +9564,7 @@ grant execute on function public.samskara_expire_unjudgeable_fires() to service_
 
 -- Cap-pressure eviction: free one capped slot for a pending mint by
 -- deleting the corpus's most-disproven untested row. Called by the
--- mint-tier1 probe only when the population cap blocks a mint, so
+-- mint probes only when the population cap blocks a mint, so
 -- eviction happens exactly as fast as formation pressure demands -
 -- decay by replacement, not by clock.
 --
@@ -9911,7 +9911,7 @@ end $$;
 -- `samskara_nearest_by_prediction` and `samskara_reinforce_existing`
 -- back the mint-phase dedup guards in
 -- supabase/functions/venice/agents/samskara.ts.
--- Backstory: the mint-tier1 phase used to insert unconditionally
+-- Backstory: the mint phase used to insert unconditionally
 -- whenever the minter agent returned a non-null candidate; because
 -- the agent's input is limited to a five-row substrate sample and
 -- never the existing samskara corpus, near-duplicate paraphrases of
@@ -9925,12 +9925,10 @@ end $$;
 -- threshold filter) is unchanged; this only affects MINT, not FIRE.
 -- (A tier filter param, added after the original 2-arg shape,
 -- was removed 2026-10-25 with the retired compound layer.)
--- drop the old signature so the 3-arg version doesn't create an
--- overload that PostgREST can't disambiguate.
+-- Drop before recreate: changed arg lists CREATE a second overload
+-- instead of replacing, so every historical shape is dropped
+-- explicitly - only the (vector, int, uuid) form remains.
 drop function if exists public.samskara_nearest_by_prediction(vector, int);
-drop function if exists public.samskara_nearest_by_prediction(vector, int, int);
--- Drop before recreate: the tier-filter overloads are retired with
--- the compound layer; only the (vector, int, uuid) shape remains.
 drop function if exists public.samskara_nearest_by_prediction(vector, int, int);
 drop function if exists public.samskara_nearest_by_prediction(vector, int, int, uuid);
 create or replace function public.samskara_nearest_by_prediction(
@@ -10130,7 +10128,7 @@ end $$;
 --     turn without being the same habit).
 -- The winner is always the older row so the audit trail and
 -- compound-regen's recency weighting stay aligned with the existing
--- mint-tier1 dedup-reinforce behaviour.
+-- mint dedup-reinforce behaviour.
 --
 -- Safety cap ("population overflow"). If the primary pass leaves
 -- the pool above `p_target_count`, fall through to a pure
@@ -10138,7 +10136,7 @@ end $$;
 -- merge pairs with cosine < `p_cap_cosine_floor`. This guards
 -- against a diverse-but-overflowing pool where no pair meets the
 -- co-firing bar but the count is still growing without bound.
--- `p_target_count` MUST stay in sync with TIER1_POPULATION_CAP in
+-- `p_target_count` MUST stay in sync with SAMSKARA_POPULATION_CAP in
 -- venice/agents/samskara.ts: the mint probes skip while the pool is
 -- at that cap, so this overflow pass is the backstop for races, not
 -- the routine make-room mechanism (it merges distinct claims, and
@@ -10151,7 +10149,7 @@ end $$;
 -- loop.
 --
 -- Idempotent under repeated calls. Safe to run while the worker is
--- live: a concurrent mint-tier1 could at worst re-create a twin
+-- live: a concurrent mint could at worst re-create a twin
 -- this call just removed, which the next invocation catches.
 drop function if exists public.samskara_collapse_by_cofiring(int, real, real, int, real, int);
 create or replace function public.samskara_collapse_by_cofiring(
@@ -10312,12 +10310,11 @@ end $$;
 -- candidate detection RPC (co-fire constellations, lift gate,
 -- centered-cosine band, Jaccard coverage guard over child lists and
 -- the decline ledger) is dropped with it. The final tier-2 state was
--- snapshotted before removal (docs/dev/in-progress/
--- samskara-lifecycle-plan.md, decision 5).
+-- snapshotted before removal (see the samskara lifecycle plan's
+-- decision 5, docs/dev/in-progress/samskara-lifecycle-plan.md).
 drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real);
 drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real, uuid);
 drop function if exists public.samskara_tier2_candidate(int, real, real, real, int, int, real, uuid);
-drop function if exists public.samskara_tier2_candidate();
 
 
 -- Observability reads -----------------------------------------------------
@@ -10388,6 +10385,13 @@ $$;
 -- as the thread version. The corpus is small by design (dedup targets
 -- ~150 claims), and this only runs when the slider is engaged, so the
 -- naive reload is fine - not on any hot path.
+-- Drop before recreate: the tier-filter parameter was retired with the
+-- compound layer, and CREATE OR REPLACE with a different arg list
+-- creates a second overload instead of replacing - the old shape
+-- would survive every re-apply with a body referencing the dropped
+-- tier column (the same hazard samskara_nearest_by_prediction's header
+-- documents).
+drop function if exists public.samskara_cluster_corpus(real, int);
 create or replace function public.samskara_cluster_corpus(
   p_threshold real
 ) returns table (

@@ -25,8 +25,9 @@ observable contract - claims, writes, toasts - is the same.
 
 - Local stack up (`mise run dev-start`), signed in as the dev
   user, Logs drawer open at `Trace+`.
-- A corpus with history: >= 8 fired samskaras (
-  detection's precondition), >= 10 embedded substrate rows, and an
+- A corpus with history: >= 8 fired samskaras (enough for the dedup
+  phase to have co-fire candidates), >= 10 embedded substrate rows,
+  and an
   existing `samskara_compound_summary` row. The long-lived dev
   corpus qualifies; check with:
 

@@ -160,10 +160,10 @@ p0, which pools over the whole corpus.
    stays (fed by the single tier). Reversible in principle: a
    future session could rebuild a two-tier system on measured
    need, but nothing is preserved for it beyond git history and
-   the final snapshot (scratch/vet-samskara-2026-10-23/
-   tier2-final-snapshot.json - every compound, its tallies, its
-   verdict counts, its part list, taken 2026-10-25 before any
-   deletion; the intended audit trail).
+   the final snapshot (tier2-final-snapshot.json in this
+   directory - every compound, its tallies, its verdict counts,
+   its part list, taken 2026-10-25 before any deletion; the
+   intended audit trail).
 6. The 150-cap question is explicitly PARKED until the
    retirement is landed and everything is working (owner, same
    message). M5's readout is the input to that conversation.

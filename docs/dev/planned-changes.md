@@ -102,11 +102,12 @@ against controls on the same threads; that comparison is what
 decides whether the rerank / query-rewrite option moves up. The
 fire-time cosine column is still not recorded.
 
-**A labeled probe set, not self-calibrating thresholds.** Four
+**A labeled probe set, not self-calibrating thresholds.** Two
 similarity bars are hard-coded in the samskara path - the
-near-duplicate merge bar, the topical cluster floor, and two tier-2
-gates - all tuned when typical cosine ran ~0.38 under a superseded
-embedding model. The tempting fix is to express them as percentiles
+near-duplicate merge bar and the topical cluster floor - all tuned
+when typical cosine ran ~0.38 under a superseded embedding model.
+(The two tier-2 gates went away with the tier-2 layer, retired
+2026-10-25.) The tempting fix is to express them as percentiles
 of the live distribution. Reject that: right after a model rotation
 the live distribution IS the pathology (during the 2026-08 outage,
 five claims produced 92% of fires), so auto-calibrating against it
@@ -151,8 +152,10 @@ testable against the probe set above before touching production.
 
 ### Samskara tier-2 confirm bar (observation)
 
-**Status:** downgraded from planned change to observation
-(2026-08-10 audit); re-check at the Sept 1 review.
+**Status:** retired 2026-10-25 with the tier-2 (compound) layer -
+the confirm bar, decline ledger, and held-rate metrics it watched
+no longer exist. (Historical record of the observation that
+downgraded this from planned change: 2026-08-10 audit.)
 
 The tier-2 minter almost never declines a candidate (1 lifetime
 decline), which looked like a rubber stamp. The harm hypothesis
@@ -258,6 +261,13 @@ from co-firing rather than geometry. Watch: the graduated count on
 the health panel, and whether a compound whose parts have all
 retired stops suppressing anything and lets a sibling constellation
 re-form around it (the slow loop; the sibling count is the signal).
+
+**Retired 2026-10-25 with the tier-2 (compound) layer**, ending the
+watch: the graduation tier stripped every established compound of
+all its parts in twenty days (the layer's measured precision sat
+below the flat claims'), and the whole compound layer - including
+this tier - was removed outright. See the samskara lifecycle plan
+(decision 5) for the verdict.
 
 ## Ledger
 
