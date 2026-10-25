@@ -90,7 +90,7 @@ export const STALE_CEILING_HOURS = 24;
  * whose health has decayed to ~0 scores ~0: it contributes nothing to
  * the priming block yet, unfiltered, still gets written as a fire.
  * Those zero-signal fires bloated cohorts to ~20 members (poisoning
- * co-fire dedup and tier-2 detection, which read co-firing as Hebbian
+ * co-fire dedup, which reads co-firing as Hebbian
  * binding), inflated fire_count, and shrank each reaction's
  * 1/sqrt(cohort_size) weight. This floor removes the dead tail WITHOUT
  * imposing a topical/cosine threshold on live-but-weak matches - the

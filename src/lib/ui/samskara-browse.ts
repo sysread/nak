@@ -6,7 +6,7 @@
  * framework-native reactivity.
  *
  * Everything a port to React/Solid/Vue would rewrite stays in the
- * components; everything else - sort/tier option lists, the
+ * components; everything else - the sort option list, the
  * hide-similar collapse, provenance grouping, the per-samskara verdict
  * list, label/valence/relative-time formatters - lives here and is
  * unit-tested directly. The Health panel's severity toolkit lives in
@@ -25,13 +25,6 @@ export const SEARCH_DEBOUNCE_MS = 200;
 
 /** Per-call cap for the corpus list/search - the corpus is small, so this is generous. */
 export const CORPUS_LIST_LIMIT = 100;
-
-/** Tier filter options for the Corpus segmented control. `null` = all tiers. */
-export const TIER_FILTERS: readonly { value: number | null; label: string }[] = [
-  { value: null, label: 'All' },
-  { value: 1, label: 'Tier 1' },
-  { value: 2, label: 'Tier 2' },
-];
 
 /** Sort options for the Corpus list, in display order. */
 export const SORT_OPTIONS: readonly { value: SamskaraBrowseSort; label: string }[] = [
@@ -58,11 +51,6 @@ export function emptyMessage(query: string): string {
   return query.trim().length > 0
     ? 'No matching samskaras.'
     : 'No samskaras yet. They form as you chat.';
-}
-
-/** "T1" / "T2" badge text for a tier. */
-export function tierBadge(tier: number): string {
-  return `T${tier}`;
 }
 
 /** Signed valence to one decimal, with an explicit leading + for positives. */
@@ -142,18 +130,16 @@ export function matchSummary(shown: number, total: number): string {
 
 /**
  * Provenance kinds in display order: the substrate that formed the
- * samskara first, then the relations that tied that substrate together,
- * then (for a tier-2) its tier-1 children. A samskara minted from the
- * association graph is the first kind to carry MIXED provenance
+ * samskara first, then the relations that tied that substrate together.
+ * A samskara minted from the association graph carries MIXED provenance
  * (substrate + association), which is exactly why the detail view can no
  * longer label the whole section off the first row's kind.
  */
 type ProvenanceKind = SamskaraProvenanceRow['kind'];
-const PROVENANCE_ORDER: readonly ProvenanceKind[] = ['substrate', 'association', 'samskara'];
+const PROVENANCE_ORDER: readonly ProvenanceKind[] = ['substrate', 'association'];
 const PROVENANCE_HEADINGS: Record<ProvenanceKind, string> = {
   substrate: 'Formed from (substrate)',
   association: 'Related observations',
-  samskara: 'Compounded from (tier-1 children)',
 };
 
 export interface ProvenanceGroup {

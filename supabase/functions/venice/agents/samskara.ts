@@ -1,27 +1,28 @@
 // Samskara formation pipeline: assimilate chat rounds into substrate,
-// relate and cluster them into tier-1 predictive claims, compound
-// co-firing claims into tier-2, collapse redundancy, and keep the
-// per-user compound summary prose fresh. docs/dev/samskara.md is the
-// design doc. (Scoring the user's reactions to fired cohorts moved to
-// the next-day evaluation sweep - see agents/samskara_evaluation.ts.)
+// relate and cluster them into predictive claims, collapse redundancy,
+// and keep the per-user compound summary prose fresh. docs/dev/
+// samskara.md is the design doc. (Scoring the user's reactions to
+// fired cohorts moved to the next-day evaluation sweep - see agents/
+// samskara_evaluation.ts. A tier-2 "compound" layer over co-firing
+// claims was retired 2026-10-25; the summary prose block stays and is
+// fed by the single tier.)
 //
 // Two exported drivers, matching the fleet's dual-driver shape:
 //
 //   - samskaraOnTurnTail(admin, userId) - rides getStreamingResponse's
 //     waitUntil tail between curation and reflection. Runs the
 //     session-responsive phases: a capped assimilate drain, then one
-//     pair-relate probe, then one mint-tier1 probe (the in-session
+//     pair-relate probe, then one mint probe (the in-session
 //     toast surface). Reaction scoring used to run first here; it moved
 //     to the next-day evaluation sweep (agents/samskara_evaluation.ts).
 //
 //   - runSamskaraSweepTick(admin) - the hourly nak-samskara-sweep cron
 //     (route /venice/samskara-sweep via sweepHandler). Catch-up for the
 //     assimilate queue across users, plus the heavy timing-insensitive
-//     phases (mint-tier2, dedup, compound-regen) for every user with
-//     recent samskara activity. These three are cron-only on purpose:
-//     the tier-2 detection self-join is the heaviest query in the
-//     feature, dedup is population maintenance, and the compound
-//     summary tolerates a day of staleness in the priming block.
+//     phases (dedup, compound-regen) for every user with recent
+//     samskara activity. These are cron-only on purpose: dedup is
+//     population maintenance, and the compound summary tolerates a
+//     day of staleness in the priming block.
 //
 // No per-phase throttles: one trigger runs one rotation, so the
 // trigger cadence (turn or tick) IS the rate limit - nothing here
@@ -112,7 +113,7 @@ const MINT_DEDUP_COSINE = 0.5;
 const MINT_DEDUP_HEALTH_BUMP = 0.02;
 
 /**
- * Topical-cluster tuning for mint-tier1. Seed on the most-recent
+ * Topical-cluster tuning for mint. Seed on the most-recent
  * substrate row and keep only rows whose situation embedding is close
  * to it, so the minter input and the recorded provenance are one
  * coherent topic rather than a recency window fused across unrelated
@@ -134,19 +135,18 @@ const MINT_CLUSTER_MAX = 5;
 const MINT_CLUSTER_MIN = 3;
 
 /**
- * Tier-1 population carrying capacity. Both tier-1 mint probes skip
- * (before any Venice spend) while the user's tier-1 count is at or
- * above this, so new claims enter only as the reaper or the Hebbian
- * dedup pass makes room. Without the gate, minting at cap forces the
- * collapse RPC's overflow pass to greedy-merge two DISTINCT existing
- * claims (cosine floor 0.60 - the "related but distinct" band tier-2
- * detection owns) for every new mint: a 2026-07 prod audit measured
- * 49 mints/week churning through exactly that treadmill. MUST mirror
+ * Population carrying capacity. Both mint probes skip (before any
+ * Venice spend) while the user's count is at or above this, so new
+ * claims enter only as the reaper or the Hebbian dedup pass makes
+ * room. Without the gate, minting at cap forces the collapse RPC's
+ * overflow pass to greedy-merge two DISTINCT existing claims for
+ * every new mint: a 2026-07 prod audit measured 49 mints/week
+ * churning through exactly that treadmill. MUST mirror
  * `p_target_count` on `samskara_collapse_by_cofiring` in
  * supabase/schema.sql - if the two drift, either the gate never opens
  * (cap here lower) or the treadmill quietly resumes (cap here higher).
  */
-const TIER1_POPULATION_CAP = 150;
+const SAMSKARA_POPULATION_CAP = 150;
 
 /**
  * Hubs the association-mint probe adjudicates per sweep tick. One per
@@ -162,7 +162,7 @@ const TIER1_POPULATION_CAP = 150;
 const ASSOC_HUBS_PER_TICK = 3;
 
 /**
- * mint-tier1 reads just enough recent substrate to seed one topical
+ * mint reads just enough recent substrate to seed one topical
  * cluster (it is deliberately recency-seeded). pair-relate no longer
  * reads a recency window - it seeds corpus-wide via
  * samskara_pair_probe_candidates and asks for this many ranked partner
@@ -335,58 +335,6 @@ behaviour"). When present, treat them as pre-digested hints about
 what ties the cluster together - stronger signal than the raw
 observations alone. When "sample_labels" is empty, work from the
 observations directly.`;
-
-/**
- * Tier-2 (compound) minter prompt. Reads a set of EXISTING tier-1
- * predictive claims that reliably fire together, and names the
- * higher-order disposition behind them - or refuses. Distinct from
- * MINTER_PROMPT: the input is finished claims, not raw situations, and
- * the task is generalization rather than first-order observation. The
- * output shape is identical so the mint path stays uniform.
- */
-const TIER2_MINTER_PROMPT = `You are minting a "compound" - a higher-order predictive claim about a
-user, derived from a set of more specific claims that already fire
-together whenever a certain kind of situation recurs.
-
-You will receive an array of \`children\`, each a {prediction, valence}
-the system has already formed about this user. They co-activate, so
-they likely share one underlying disposition. Your job is to name THAT
-- the pattern behind the patterns - in a single claim that is strictly
-more general than any one child.
-
-Reply with a single JSON object, no prose, no markdown fence:
-
-{
-  "confirm": true | false,
-  "prediction": "one or two sentences in the form: in situations like X, this user tends to Y",
-  "inner_voice": "optional silent self-talk, <= 80 chars. Empty string if not useful.",
-  "valence": <-1.0 to 1.0, the emotional flavour of the compound>,
-  "confidence": <0.0 to 1.0, a bet: 0.5 = coin flip, 0.7 = most children support it and none contradict it, 0.9 = every child does>
-}
-
-Set confirm:false when:
-- the children only coincidentally co-fire and share no real
-  super-pattern,
-- the only honest summary would be a list or conjunction of the
-  children ("the user does A and B and C"),
-- the generalization would be vapid ("the user has preferences").
-
-When you set confirm:false, the other fields are discarded - leave
-them empty or zero.
-
-When you set confirm:true, the prediction must GENERALIZE, not
-enumerate. Do not restate or concatenate the children. If three
-children are "pushes back on flowery prose", "wants code without
-preamble", and "corrects over-explanation", the compound is something
-like "in technical exchanges this user runs on an efficiency instinct
-and treats anything beyond the answer as friction" - one disposition,
-not three bullets. Keep it in the same "in situations like X, this
-user tends to Y" shape so it embeds and fires like any other claim.
-
-The same candor rule as the first-order minter applies: the user
-never sees this, so name the disposition as it is, flattering or
-not, and a disposition about how the assistant tends to miss with
-this user is as valid a compound as one about the user.`;
 
 /**
  * Compound-summary prompt. Reads the top live samskaras and produces
@@ -735,7 +683,7 @@ interface SubstrateRow {
 }
 
 /**
- * One observation as the minter sees it. Both tier-1 mint paths hand
+ * One observation as the minter sees it. Both mint paths hand
  * the minter the FULL round - situation, outcome, valence - not the
  * situation alone. The outcome is where assistant misfires, flagged
  * misgivings, and corrective landings live; a minter that only ever
@@ -751,7 +699,7 @@ interface MintObservation {
 }
 
 /**
- * Seed-topical cluster for mint-tier1: the most-recent row plus the
+ * Seed-topical cluster for mint: the most-recent row plus the
  * later rows whose situation embedding sits within
  * MINT_CLUSTER_COSINE_FLOOR of it, capped at MINT_CLUSTER_MAX,
  * preserving recency order. A seed with no usable embedding yields a
@@ -793,7 +741,7 @@ function subtractVector(a: number[], b: number[]): number[] {
  * don't, so each register carries a different shared component -
  * centering claims with the substrate mean leaves a residual that
  * puts 85% of the corpus above the dedup bar (measured 2026-09-05).
- * 'claim' = claim-vs-claim comparisons (mint dedup, collapse, tier-2);
+ * 'claim' = claim-vs-claim comparisons (mint dedup, collapse);
  * 'substrate' = observation-vs-observation (mint clustering, pair
  * probes) and message-vs-claim (fire).
  *
@@ -924,7 +872,6 @@ async function insertMint(
   admin: SupabaseClient,
   userId: string,
   log: EdgeLogger,
-  tier: 1 | 2,
   minted: MintResult,
   predEmbedding: number[],
   provenance: { kind: 'substrate' | 'samskara' | 'association'; refId: string; weight: number }[],
@@ -933,7 +880,6 @@ async function insertMint(
     .from('samskaras')
     .insert({
       user_id: userId,
-      tier,
       prediction: minted.prediction,
       prediction_embedding: predEmbedding,
       embedding_model: EMBEDDING_MODEL,
@@ -944,7 +890,7 @@ async function insertMint(
     .select('id')
     .single();
   if (error || !data) {
-    log.debug(`mint-tier${tier}: samskaras insert failed`, {
+    log.debug(`mint: samskaras insert failed`, {
       error: error?.message ?? 'no row',
     });
     return null;
@@ -962,14 +908,13 @@ async function insertMint(
   if (provErr) {
     // The samskara row itself landed and will fire; missing provenance
     // only degrades the diagnostics drill-down, so log and keep it.
-    log.debug(`mint-tier${tier}: provenance upsert failed`, { error: provErr.message });
+    log.debug(`mint: provenance upsert failed`, { error: provErr.message });
   }
   // Pop the mood-pill toast in any open client. Broadcast on the user's
   // private samskaras topic, not a postgres_changes echo (the table is
   // deliberately out of the realtime publication - see samskara-mint.ts).
   // Best-effort and awaited so the POST settles before this tick returns.
   await publishSamskaraMint(userId, {
-    tier,
     valence: minted.valence,
     confidence: minted.confidence,
   });
@@ -1223,13 +1168,13 @@ async function pairRelateProbe(
 }
 
 /**
- * Population-headroom gate shared by the two tier-1 mint probes. True
- * when the user's tier-1 count sits at or above TIER1_POPULATION_CAP.
+ * Population-headroom gate shared by the two mint probes. True
+ * when the user's count sits at or above SAMSKARA_POPULATION_CAP.
  * Fails open on a count error: a transient RPC blip should not silence
  * minting, and the collapse RPC's overflow pass still bounds the
  * population if one mint slips through at cap.
  */
-async function tier1AtCap(
+async function corpusAtCap(
   admin: SupabaseClient,
   userId: string,
   log: EdgeLogger,
@@ -1237,17 +1182,16 @@ async function tier1AtCap(
   const { count, error } = await admin
     .from('samskaras')
     .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('tier', 1);
+    .eq('user_id', userId);
   if (error) {
-    log.debug('mint gate: tier-1 count failed, proceeding', { error: error.message });
+    log.debug('mint gate: corpus count failed, proceeding', { error: error.message });
     return false;
   }
-  return (count ?? 0) >= TIER1_POPULATION_CAP;
+  return (count ?? 0) >= SAMSKARA_POPULATION_CAP;
 }
 
 /**
- * Cap-or-evict gate shared by BOTH tier-1 mint probes. Returns true
+ * Cap-or-evict gate shared by BOTH mint probes. Returns true
  * when the probe may proceed: the corpus is below cap, or cap-pressure
  * eviction (samskara_evict_for_mint, see the decay section of the dev
  * doc) freed a slot. Shared on purpose: entry to a capped corpus is
@@ -1259,13 +1203,13 @@ async function tier1AtCap(
  * audit). Eviction errors and no-victim both return false (the probe
  * skips, evidence intact); the next cap-hit retries.
  */
-async function ensureTier1Headroom(
+async function ensureMintHeadroom(
   admin: SupabaseClient,
   userId: string,
   log: EdgeLogger,
   probeTag: string,
 ): Promise<boolean> {
-  if (!(await tier1AtCap(admin, userId, log))) return true;
+  if (!(await corpusAtCap(admin, userId, log))) return true;
   const { data: evicted, error: evictErr } = await admin.rpc('samskara_evict_for_mint', {
     p_user_id: userId,
   });
@@ -1273,7 +1217,7 @@ async function ensureTier1Headroom(
     if (evictErr) {
       log.debug(`${probeTag}: eviction RPC failed; skipping mint`, { error: evictErr.message });
     } else {
-      log.trace(`${probeTag}: tier-1 at cap, nothing evictable; skipping`);
+      log.trace(`${probeTag}: corpus at cap, nothing evictable; skipping`);
     }
     return false;
   }
@@ -1284,7 +1228,7 @@ async function ensureTier1Headroom(
 }
 
 /**
- * Mint-tier1 probe: build a topical cluster from the recent window,
+ * Mint probe: build a topical cluster from the recent window,
  * ask the minter, embed, dedup-guard against the existing corpus,
  * insert with provenance. The INSERT doubles as the toast signal via
  * the realtime relay.
@@ -1295,19 +1239,19 @@ async function ensureTier1Headroom(
  * samskara_nearest_by_prediction). The two registers carry different
  * shared components; see fetchCenteringMean.
  */
-async function mintTier1Probe(
+async function mintProbe(
   admin: SupabaseClient,
   userId: string,
   log: EdgeLogger,
   apiKey: string,
 ): Promise<void> {
-  if (!(await ensureTier1Headroom(admin, userId, log, 'mint-tier1'))) return;
+  if (!(await ensureMintHeadroom(admin, userId, log, 'mint'))) return;
   const recent = await recentEmbeddedSubstrate(admin, userId, MINT_WINDOW);
   if (recent.length < MINT_CLUSTER_MIN) return;
   const mean = await fetchCenteringMean(admin, userId, 'substrate');
   const clusterRows = buildTopicalCluster(recent, mean);
   if (clusterRows.length < MINT_CLUSTER_MIN) {
-    log.trace('mint-tier1: no coherent cluster', {
+    log.trace('mint: no coherent cluster', {
       fetched: recent.length,
       coherent: clusterRows.length,
     });
@@ -1328,7 +1272,7 @@ async function mintTier1Probe(
   // Recency path stamps nothing, so a decline and a failure are the
   // same non-event here.
   if (minted === null || minted === 'declined') {
-    log.trace('mint-tier1: agent declined');
+    log.trace('mint: agent declined');
     return;
   }
 
@@ -1353,7 +1297,7 @@ async function mintTier1Probe(
         p_health_bump: MINT_DEDUP_HEALTH_BUMP,
         p_user_id: userId,
       });
-      log.debug('mint-tier1: dedup-reinforced existing', {
+      log.debug('mint: dedup-reinforced existing', {
         id: top.id,
         cosine: top.cosine,
         candidate: shorten(minted.prediction),
@@ -1362,7 +1306,7 @@ async function mintTier1Probe(
     }
   } catch (err) {
     if (err instanceof VeniceError) throw err;
-    log.debug('mint-tier1: dedup check failed, proceeding with mint', {
+    log.debug('mint: dedup check failed, proceeding with mint', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -1371,13 +1315,12 @@ async function mintTier1Probe(
     admin,
     userId,
     log,
-    1,
     minted,
     predEmbedding,
     clusterRows.map((r) => ({ kind: 'substrate' as const, refId: r.id, weight: 1.0 })),
   );
   if (id) {
-    log.info('mint-tier1: minted samskara', {
+    log.info('mint: minted samskara', {
       id,
       prediction: shorten(minted.prediction),
       valence: minted.valence,
@@ -1467,13 +1410,13 @@ async function stampConsumed(
     .eq('user_id', userId)
     .in('id', edgeIds);
   if (error) {
-    log.debug('mint-tier1-assoc: consumption stamp failed', { error: error.message });
+    log.debug('mint-from-associations: consumption stamp failed', { error: error.message });
   }
 }
 
 /**
- * Association-mint probe (SWEEP ONLY): mint a tier-1 samskara from the
- * relation graph rather than the recency window. Where mintTier1Probe
+ * Association-mint probe (SWEEP ONLY): mint a samskara from the
+ * relation graph rather than the recency window. Where mintProbe
  * sees only the 8 most-recent substrate rows, this reads a hub of
  * unconsumed associations - cross-session recurrence the recency window
  * structurally cannot co-locate - and feeds the hub's cluster, WITH the
@@ -1493,7 +1436,7 @@ async function stampConsumed(
  * no-hub are terminal for the tick, and a non-verdict must not re-ask
  * the same unchanged hub within it.
  */
-async function mintTier1FromAssociationsProbe(
+async function mintFromAssociationsProbe(
   admin: SupabaseClient,
   userId: string,
   log: EdgeLogger,
@@ -1522,16 +1465,16 @@ async function assocHubOnce(
   // intact for the sweep that runs once headroom opens or a victim
   // qualifies. A declined hub does not fill the slot its eviction
   // freed, so one victim can fund several adjudications in a tick.
-  if (!(await ensureTier1Headroom(admin, userId, log, 'mint-tier1-assoc'))) {
+  if (!(await ensureMintHeadroom(admin, userId, log, 'mint-from-associations'))) {
     return 'no-headroom';
   }
   const { data, error } = await admin.rpc('samskara_association_cluster', {
     p_user_id: userId,
   });
-  if (error) throw new Error(`mint-tier1-assoc: cluster RPC failed: ${error.message}`);
+  if (error) throw new Error(`mint-from-associations: cluster RPC failed: ${error.message}`);
   const edges = (Array.isArray(data) ? data : []) as AssociationEdgeRow[];
   if (edges.length === 0) {
-    log.trace('mint-tier1-assoc: no hub with unconsumed evidence');
+    log.trace('mint-from-associations: no hub with unconsumed evidence');
     return 'no-hub';
   }
 
@@ -1550,7 +1493,7 @@ async function assocHubOnce(
 
   // No verdict: leave the edges unconsumed so a later sweep retries.
   if (minted === null) {
-    log.debug('mint-tier1-assoc: no verdict, leaving edges unconsumed', {
+    log.debug('mint-from-associations: no verdict, leaving edges unconsumed', {
       edges: edgeIds.length,
     });
     return 'no-verdict';
@@ -1560,7 +1503,7 @@ async function assocHubOnce(
   // immutable, so consume it - re-asking learns nothing.
   if (minted === 'declined') {
     await stampConsumed(admin, userId, edgeIds, log);
-    log.trace('mint-tier1-assoc: minter declined the cluster', { edges: edgeIds.length });
+    log.trace('mint-from-associations: minter declined the cluster', { edges: edgeIds.length });
     return 'verdict';
   }
 
@@ -1568,7 +1511,7 @@ async function assocHubOnce(
   if (!predEmbedding) {
     // Reached a mint decision but couldn't embed it (transient). Leave
     // unconsumed; the retry re-mints and embeds.
-    log.debug('mint-tier1-assoc: prediction embed failed, leaving edges unconsumed');
+    log.debug('mint-from-associations: prediction embed failed, leaving edges unconsumed');
     return 'no-verdict';
   }
 
@@ -1589,7 +1532,7 @@ async function assocHubOnce(
         p_user_id: userId,
       });
       await stampConsumed(admin, userId, edgeIds, log);
-      log.debug('mint-tier1-assoc: dedup-reinforced existing', {
+      log.debug('mint-from-associations: dedup-reinforced existing', {
         id: top.id,
         cosine: top.cosine,
         candidate: shorten(minted.prediction),
@@ -1598,7 +1541,7 @@ async function assocHubOnce(
     }
   } catch (err) {
     if (err instanceof VeniceError) throw err;
-    log.debug('mint-tier1-assoc: dedup check failed, proceeding with mint', {
+    log.debug('mint-from-associations: dedup check failed, proceeding with mint', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -1618,12 +1561,12 @@ async function assocHubOnce(
       weight: e.reinforcement,
     })),
   ];
-  const id = await insertMint(admin, userId, log, 1, minted, predEmbedding, provenance);
+  const id = await insertMint(admin, userId, log, minted, predEmbedding, provenance);
   // Stamp only when the samskara row actually landed: a failed insert
   // leaves the edges unconsumed so the next sweep retries cleanly.
   if (!id) return 'no-verdict';
   await stampConsumed(admin, userId, edgeIds, log);
-  log.info('mint-tier1-assoc: minted samskara', {
+  log.info('mint-from-associations: minted samskara', {
     id,
     prediction: shorten(minted.prediction),
     edges: edgeIds.length,
@@ -1631,123 +1574,6 @@ async function assocHubOnce(
   return 'verdict';
 }
 
-/**
- * Mint-tier2 probe: ask the detection RPC for a co-fire constellation,
- * generalize it with the tier-2 minter, embed, dedup against existing
- * tier-2s only, insert with samskara-kind provenance. Two dedup nets:
- * the RPC's child-set overlap skip catches the same constellation; the
- * embedding guard catches a different child set that synthesized into
- * the same claim text.
- */
-async function mintTier2Probe(
-  admin: SupabaseClient,
-  userId: string,
-  log: EdgeLogger,
-  apiKey: string,
-): Promise<void> {
-  const { data, error } = await admin.rpc('samskara_tier2_candidate', {
-    p_user_id: userId,
-  });
-  if (error) throw new Error(`mint-tier2: candidate RPC failed: ${error.message}`);
-  const candidate = (Array.isArray(data) ? data : []) as {
-    samskara_id: string;
-    prediction: string;
-    valence: number | null;
-    cofire_weight: number;
-  }[];
-  if (candidate.length < 3) return;
-  log.debug(`mint-tier2: candidate group of ${candidate.length} tier-1 samskaras`);
-
-  const minted = await agentMint(
-    apiKey,
-    TIER2_MINTER_PROMPT,
-    JSON.stringify({
-      children: candidate.map((c) => ({ prediction: c.prediction, valence: c.valence })),
-    }),
-  );
-  if (minted === 'declined') {
-    // Record the decline so detection advances past this constellation
-    // instead of re-offering the same strongest-lift group every sweep
-    // (which would starve every weaker uncovered constellation behind
-    // it). The candidate RPC TTLs the decline, so a group that later
-    // strengthens re-qualifies - we just stamp it here. group_key is the
-    // sorted child ids so a re-decline upserts and re-arms the window.
-    // Only a clean 'declined' verdict records; a null (transport/parse
-    // failure) is NOT a verdict and must leave the group offerable, same
-    // discipline as the association-mint decline stamp.
-    const childIds = candidate.map((c) => c.samskara_id).sort();
-    const { error: declineErr } = await admin.from('samskara_tier2_declines').upsert(
-      {
-        user_id: userId,
-        group_key: childIds.join(','),
-        children: childIds,
-        declined_at: new Date().toISOString(),
-      },
-      { onConflict: 'user_id,group_key' },
-    );
-    if (declineErr) log.debug('mint-tier2: decline write error', { error: declineErr.message });
-    log.trace('mint-tier2: agent declined (recorded)');
-    return;
-  }
-  if (minted === null) {
-    log.trace('mint-tier2: minter returned null (no verdict, leaving group offerable)');
-    return;
-  }
-
-  const predEmbedding = await embedPrediction(minted.prediction);
-  if (!predEmbedding) return;
-
-  try {
-    const { data: nearest } = await admin.rpc('samskara_nearest_by_prediction', {
-      p_query_embedding: predEmbedding,
-      p_k_max: 1,
-      p_tier: 2,
-      p_user_id: userId,
-    });
-    const top = Array.isArray(nearest) ? nearest[0] : null;
-    if (top && typeof top.cosine === 'number' && top.cosine >= MINT_DEDUP_COSINE) {
-      await admin.rpc('samskara_reinforce_existing', {
-        p_samskara_id: top.id,
-        p_health_bump: MINT_DEDUP_HEALTH_BUMP,
-        p_user_id: userId,
-      });
-      log.debug('mint-tier2: dedup-reinforced existing compound', {
-        id: top.id,
-        cosine: top.cosine,
-        candidate: shorten(minted.prediction),
-      });
-      return;
-    }
-  } catch (err) {
-    if (err instanceof VeniceError) throw err;
-    log.debug('mint-tier2: dedup check failed, proceeding with mint', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  const id = await insertMint(
-    admin,
-    userId,
-    log,
-    2,
-    minted,
-    predEmbedding,
-    candidate.map((c) => ({
-      kind: 'samskara' as const,
-      refId: c.samskara_id,
-      weight: c.cofire_weight,
-    })),
-  );
-  if (id) {
-    log.info('mint-tier2: minted compound samskara', {
-      id,
-      children: candidate.length,
-      prediction: shorten(minted.prediction),
-      valence: minted.valence,
-      confidence: minted.confidence,
-    });
-  }
-}
 
 /**
  * Dedup probe: one collapse-by-cofiring pass. SQL-only; the RPC caps
@@ -1900,7 +1726,7 @@ export async function samskaraOnTurnTail(
     await runPhase(log, 'pair-relate', () =>
       pairRelateProbe(adminClient, userId, log, apiKey),
     );
-    await runPhase(log, 'mint-tier1', () => mintTier1Probe(adminClient, userId, log, apiKey));
+    await runPhase(log, 'mint', () => mintProbe(adminClient, userId, log, apiKey));
   } catch (err) {
     // Rate-limit (re-thrown by runPhase) or key plumbing: drop the
     // rest of the rotation. The hourly sweep is the backstop.
@@ -1920,8 +1746,8 @@ export interface SamskaraSweepSummary {
 /**
  * Hourly sweep driver for the samskara-sweep route. Drains the
  * cross-user assimilate queue, then runs the per-user maintenance
- * rotation (pair-relate, mint-tier1, mint-tier1-assoc, mint-tier2,
- * dedup, compound-regen) for every user with recent samskara activity.
+ * rotation (pair-relate, mint, mint-from-associations, dedup,
+ * compound-regen) for every user with recent samskara activity.
  * Reaction-classify is deliberately absent: classification needs the
  * next user message, which implies a turn, which implies the tail
  * already ran at the right moment - an hourly tick misses the 10
@@ -2027,14 +1853,13 @@ export async function runSamskaraSweepTick(
       await runPhase(log, 'pair-relate', () =>
         pairRelateProbe(adminClient, userId, log, apiKey),
       );
-      await runPhase(log, 'mint-tier1', () => mintTier1Probe(adminClient, userId, log, apiKey));
+      await runPhase(log, 'mint', () => mintProbe(adminClient, userId, log, apiKey));
       // Sweep-only: cross-session consolidation from the association
       // graph. Absent from the turn tail on purpose - it isn't
       // latency-sensitive and keeps per-turn Venice spend flat.
-      await runPhase(log, 'mint-tier1-assoc', () =>
-        mintTier1FromAssociationsProbe(adminClient, userId, log, apiKey),
+      await runPhase(log, 'mint-from-associations', () =>
+        mintFromAssociationsProbe(adminClient, userId, log, apiKey),
       );
-      await runPhase(log, 'mint-tier2', () => mintTier2Probe(adminClient, userId, log, apiKey));
       await runPhase(log, 'dedup', () => dedupProbe(adminClient, userId, log));
       await runPhase(log, 'compound-regen', () =>
         compoundRegenProbe(adminClient, userId, log, apiKey),
@@ -2065,7 +1890,6 @@ export const __test = {
   ASSIMILATOR_PROMPT,
   RELATOR_PROMPT,
   MINTER_PROMPT,
-  TIER2_MINTER_PROMPT,
   COMPOUND_SUMMARY_PROMPT,
   SAMSKARA_MODEL,
   TAIL_ASSIMILATE_CAP,
@@ -2075,7 +1899,7 @@ export const __test = {
   PAIR_RELATE_COSINE_FLOOR,
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
-  TIER1_POPULATION_CAP,
+  SAMSKARA_POPULATION_CAP,
   ASSOC_HUBS_PER_TICK,
   buildTopicalCluster,
   buildAssociationCluster,

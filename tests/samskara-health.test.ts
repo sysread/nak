@@ -12,7 +12,6 @@ import {
   worstSeverity,
   healthHeadline,
   verdictBreakdown,
-  tier2CandidateLabel,
   samskaraCountPhrase,
   HEALTH_THRESHOLDS,
 } from '../src/lib/ui/samskara-health';
@@ -84,19 +83,6 @@ describe('verdictBreakdown', () => {
       'not-engaged',
     ]);
     expect(out.map((v) => v.count)).toEqual([5, 2, 3, 7]);
-  });
-});
-
-describe('tier2CandidateLabel', () => {
-  it('reports none when nothing is offerable', () => {
-    expect(tier2CandidateLabel(0)).toBe('none available');
-    // Defensive: the RPC never returns negatives, but the floor holds.
-    expect(tier2CandidateLabel(-1)).toBe('none available');
-  });
-  it('reports the member count, pluralizing', () => {
-    // The minter's floor is 3, so 1 is the defensive-singular path.
-    expect(tier2CandidateLabel(1)).toBe('available (1 member)');
-    expect(tier2CandidateLabel(4)).toBe('available (4 members)');
   });
 });
 

@@ -1633,7 +1633,7 @@ export class SupabaseService {
 
   subscribeToSamskaraInserts(
     userId: string,
-    onMint: (detail: { tier: 1 | 2; valence: number; confidence: number }) => void
+    onMint: (detail: { valence: number; confidence: number }) => void
   ): () => void {
     return realtimeApi.subscribeToSamskaraInserts(this.client, userId, onMint);
   }
@@ -1682,7 +1682,7 @@ export class SupabaseService {
 
   async samskaraGetLatestFireMood(
     threadId: string
-  ): Promise<{ valence: number; tier: 1 | 2; confidence: number } | null> {
+  ): Promise<{ valence: number; confidence: number } | null> {
     return samskaraApi.samskaraGetLatestFireMood(this.client, threadId);
   }
 
@@ -1702,7 +1702,6 @@ export class SupabaseService {
   async listSamskarasPage(opts: {
     offset: number;
     pageSize: number;
-    tier?: number | null;
     sort: SamskaraBrowseSort;
   }): Promise<OffsetPage<SamskaraCorpusRow>> {
     return samskaraApi.listSamskarasPage(this.client, opts);
@@ -1710,25 +1709,22 @@ export class SupabaseService {
 
   async searchSamskarasByEmbedding(
     embedding: number[],
-    kMax: number,
-    tier?: number | null
+    kMax: number
   ): Promise<SamskaraCorpusRow[]> {
-    return samskaraApi.searchSamskarasByEmbedding(this.client, embedding, kMax, tier);
+    return samskaraApi.searchSamskarasByEmbedding(this.client, embedding, kMax);
   }
 
   async searchSamskarasByText(
     query: string,
-    limit: number,
-    tier?: number | null
+    limit: number
   ): Promise<SamskaraCorpusRow[]> {
-    return samskaraApi.searchSamskarasByText(this.client, query, limit, tier);
+    return samskaraApi.searchSamskarasByText(this.client, query, limit);
   }
 
   async samskaraClusterCorpus(
-    threshold: number,
-    tier?: number | null
+    threshold: number
   ): Promise<Map<string, { seq: number; size: number }>> {
-    return samskaraApi.samskaraClusterCorpus(this.client, threshold, tier);
+    return samskaraApi.samskaraClusterCorpus(this.client, threshold);
   }
 
   async samskaraProvenanceDetail(samskaraId: string): Promise<SamskaraProvenanceRow[]> {
@@ -1745,10 +1741,6 @@ export class SupabaseService {
 
   async samskaraVerdictCounts(samskaraId: string): Promise<SamskaraVerdictCounts> {
     return samskaraApi.samskaraVerdictCounts(this.client, samskaraId);
-  }
-
-  async samskaraTier2CandidateSize(): Promise<number> {
-    return samskaraApi.samskaraTier2CandidateSize(this.client);
   }
 
   // --- Bias profile ------------------------------------------------------

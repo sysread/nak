@@ -15,7 +15,6 @@ function fullContext(): DiagnosticPillContext {
       id: 1,
       emoji: '\u{1F60A}',
       label: 'cheerful',
-      tier: 1,
       isDefault: false,
     },
     intentsEnabled: true,
@@ -165,7 +164,6 @@ describe('descriptor label/enabled logic', () => {
         id: 1,
         emoji: '\u{1F4A4}',
         label: 'idle',
-        tier: 1,
         isDefault: true,
       },
     };

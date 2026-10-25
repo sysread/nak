@@ -43,7 +43,6 @@ export const DEFAULT_LABEL = 'idle';
 export interface MoodShape {
   emoji: string;
   label: string;
-  tier: 1 | 2;
   /** True for the U+1F4A4 placeholder; flips false once a real
    *  mood lands (fresh mint OR seed-from-history upgrade). Drives
    *  the tooltip + aria-label so the disabled-looking state has a
@@ -63,16 +62,15 @@ export interface MoodVisual extends MoodShape {
 }
 
 /**
- * Triple the shared `moodState` rune stores. Returned by the
+ * Pair the shared `moodState` rune stores. Returned by the
  * transition primitives so the component never has to construct
  * the shape itself - that rule (the store stores valence +
- * confidence + tier in this exact shape) belongs with the
+ * confidence in this exact shape) belongs with the
  * decision logic, not the dispatch site.
  */
 export interface MoodStoreUpdate {
   valence: number;
   confidence: number;
-  tier: 1 | 2;
 }
 
 /**
@@ -103,14 +101,12 @@ export interface SeedTransition {
 
 /**
  * The placeholder shape shown on thread open before any mood has
- * landed. Tier 1 by default - the placeholder has no real tier;
- * the value only matters once a real mint replaces it.
+ * landed.
  */
 export function defaultMood(): MoodShape {
   return {
     emoji: DEFAULT_EMOJI,
     label: DEFAULT_LABEL,
-    tier: 1,
     isDefault: true,
   };
 }
@@ -120,15 +116,12 @@ export function defaultMood(): MoodShape {
  * push into the shared mood store - it tracks every mint event
  * regardless of the local pill's dedup decision. `visual` carries
  * the dedup decision: null when the incoming mint lands in the
- * same emoji/label band as what is already showing AND the tier
- * hasn't changed, non-null otherwise.
+ * same emoji/label band as what is already showing, non-null
+ * otherwise.
  *
  * The dedup matters because every visual swap re-plays the fly
  * transition, which reads as visual noise when the model has been
- * steady-state for a few mints in a row. Tier is part of the
- * comparison because tier-2 carries a halo (`.mood-pill.tier-2`)
- * so a tier change IS visually meaningful even at the same
- * valence band.
+ * steady-state for a few mints in a row.
  */
 export function nextMoodFromMint(
   prev: MoodShape | null,
@@ -137,15 +130,13 @@ export function nextMoodFromMint(
   const storeUpdate: MoodStoreUpdate = {
     valence: detail.valence,
     confidence: detail.confidence,
-    tier: detail.tier,
   };
   const emoji = valenceToEmoji(detail.valence, detail.confidence);
   const label = valenceToMoodLabel(detail.valence, detail.confidence);
   if (
     prev !== null &&
     prev.emoji === emoji &&
-    prev.label === label &&
-    prev.tier === detail.tier
+    prev.label === label
   ) {
     return { storeUpdate, visual: null };
   }
@@ -154,7 +145,6 @@ export function nextMoodFromMint(
     visual: {
       emoji,
       label,
-      tier: detail.tier,
       isDefault: false,
     },
   };
@@ -189,7 +179,6 @@ export function nextMoodFromSeed(
     visual: {
       emoji: valenceToEmoji(seed.valence, seed.confidence),
       label: valenceToMoodLabel(seed.valence, seed.confidence),
-      tier: seed.tier,
       isDefault: false,
     },
   };

@@ -13,7 +13,7 @@
  * mood to. Anything else that reads `current` / `visual` is a passive
  * observer.
  *
- * Two fields, two readers: `current` (valence/confidence/tier) feeds
+ * Two fields, two readers: `current` (valence/confidence) feeds
  * the diagnostics-modal "you are here" dot; `visual` (emoji/label +
  * transition id) feeds the rendered mood pill in
  * `DiagnosticPills.svelte`, which is mounted twice (desktop + mobile)
@@ -32,10 +32,6 @@ export interface CurrentMood {
   valence: number;
   /** [0, 1], split at `CONFIDENCE_CUT` into the confident/tentative columns. */
   confidence: number;
-  /** Tier of the underlying samskara - reserved for visual variation
-   *  (a halo on tier-2 cells, etc.) and carried through alongside the
-   *  scalars so consumers don't have to re-fetch. */
-  tier: 1 | 2;
 }
 
 let _current = $state<CurrentMood | null>(null);
@@ -49,7 +45,7 @@ let _visual = $state<MoodVisual | null>(null);
  *
  * The setter accepts the full triple at once because the three
  * scalars are read together by every consumer (the dot's row is
- * picked from valence + tier and its column from confidence) and
+ * picked from valence and its column from confidence) and
  * splitting them into separate setters would invite a half-updated
  * intermediate render.
  */

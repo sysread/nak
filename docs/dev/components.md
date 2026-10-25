@@ -858,8 +858,8 @@ Consumers: `Cookbook.svelte`.
 
 File: `src/components/SamskaraBrowseList.svelte`.
 
-Browse list of samskara records: the user's predictive model
-compounds, ordered by confidence band, with per-samskara detail.
+Browse list of samskara records - the user's predictive model,
+ordered by the sort control, with per-samskara detail.
 
 Consumers: Samskara diagnostics modal.
 

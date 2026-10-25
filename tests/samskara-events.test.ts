@@ -49,8 +49,8 @@ describe('valenceToEmoji - confident column (default, confidence omitted)', () =
 
   it('clamps out-of-range values into the top / bottom bucket', () => {
     // Minter already clamps to [-1, 1]; this is defensive for anything
-    // that slips past (e.g. a future provenance-weighted aggregate on
-    // tier-2 that sums children without re-clamping).
+    // that slips past (e.g. a future provenance-weighted aggregate
+    // that sums without re-clamping).
     expect(valenceToEmoji(5)).toBe('\u{1F60A}');
     expect(valenceToEmoji(-5)).toBe('\u{1F614}');
   });

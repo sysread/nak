@@ -1,5 +1,7 @@
 # Samskara Tier-2 Implementation Plan
 
+> **retired 2026-10-25 with the tier-2 (compound) layer.** This plan is the historical design record.
+
 Status: LANDED and superseded - this is a historical proposal, kept
 for the design rationale. Tier-2 (compound) minting shipped, then
 moved server-side with the rest of the formation loop; the living

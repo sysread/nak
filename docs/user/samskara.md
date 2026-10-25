@@ -11,16 +11,6 @@ it. Most of the time they stay invisible: the only in-chat cue is the
 small mood emoji in the bottom-right pill. The surfaces below are where
 you can deliberately look under the hood.
 
-Two kinds:
-
-- **Tier 1** - specific instincts formed from individual exchanges.
-- **Tier 2 (compounds)** - when several tier-1 instincts reliably fire
-  together, Nak occasionally distills them into a single higher-order
-  instinct. A compound says something broader than any one of its parts.
-  In a conversation, a compound stands in for its parts: when it fires,
-  the tier-1 instincts it was built from sit that turn out, so one idea
-  does not crowd the others.
-
 Everything here is **read-only**. You can see what Nak believes, but not
 edit or delete it. A wrong instinct isn't permanent - it loses "health"
 on its own as later conversations contradict it, and eventually stops
@@ -84,13 +74,11 @@ invisible:
   fired instincts are judged in a batch the day after a conversation
   settles, so recent fires are always still pending, and one-question
   conversations are skipped on purpose (too little signal to judge).
-- **Corpus** - headline counts: total instincts by tier, how many are
+- **Corpus** - headline counts: total instincts, how many are
   near-dead or have never fired, how many are due for release (never
   genuinely engaged and past their probation window) or eligible to be
-  displaced by a new instinct when the corpus is full, the
-  raw-observation and pair-association totals behind them, and whether a
-  new **tier-2 compound** is currently ready to form (a higher-order
-  instinct distilled from several that keep firing together).
+  displaced by a new instinct when the corpus is full, and the
+  raw-observation and pair-association totals behind them.
 
 The dot at the top is green when healthy, amber when worth a look, and
 red when something genuinely needs attention - a deep backlog, a
@@ -102,7 +90,6 @@ absorbed yet.
 Browse, search, filter, and sort every instinct Nak has formed:
 
 - **Search** finds instincts by meaning, not just wording.
-- **Tier** filters to all, tier-1, or tier-2 (compounds).
 - **Sort** by newest, strongest, most-fired, or recently-fired.
 - **Hide similar** folds near-duplicate instincts under one
   representative; the slider controls how aggressively, and a line under
@@ -120,7 +107,6 @@ judgment, or counting down toward being released as never-relevant. Below that i
 from. "Where it came from" lists the moments it
 was formed from, and - for an instinct built from recurring patterns
 across different conversations - the relations Nak noticed between them.
-For a tier-2 compound, it's the tier-1 instincts it was built from.
 
 ## Mood (per conversation)
 

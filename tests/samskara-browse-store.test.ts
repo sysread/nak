@@ -21,7 +21,6 @@ import type { SamskaraCorpusRow, SupabaseService } from '../src/lib/supabase';
 function row(id: string): SamskaraCorpusRow {
   return {
     id,
-    tier: 1,
     prediction: `pred ${id}`,
     innerVoice: null,
     valence: 0,
@@ -40,7 +39,6 @@ function resetStore(): void {
   samskaraBrowseStore.results = [];
   samskaraBrowseStore.clusterMap = new Map();
   samskaraBrowseStore.query = '';
-  samskaraBrowseStore.tier = null;
   samskaraBrowseStore.sort = 'recent';
   samskaraBrowseStore.hideSimilar = false;
   samskaraBrowseStore.hideSimilarThreshold = 0.85;
@@ -73,7 +71,6 @@ describe('refreshSamskaraView - browse regime', () => {
     expect(listSamskarasPage).toHaveBeenCalledWith({
       offset: 0,
       pageSize: CORPUS_LIST_LIMIT,
-      tier: null,
       sort: 'recent',
     });
     expect(samskaraBrowseStore.results.map((r) => r.id)).toEqual(['a', 'b']);
@@ -84,15 +81,13 @@ describe('refreshSamskaraView - browse regime', () => {
     expect(samskaraBrowseStore.error).toBeNull();
   });
 
-  it('threads the active tier and sort into the query', async () => {
-    samskaraBrowseStore.tier = 2;
+  it('threads the active sort into the query', async () => {
     samskaraBrowseStore.sort = 'strongest';
     const listSamskarasPage = vi.fn(async () => ({ rows: [], hasMore: false }));
     await refreshSamskaraView(fakeSupabase({ listSamskarasPage } as unknown as Partial<SupabaseService>));
     expect(listSamskarasPage).toHaveBeenCalledWith({
       offset: 0,
       pageSize: CORPUS_LIST_LIMIT,
-      tier: 2,
       sort: 'strongest',
     });
   });
@@ -156,7 +151,6 @@ describe('refreshSamskaraView - hide-similar regime', () => {
   it('loads the whole corpus and fetches the cluster map at the current threshold', async () => {
     samskaraBrowseStore.hideSimilar = true;
     samskaraBrowseStore.hideSimilarThreshold = 0.8;
-    samskaraBrowseStore.tier = 1;
     const listSamskarasPage = vi.fn(async () => ({ rows: [row('a')], hasMore: false }));
     const cluster = new Map([['a', { seq: 1, size: 1 }]]);
     const samskaraClusterCorpus = vi.fn(async () => cluster);
@@ -165,14 +159,13 @@ describe('refreshSamskaraView - hide-similar regime', () => {
       samskaraClusterCorpus,
     } as unknown as Partial<SupabaseService>);
     await refreshSamskaraView(sb);
-    // Load-all (no pagination) and cluster at the chosen tier+threshold.
+    // Load-all (no pagination) and cluster at the chosen threshold.
     expect(listSamskarasPage).toHaveBeenCalledWith({
       offset: 0,
       pageSize: CORPUS_LIST_LIMIT * 20,
-      tier: 1,
       sort: 'recent',
     });
-    expect(samskaraClusterCorpus).toHaveBeenCalledWith(0.8, 1);
+    expect(samskaraClusterCorpus).toHaveBeenCalledWith(0.8);
     expect(samskaraBrowseStore.clusterMap).toBe(cluster);
     expect(samskaraBrowseStore.hasMore).toBe(false);
   });
@@ -204,7 +197,6 @@ describe('loadMoreSamskaras', () => {
     expect(listSamskarasPage).toHaveBeenCalledWith({
       offset: 2,
       pageSize: CORPUS_LIST_LIMIT,
-      tier: null,
       sort: 'recent',
     });
     expect(samskaraBrowseStore.results.map((r) => r.id)).toEqual(['a', 'b', 'c']);

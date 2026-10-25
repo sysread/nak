@@ -134,7 +134,7 @@ changing a contract that other features depend on.
   claim-RPC pattern.
 - [Samskara](./samskara.md) — the chat model's progressively-
   built predictive model of the user. Substrate compounds into
-  samskaras compounds into a prose summary that lives
+  samskaras, and the strongest feed a prose summary that lives
   always-on in the system prompt; mints surface as a subtle
   bottom-right mood pill.
 - [Intuition](./intuition.md) — the subconscious layer. A

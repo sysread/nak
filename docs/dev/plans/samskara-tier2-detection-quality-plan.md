@@ -1,5 +1,7 @@
 # Samskara Tier-2 Detection Quality Plan
 
+> **retired 2026-10-25 with the tier-2 (compound) layer.** This plan is the historical design record.
+
 Status: IMPLEMENTED 2026-06-16. The living reference is now
 `docs/dev/samskara.md` (Tier-2 detection formula + Gotchas); this doc
 is the design history. Grounded in a read-only prod audit of the

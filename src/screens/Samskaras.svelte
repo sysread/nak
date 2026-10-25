@@ -17,7 +17,7 @@
    *     as redundant - both are global - so they were merged into this
    *     one page, summary on top.
    *   - Corpus - detail of the samskara selected in the sidebar,
-   *     including its provenance (for a tier-2, its tier-1 children).
+   *     including its provenance.
    *
    * The sidebar (SamskaraBrowseList) drives `route.samskara_id`;
    * selecting a row switches into Corpus so the detail shows. The
@@ -30,7 +30,6 @@
   import { route, navigate } from '$lib/routing.svelte';
   import { samskaraBrowseStore } from '$lib/samskara-browse-store.svelte';
   import {
-    tierBadge,
     formatValence,
     relativeTime,
     groupProvenance,
@@ -188,7 +187,6 @@
     {:else}
       <article class="samskara-detail">
         <header class="samskara-detail-head">
-          <span class="samskara-detail-badge" class:t2={selected.tier === 2}>{tierBadge(selected.tier)}</span>
           <h2 class="samskara-detail-pred">{selected.prediction}</h2>
         </header>
         {#if selected.innerVoice}
@@ -251,9 +249,6 @@
             <ul class="samskara-prov-list">
               {#each group.rows as p (p.kind + p.refId)}
                 <li>
-                  {#if p.kind === 'samskara' && p.refTier}
-                    <span class="samskara-prov-badge">T{p.refTier}</span>
-                  {/if}
                   <span class="samskara-prov-label">{p.label ?? '(removed)'}</span>
                 </li>
               {/each}
@@ -298,19 +293,6 @@
     display: flex;
     align-items: baseline;
     gap: 0.5rem;
-  }
-  .samskara-detail-badge {
-    flex-shrink: 0;
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 0.1rem 0.4rem;
-    border-radius: var(--radius-pill);
-    background: var(--bg-2);
-    color: var(--muted);
-  }
-  .samskara-detail-badge.t2 {
-    background: color-mix(in srgb, var(--accent) 25%, transparent);
-    color: var(--text);
   }
   .samskara-detail-pred {
     font-size: 1.05rem;
@@ -376,12 +358,6 @@
     display: flex;
     align-items: baseline;
     gap: 0.4rem;
-  }
-  .samskara-prov-badge {
-    flex-shrink: 0;
-    font-size: 0.65rem;
-    font-weight: 600;
-    color: var(--muted);
   }
   .samskara-prov-label {
     line-height: 1.4;

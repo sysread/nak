@@ -140,7 +140,7 @@ export const DIAGNOSTIC_PILLS: readonly DiagnosticPillDescriptor[] = [
     ariaLabel: (ctx) =>
       ctx.moodVisual === null || ctx.moodVisual.isDefault
         ? 'Open Samskara diagnostics. No mood data yet for this conversation.'
-        : `Samskara mood: ${ctx.moodVisual.label} (tier ${ctx.moodVisual.tier}). Open diagnostics.`,
+        : `Samskara mood: ${ctx.moodVisual.label}. Open diagnostics.`,
   },
   {
     id: 'intents',

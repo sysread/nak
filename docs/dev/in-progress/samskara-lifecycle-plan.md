@@ -56,6 +56,7 @@ Graduates into docs/dev/samskara.md as the canonical chapter (M0).
 Bracketed markers flag behavior that does not exist yet.
 
 BIRTH
+
 - Two mint probes (recency cluster, association cluster), each
   gated by cap-or-evict headroom; a near-duplicate (centered
   cosine >= 0.5) reinforces the existing claim instead of minting
@@ -69,6 +70,7 @@ BIRTH
   mint-event field.]
 
 EVIDENCE
+
 - A claim fires when its embedding ranks in a turn's top-k
   (k = max(1, ceil(K_BASE x log10(N + 10))), K_BASE = 5, n = 100
   stand-in at the call site - k = 11 today; score = ramped
@@ -88,6 +90,7 @@ EVIDENCE
   claims are blind-judged; ledger only.
 
 EVENTS THAT BEFALL A LIVING CLAIM
+
 - Reinforce: a mint-time near-duplicate bumps the existing claim
   (transient - void after M4).
 - Merge: two claims that reliably co-fire fold; the loser's fires
@@ -97,6 +100,7 @@ EVENTS THAT BEFALL A LIVING CLAIM
   with the compounds.]
 
 DEATH (four doors, all hard-delete)
+
 1. reap_dead: health < 0.5 * p0 AND no fire for 14 days.
    Unreachable for soft-miss-only claimants (the floor
    arithmetic; pinned by the harness).
@@ -113,6 +117,7 @@ Every death cascades the claim's fires, provenance, and control
 rows. [After M2: every death writes exactly one certificate row.]
 
 THE ALWAYS-ON PARAGRAPH
+
 - The "current best model of who this user is" prose block
   (samskara_compound_summary + its regen) is NOT part of the
   summary layer and stays. It has always been fed by the top
@@ -164,6 +169,7 @@ p0, which pools over the whole corpus.
    message). M5's readout is the input to that conversation.
 
 Open (blocks the milestone named):
+
 - M4.1's mood-pill axis: recommendation is the transient
   event-field bet (nothing stored). The reopen-seed axis is
   lost - named behavior change.
@@ -240,6 +246,7 @@ trail; the certificate covers every death after it lands.
 Full artifact removal. The inventory, by surface:
 
 SCHEMA (supabase/schema.sql):
+
 1. Data cleanup, self-retiring and FIRST in apply order:
    `do $$ begin if exists (select 1 from information_schema
    .columns where table_name = 'samskaras' and column_name =
@@ -252,7 +259,7 @@ SCHEMA (supabase/schema.sql):
 3. Drop table `samskara_tier2_declines` (`drop table if
    exists`, with its policies).
 4. Drop function `samskara_tier2_candidate` (carries the
-   coverage guard, the _tier2_* temp tables, the probe budget,
+   coverage guard, the *tier2** temp tables, the probe budget,
    and the decline-TTL logic - all of it).
 5. Remove the graduation branch from `samskara_evict_for_mint`
    (the fourth tier-select and its join to kind='samskara'
@@ -294,6 +301,7 @@ SCHEMA (supabase/schema.sql):
    removal rather than assuming).
 
 AGENT (supabase/functions/venice/agents/samskara.ts):
+
 - Remove TIER2_MINTER_PROMPT, mintTier2Probe, the sweep's
   mint-tier2 phase, and the decline-ledger upsert.
 - Remove `tier` from insertMint (param, payload, types) and from
@@ -313,6 +321,7 @@ AGENT (supabase/functions/venice/agents/samskara.ts):
   FiredSamskara display shape) as found.
 
 SRC (browser):
+
 - src/lib/supabase/types/samskara.ts + src/lib/supabase/
   samskara.ts: remove tier from row types, selects, row maps,
   and samskaraGetLatestFireMood; remove the tier param from the
@@ -339,6 +348,7 @@ SRC (browser):
 - src/lib/chat/*: the compound-summary paragraph wiring STAYS.
 
 TESTS:
+
 - supabase/functions/tests/samskara.test.ts: remove the
   TIER2_MINTER_PROMPT pins; fix the insertMint payload pin
   (no tier).
@@ -351,6 +361,7 @@ TESTS:
   (tier fixtures) - tier fixtures and assertions swept.
 
 DOCS AND USE CASES (the sweep the owner called out):
+
 - docs/dev/samskara.md: tier-2 sections removed (with M0); the
   README entry updated.
 - docs/dev/architecture.md, chat.md, components.md,
@@ -379,6 +390,7 @@ DOCS AND USE CASES (the sweep the owner called out):
   doc is the living reference.
 
 PROD SEQUENCING (with the owner, at deploy time):
+
 - The snapshot is taken (2026-10-25, decision 5).
 - The deploy applies the cleanup block -> 47 compounds and
   their cascades vanish in one statement; the column drops.
@@ -449,6 +461,7 @@ eviction tiers, reap floors, cascades, the judge's write surface,
 the evictor truthiness gate, the confidence/was_confirmed
 consumer inventories, the intent citations). New premises
 verified 2026-10-25 for the retirement:
+
 - Zero intents target compounds (q26.sql: intents_on_compounds
   = 0 of 12 samskara-targeting intents) - no cross-feature
   coupling.

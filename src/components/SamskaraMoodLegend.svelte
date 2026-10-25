@@ -92,8 +92,7 @@
   {#if currentCell && moodState.current}
     <p class="mood-legend-current subtle">
       Currently at valence {moodState.current.valence.toFixed(2)},
-      confidence {moodState.current.confidence.toFixed(2)} -
-      tier {moodState.current.tier}.
+      confidence {moodState.current.confidence.toFixed(2)}.
     </p>
   {:else}
     <p class="mood-legend-current subtle">

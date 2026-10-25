@@ -10,6 +10,19 @@ opposite of "born yesterday" - every conversation carries some
 calibrated bias from prior conversations with the same user,
 without having to cram the entire history into a context window.
 
+> **Retired 2026-10-25: the tier-2 (compound) layer.** A second
+> tier of summary claims minted from co-firing groups of tier-1
+> samskaras was removed outright - schema, agent phases, prompts,
+> UI, and data (the `tier` column went with it). Most of the
+> system's rule growth traced to that layer and its measured
+> precision sat below the flat claims', so it was retired rather
+> than rescued; the final state was snapshotted before removal
+> (`docs/dev/in-progress/samskara-lifecycle-plan.md`, decision 5).
+> Everything else here describes the single-tier system that
+> remains. The word "compound" survives only in the summary prose
+> block and its regen - the always-on paragraph is fed by the top
+> claims and was never part of the retired layer.
+>
 > **Where the chat-time half runs:** the cosine fire + compound-summary
 > read run server-side, as part of the priming stage of
 > `getStreamingResponse` (`supabase/functions/venice/priming/samskara.ts`,
@@ -45,11 +58,9 @@ first token. The combined block is appended to the system prompt
 for that round only; the rest of the loop is unchanged.
 
 Everything else - assimilating substrate into structured fields,
-embedding it, labelling pairs, minting tier-1 samskaras from
-clusters, minting tier-2 compounds from recurring co-fire
-constellations of tier-1 samskaras, judging fired predictions
-against settled conversations, reaping dead samskaras,
-regenerating the compound summary - runs server-side. The
+embedding it, labelling pairs, minting samskaras from clusters,
+judging fired predictions against settled conversations, reaping
+dead samskaras, regenerating the summary prose - runs server-side. The
 formation pipeline lives in the venice edge function
 (`supabase/functions/venice/agents/samskara.ts`), driven by the
 completed-turn tail and an hourly cron sweep; the evaluation
@@ -95,7 +106,7 @@ toast is just a glance cue that the bias model is forming.
   lookup that drives the mood pill, and the `cellFor` /
   `bandIndexFor` / `columnFor` coordinate helpers used by the
   mood legend's "you are here" dot. Mint-event detail carries
-  `{ tier, valence, confidence }`; the lookup splits each of five
+  `{ valence, confidence }`; the lookup splits each of five
   valence bands into a confident column (confidence >=
   `CONFIDENCE_CUT`, default 0.5) and a tentative column (below
   the cut). Kept rune-free on purpose - plain TS that components
@@ -108,7 +119,7 @@ toast is just a glance cue that the bias model is forming.
   (`moodState`), written only by `SamskaraMoodSync.svelte` and
   read by the pill (`DiagnosticPills.svelte`) and
   `SamskaraMoodLegend.svelte`. Two fields: `current` (the raw
-  `{ valence, confidence, tier } | null` triple) plots the legend's
+  `{ valence, confidence } | null` pair) plots the legend's
   "you are here" dot; `visual` (glyph/label + transition id) is
   what the pill renders. The sync component is the sole writer
   (updates on mint events and on the seed-from-history path;
@@ -131,7 +142,7 @@ toast is just a glance cue that the bias model is forming.
   switch). Present whenever a thread is active (`route.cid` set).
   On thread open the sync owner seeds asynchronously
   from `samskaraGetLatestFireMood(cid)` (the most recent stored
-  fire's joined valence + tier + confidence), so reopened
+  fire's joined valence + confidence), so reopened
   conversations surface the model's last read instead of waiting
   for a fresh mint. While the seed query is in flight, and on
   threads that have never fired or where the query fails, the
@@ -150,7 +161,7 @@ toast is just a glance cue that the bias model is forming.
   / `DEFAULT_LABEL` constants for the 💤 placeholder;
   `nextMoodFromMint(prev, detail)` returns the next visual shape
   or null to signal the dedup skip (incoming mint lands in the
-  same emoji/label/tier as what's showing); `nextMoodFromSeed(prev,
+  same emoji/label as what's showing); `nextMoodFromSeed(prev,
   seed)` returns the upgraded shape or null when a real mint won
   the within-thread race against a slow seed query. Unit-tested
   directly at `tests/samskara-toasts.test.ts` with plain vitest.
@@ -182,7 +193,7 @@ toast is just a glance cue that the bias model is forming.
   pipeline. The five agent prompts (`ASSIMILATOR_PROMPT`,
   `RELATOR_PROMPT`, `MINTER_PROMPT`, `TIER2_MINTER_PROMPT`,
   `COMPOUND_SUMMARY_PROMPT` - terse on
-  purpose: the fast tier pays tokens for inputs, not
+  purpose: the fast model pays tokens for inputs, not
   instructions), one non-streaming `toolComplete` call per
   phase, the math helpers (`cosine`, `buildTopicalCluster`,
   `parseVector`) and tuning constants, and the two exported
@@ -210,7 +221,7 @@ toast is just a glance cue that the bias model is forming.
   proportion to the evidence, but "a colleague's briefing, not a
   warning label" - because it opens every conversation and an
   overcorrection there would set a hostile tone on turn one. The
-  same contract is why both tier-1 mint paths feed the minter
+  same contract is why both mint paths feed the minter
   whole observations (`sample_observations` with situation,
   outcome, valence) rather than situations alone: the outcome is
   where corrections, flagged misgivings, and assistant misfires
@@ -225,12 +236,9 @@ toast is just a glance cue that the bias model is forming.
   apply, substrate record, assimilate claim/save, substrate-embed
   claim/save, the cron-driven reaper, co-firing-based
   dedup collapse,
-  `samskara_tier2_candidate(...)` (the co-fire-group detector the
-  mint-tier2 phase reads - the inverse of dedup; see the Tier-2
-  detection formula below), `samskara_nearest_by_prediction(embed,
-  k, tier)` whose optional tier filter the tier-2 dedup guard
-  passes `2`, the three compound-regen coordinators, and the
-  diagnostics-only
+  `samskara_nearest_by_prediction(embed,
+  k)` for the mint dedup guard, the three compound-regen
+  coordinators, and the diagnostics-only
   `samskara_cluster_thread_fires(thread, threshold)` that
   greedy-clusters a thread's fires by CENTERED cosine similarity on
   their samskaras' prediction embeddings (per-cohort, in score
@@ -293,15 +301,15 @@ toast is just a glance cue that the bias model is forming.
   `getStreamingResponse`'s `EdgeRuntime.waitUntil` tail on
   completed turns, sequenced curation -> samskara.
   Runs the session-responsive phases: a capped assimilate drain,
-  then one pair-relate probe, then one mint-tier1 probe. (Reaction
+  then one pair-relate probe, then one mint probe. (Reaction
   scoring is no longer a tail phase - it moved to the next-day
   evaluation sweep, `samskara_evaluation.ts`.)
 - **`runSamskaraSweepTick(admin)`** - the hourly
   `nak-samskara-sweep` pg_cron job (`23 * * * *`) pg_net-POSTs
   `/venice/samskara-sweep` (a `sweepHandler` route, service-role
   gated). Drains the cross-user assimilate queue, then runs the
-  per-user maintenance probes (pair-relate, mint-tier1,
-  mint-tier2, dedup, compound-regen) for every user with recent
+  per-user maintenance probes (pair-relate, mint, dedup,
+  compound-regen) for every user with recent
   samskara activity. The catch-up driver, and the only driver
   for the heavy timing-insensitive phases.
 - **Embeddings backfill** - the server-side backfill's round-robin
@@ -310,7 +318,7 @@ toast is just a glance cue that the bias model is forming.
   registry entry shapes the same claim/build/save flow memories and
   the other sources do.
 - **Mint relay** - `insertMint` publishes a `samskara-mint`
-  Broadcast event (`(tier, valence, confidence)`) on the user's
+  Broadcast event (`(valence, confidence)`) on the user's
   private `samskaras:<uuid>` topic via
   `_shared/samskara-mint.ts`. `Chat.svelte` subscribes through
   `SupabaseService.subscribeToSamskaraInserts` and routes the
@@ -390,7 +398,7 @@ phase.
   fresh pair.
 - `minted_at timestamptz` - consumption stamp for the
   association-mint probe (see Mint phases). NULL until the edge
-  has been fed to the tier-1 minter; set on mint, dedup-hit, OR
+  has been fed to the mint probes; set on mint, dedup-hit, OR
   decline alike. A stamped edge leaves the candidate pool
   permanently (substrate is immutable, so its evidence can't
   change); fresh corroboration re-opens a pattern as NEW
@@ -421,34 +429,12 @@ is adjudicated, the probe returns without a Venice call.
 Select-only RLS for the owner; writes come exclusively from the
 service-role client.
 
-### `samskara_tier2_declines`
-
-Ledger of tier-2-minter `confirm:false` verdicts, keyed
-`(user_id, group_key)` where `group_key` is the declined group's
-sorted child ids joined with `,`. `children uuid[]` holds the same
-sorted ids for the candidate RPC's Jaccard overlap test. Unlike
-`samskara_pair_declines` this is **TTL'd, not permanent**: the
-candidate walk only honors a decline within the recency window
-(`v_decline_ttl`, 7 days) before the group re-qualifies. A tier-2
-decline is over a co-fire *constellation*, and the co-fire graph
-keeps growing - a group too weak today may strengthen - so the
-verdict must be able to lapse, where a pair decline (immutable
-substrate) cannot. A re-decline upserts on `group_key`, re-arming
-the window. No per-element FK (arrays can't reference); a deleted
-child leaves a stale id that only weakens the Jaccard match
-slightly and is cleared by the TTL anyway. Select-only RLS for the
-owner; writes come exclusively from the service-role client. Folds
-into `samskara_tier2_candidate`'s coverage skip - see the Mint-tier2
-contract.
-
 ### `samskaras`
 
-The unit. Tier 1 is minted from substrate-cluster mints; tier
-2 is minted from recurring co-fire constellations of tier-1
-samskaras (the mint-tier2 phase, see Contracts). Cap is `tier in
-(1, 2)` - no tier 3.
+The unit: a predictive claim minted from substrate clusters and
+association edges (see Contracts).
 
-- `id`, `user_id`, `tier int check in (1, 2)`.
+- `id`, `user_id`.
 - `prediction text not null` - the minter agent's one-or-two-
   line claim. This is what the chat-time fire query runs
   against, via `prediction_embedding`.
@@ -456,8 +442,8 @@ samskaras (the mint-tier2 phase, see Contracts). Cap is `tier in
 - `inner_voice text` - optional silent self-talk fragment;
   rendered in the priming block when present, truncated past
   80 chars.
-- `valence real` - aggregated from substrate or child-samskara
-  provenance. Same scalar as on substrate.
+- `valence real` - aggregated from substrate provenance. Same
+  scalar as on substrate.
 - `confidence real default 0.5` - the verdict posterior, kept
   equal to `health` (see Health: the verdict posterior).
 - `health real default 1.0` - the derived posterior, recomputed
@@ -468,8 +454,7 @@ samskaras (the mint-tier2 phase, see Contracts). Cap is `tier in
   the `w_soft` soft-miss weight are sub-unit; an int column would
   truncate them to 0; see Gotchas);
   `last_fired_at`, `created_at`, `updated_at`.
-- Indexes on `(user_id, tier)` and `(user_id, health desc,
-  confidence desc)`.
+- Index on `(user_id, health desc, confidence desc)`.
 
 ### `samskara_provenance`
 
@@ -479,16 +464,14 @@ even if the underlying substrate or association is deleted (no
 FK on `ref_id`); debugging beats normalisation.
 
 - `samskara_id` (FK on cascade), `user_id`, `kind text check in
-  ('substrate', 'association', 'samskara')`, `ref_id uuid`,
+  ('substrate', 'association')`, `ref_id uuid`,
   `weight real default 1.0`.
 - Primary key `(samskara_id, kind, ref_id)`.
-- Tier-1 samskaras carry `'substrate'` provenance always, plus
+- Claims carry `'substrate'` provenance always, plus
   `'association'` provenance when minted from the association
   graph (the association-mint path - those rows carry BOTH kinds,
   the only mixed-provenance case, `weight` = the edge's
-  reinforcement snapshot at consumption time). Tier-2 samskaras
-  carry `'samskara'` provenance pointing at their tier-1
-  children, `weight` = each child's in-group co-fire count.
+  reinforcement snapshot at consumption time).
 - Records the mint-time topical cluster only. Dedup-reinforce
   (`samskara_reinforce_existing`) deliberately does NOT append
   provenance: appending the recency batch on every re-observation
@@ -509,7 +492,7 @@ reinforcement and cohort detection.
 - `cohort_id` is shared across the set of samskaras fired
   together on the same turn, generated client-side when the
   chat loop assembles the fire. Lets the reaction classifier
-  and the tier-2 mint phase's co-fire self-join operate on the
+  and the co-fire dedup merge operate on the
   cohort as a unit.
 - `user_round` is the 1-based index of the user message that
   triggered this cohort, counted by `countUserRounds(history)`
@@ -631,18 +614,17 @@ drivers run the phases, split by timing sensitivity:
 - **Turn tail** (`samskaraOnTurnTail`) - an assimilate drain
   capped at `TAIL_ASSIMILATE_CAP` (3) so one tail invocation
   never monopolises the background budget, then one pair-relate
-  probe, then one mint-tier1 probe (the in-session toast
+  probe, then one mint probe (the in-session toast
   surface).
 - **Hourly sweep** (`runSamskaraSweepTick`) - a cross-user
   assimilate drain capped at `SWEEP_ASSIMILATE_CAP` (10) via
   the definer claim `samskara_claim_next_assimilate_for_sweep`,
   then for every user with recent activity
   (`samskara_sweep_users`, a 2h window of substrate or fires)
-  the pair-relate, mint-tier1, mint-tier2, dedup, and
+  the pair-relate, mint, dedup, and
   compound-regen probes.
 
-Mint-tier2, dedup, and compound-regen are cron-only: the tier-2
-detection self-join is the heaviest query in the feature, dedup
+Dedup and compound-regen are cron-only: dedup
 is population maintenance, and the compound summary tolerates a
 day of staleness in the priming block. Evaluation is neither a
 tail nor a sweep phase - it rides its own day-gated cron
@@ -652,7 +634,7 @@ below).
 There are no per-phase throttles. One trigger runs one rotation,
 so the trigger cadence (turn or tick) IS the rate limit -
 nothing rotates continuously. The one bounded exception:
-mint-tier1-assoc adjudicates up to `ASSOC_HUBS_PER_TICK` (3) hubs
+the association mint probe adjudicates up to `ASSOC_HUBS_PER_TICK` (3) hubs
 per rotation - each a minter call - stopping at the first
 non-verdict or when headroom runs out; the constant is the spend
 ceiling. A Venice rate-limit re-throws out
@@ -679,7 +661,7 @@ logs and yields to the next phase.
   wiki / evaluation claims: a stub whose thread has fewer than two
   user messages is never claimed. One-shot lookups ("how does
   postgres paging work") say nothing about the user, and letting
-  them into substrate polluted tier-1 mints and the compound
+  them into substrate polluted mints and the
   summary upstream. The gate defers rather than drops - the
   round-1 stub of a thread that grows becomes claimable as soon as
   the second user message lands, so real conversations lose
@@ -701,12 +683,12 @@ logs and yields to the next phase.
   role), not an RPC. The JS-cosine here depends on the module's
   `parseVector` turning PostgREST's pgvector text form into a
   real array; see the embeddings gotcha below.
-- **Mint-tier1** - `agentMint(apiKey, MINTER_PROMPT,
+- **Mint (recency)** - `agentMint(apiKey, MINTER_PROMPT,
   {sample_labels, sample_observations, reinforcement}) ->
   {prediction, inner_voice, valence, confidence} | null` (null
   covers both parse failure and an explicit `confirm: false`
   refusal). The probe is population-gated via the shared
-  `ensureTier1Headroom` helper: at or above `TIER1_POPULATION_CAP`
+  the cap-or-evict gate: at or above `SAMSKARA_POPULATION_CAP`
   (150, mirroring the collapse RPC's `p_target_count` - see the
   treadmill gotcha) it first attempts cap-pressure eviction
   (`samskara_evict_for_mint`, see the decay section) and returns
@@ -754,14 +736,14 @@ logs and yields to the next phase.
   ongoing redundancy consolidation. It's the same RPC the
   sweep's dedup probe runs each tick (see below); it has no
   manual UI trigger - dedup runs autonomically. Idempotent.
-- **Mint-tier1-assoc** (`mintTier1FromAssociationsProbe`, SWEEP
+- **Mint-from-associations** (`mintFromAssociationsProbe`, SWEEP
   ONLY) - mints from the association graph instead of the recency
   window, so cross-session recurrence that no recency window can
   co-locate still reaches the minter. Adjudicates up to
   `ASSOC_HUBS_PER_TICK` (3) hubs per sweep tick - a verdict stamps
   the fed hub's edges so the next cluster read returns a different
   hub; any other outcome breaks the loop. Each hub carries the same
-  `ensureTier1Headroom` cap-or-evict gate as Mint-tier1, checked
+  the same cap-or-evict gate as the recency mint, checked
   BEFORE the cluster read: a gated skip is a non-verdict, so the
   hub's edges stay unstamped and the evidence waits intact. The
   gate parity matters - see the probe-order note in the eviction
@@ -783,7 +765,7 @@ logs and yields to the next phase.
   three per endpoint) as `sample_observations`, the edge labels in
   the otherwise-empty `sample_labels` slot, summed reinforcement as
   the strength hint. Same `agentMint`, embed, and dedup guard as
-  Mint-tier1, then provenance = member substrate rows (`weight`
+  the recency mint, then provenance = member substrate rows (`weight`
   1.0) PLUS the consumed edges as `'association'` (`weight` =
   reinforcement). **Self-quenching:** every minter verdict - mint,
   dedup-hit, OR decline - stamps the fed edges `minted_at` so a
@@ -795,28 +777,6 @@ logs and yields to the next phase.
   turn tail on purpose: cross-session consolidation isn't
   latency-sensitive, and keeping it sweep-only holds per-turn
   Venice spend flat.
-- **Mint-tier2** - `agentMint(apiKey, TIER2_MINTER_PROMPT,
-  {children}) -> {prediction, inner_voice, valence, confidence}
-  | null` (same parse, different prompt - the input is finished
-  tier-1 claims, not raw situations).
-  Detects one recurring co-fire constellation of tier-1 samskaras
-  via `samskara_tier2_candidate` (a co-fire group, not a substrate
-  cluster), hands the child predictions to the minter agent, and -
-  if the agent confirms - inserts a `tier=2` row whose provenance
-  points at the children with `kind='samskara'`. Two dedup guards:
-  the candidate RPC skips groups an existing tier-2 already covers by
-  child-set overlap (same children), and after the compound is
-  embedded the loop checks the nearest existing tier-2 by cosine
-  (`samskara_nearest_by_prediction` with `p_tier=2`), reinforcing it
-  via `samskara_reinforce_existing` (health bump only, no provenance)
-  when cosine >= `MINT_DEDUP_COSINE` (0.50 centered) instead of minting a twin
-  (the different-children-same-claim case). Cron-only: compound
-  patterns form over days and the detection self-join is the
-  heaviest query in the feature, so the probe runs once per
-  active user per hourly tick, never on the tail. A tier-2
-  insert reaches the mood pill through the same realtime relay
-  and valence->emoji path as tier-1, so there is no UI
-  special-case.
 - **Evaluation (next-day judge)** - `samskara_evaluation.ts`, the
   `nak-samskara-evaluation-sweep` cron. NOT on the turn tail: it waits
   until a conversation has settled (same next-day + `>= 2`-round gate as
@@ -859,7 +819,7 @@ logs and yields to the next phase.
   that still read it.
 - **Dedup** - `samskara_collapse_by_cofiring(...)` RPC, no LLM.
   Cron-only.
-  Two-pass: a primary co-firing-based pass merges tier-1 pairs
+  Two-pass: a primary co-firing-based pass merges pairs
   that reliably activate in the same cohort (Hebbian
   redundancy), and a population-count safety cap falls through
   to pure embedding-cosine greedy merge when the pool still
@@ -919,33 +879,18 @@ confirms) rank by sample size when relevance and health are
 close. Caps at ~1.46x for N=100; a brand-new samskara at N=0
 still ranks normally so it can fire and accumulate signal.
 
-**Parent wins.** After scoring, a compound (tier 2) that sits in the
-unfiltered top-k stands in for its children: the tier-1 claims in
-its `'samskara'` provenance are dropped from the cohort and the
-freed slots fill from the next-ranked rows. A compound's vector is
-a blend of its children's, so whatever matches it matches them -
-measured 2026-10-01, all 272 compound fires since the reset arrived
-with every child in the same cohort, and children took a third of
-the slots in those cohorts: four slots on one idea, stated four
-ways, which is the narrowing a compound exists to prevent. The
-leading set is the unfiltered top-k on purpose: a compound there is
-certainly in the final set (dropping children can only move it up),
-while a compound ranked below the cut keeps its children in play.
-What happens to a suppressed child, by mechanism: its posterior
-freezes (health has no wall clock), so it neither weakens nor gets
-reaped on evidence; it still fires in any turn where its parent
-does not make the cut; and if the parent later proves wrong and
-`samskara_reap_dead` removes it (no tier filter), the children
-simply resume firing. A suppressed child does keep its tier-1 slot
-while its posterior is frozen; the graduation tier of cap-pressure
-eviction (see "Release of never-tested claims") is what returns
-those slots once the compound is established.
+(A "parent wins" rule - a compound standing in for the claims it
+was built from - was removed with the compound layer; see the
+retirement note at the top. Its slot-saving effect is gone with
+it: an idea family stated several ways can again take several of
+the k slots. The observability tab's concentration metric is
+the instrument that watches for that shape.)
 
 ### Similarity calibration: centered cosine + the probe set
 
 Every samskara similarity comparison - fire ranking, mint dedup,
-topical clustering, pair-relate, co-fire collapse, tier-2
-detection, and the diagnostics clustering/search - runs on
+topical clustering, pair-relate, co-fire collapse, and the
+diagnostics clustering/search - runs on
 **centered cosine**: both vectors have a corpus mean subtracted
 before the cosine is taken. This is not a style preference, it
 is a correctness requirement of the encoder.
@@ -958,9 +903,8 @@ the prod corpus: claims [0.764, 0.949], substrate [0.673, 1.0].
 The four absolute thresholds inherited from the bge-m3 era
 (tuned around a ~0.575 pairwise mean) all fell below that band's
 floor, which produced the September 2026 collapse: co-fire
-collapse merged every qualifying pair unboundedly (tier-1 went
-129 -> 39 in two days), mint dedup absorbed 98% of new claims,
-and tier-2 detection found zero pairs in its band.
+collapse merged every qualifying pair unboundedly (the corpus went
+129 -> 39 in two days) and mint dedup absorbed 98% of new claims.
 
 **Two means, one per register.** Claims share a prompt template
 ("in situations involving X, this user tends to Y") that
@@ -974,9 +918,8 @@ in the first draft of the recalibration and was caught by
 re-scoring the probe set under the implemented scale). The split:
 
 - **claim mean** - claim-vs-claim comparisons: mint dedup
-  (`samskara_nearest_by_prediction`), co-fire collapse, tier-2
-  detection, and the corpus/thread diagnostics clustering and
-  search.
+  (`samskara_nearest_by_prediction`), co-fire collapse, and the
+  corpus/thread diagnostics clustering and search.
 - **substrate mean** - observation-vs-observation comparisons
   (mint topical clustering, pair-relate probes) and the fire
   path's message-vs-claim comparison (the message is in the
@@ -999,8 +942,8 @@ dedup bar would read every mint as a duplicate and stall a new
 user's corpus from its very first claims (mints start from 3
 observations). Instead: `samskara_nearest_by_prediction` returns
 no rows (the minter proceeds without dedup), and the collapse
-and tier-2 RPCs return empty (their similarity work is
-destructive or band-based, and raw scale makes both meaningless).
+RPC returns empty (its similarity work is destructive, and raw
+scale makes it meaningless).
 The fire path and substrate probes keep a raw fallback because
 they are non-destructive and judged downstream. The first sweep
 tick after the floors clear turns everything on.
@@ -1038,7 +981,6 @@ substrate-space bars on the substrate mean):
 | mint dedup (`MINT_DEDUP_COSINE`) | 0.50 | claim | top of the dup/sibling overlap zone; prefers letting a twin through (collapse reaps it) over absorbing a sibling (irreversible) |
 | co-fire collapse floor | 0.30 | claim | below dedup on purpose; co-fire criteria are the real evidence |
 | overflow-pass cap floor | 0.40 | claim | no behavioural evidence, keeps the same-idea-family boundary |
-| tier-2 band | [0.10, 0.35) | claim | related-but-distinct; lift is the real filter |
 | mint cluster floor | 0.05 | substrate | no labels in this space; offset-mapped to just above the distribution median |
 | pair-relate floor | -0.20 | substrate | deliberately loose; the relator LLM judges |
 
@@ -1198,7 +1140,7 @@ Relevance-gated decay has a blind spot: a claim whose topic never
 *genuinely* arises - the one-off-lookup mints (a burst of questions
 about one technology, a single shopping errand) - never accrues
 evidence in either direction, sits at `p0` forever, and holds a capped
-tier-1 slot. Two release paths clear that residue. Both key on
+slot. Two release paths clear that residue. Both key on
 `confirm_count = 0 and disconfirm_count = 0`, which identifies
 never-genuinely-tested exactly (any genuine verdict, even a soft miss,
 writes a nonzero tally, and the discount decays tallies toward but
@@ -1215,8 +1157,8 @@ be the first genuine test, and the next-day judge hasn't ruled).
   calibrated to daily use; a long-idle account under-tests its corpus
   and would need it widened.
 - **Cap-pressure eviction** (`samskara_evict_for_mint`, called by
-  BOTH tier-1 mint probes - recency and association, via the shared
-  `ensureTier1Headroom` gate - when the population cap blocks a
+  both mint probes - recency and association, via the shared
+  cap-or-evict gate - when the population cap blocks a
   mint): frees
   one slot by deleting the most-disproven untested row - judged >= 10
   times with zero genuine engagements, >= 14 days old, ranked
@@ -1243,24 +1185,13 @@ be the first genuine test, and the next-day judge hasn't ruled).
   in-flight fire may be its FIRST test, but a row this far under
   water cannot be exonerated by one more verdict, and on an active
   day the guard empties the pool (2026-08 measurement: 115 of 150
-  tier-1 rows carried a fire awaiting next-day judgment). When none of
-  those qualifies, a **fourth tier graduates the parts of an
-  established compound**: a tier-1 claim in the `'samskara'`
-  provenance of a tier-2 whose health is at or above the user's `p0`,
-  whose evidence tally is at least 3.0 (its own record now outweighs
-  the k=5 prior), and which is at least 14 days old. Parent-wins at
-  fire time means such a part no longer fires when its compound does,
-  so its posterior is frozen and the slot it holds does nothing the
-  compound is not already doing; once the compound has earned its
-  standing the part retires, least-evidenced part first. Provenance
-  has no FK on `ref_id`, so the compound keeps standing on its own
-  record, and if the compound later dies the part re-forms from
-  substrate like any claim. This tier is deliberately last - wrong
-  claims leave before merely redundant ones - and keeps the
-  pending-fire guard, since a part can still fire on a turn its
-  compound misses. If no tier
+  rows carried a fire awaiting next-day judgment). If no tier
   qualifies the probe skips at cap exactly as it did before eviction
-  existed.
+  existed. (A fourth "graduation" tier - retiring the parts of
+  established compounds - was removed with the compound layer; it
+  deleted a specific claim whenever any compound built on it looked
+  established, and in twenty days it stripped every established
+  compound of all its parts.)
 
 Eviction is reachable from BOTH mint probes on purpose. When only the
 recency probe could evict, sweep order decided who minted: recency
@@ -1268,18 +1199,18 @@ runs first, evicted, and refilled the slot in the same probe, so the
 association probe - gated on the same cap - never saw headroom and its
 unconsumed-edge backlog grew without bound (1,082 edges at the 2026-08
 audit, months of cross-session evidence never reaching the minter).
-With the shared `ensureTier1Headroom` gate, entry to a capped corpus
+With the shared cap-or-evict gate, entry to a capped corpus
 is decided by whether a qualified victim exists when a probe wants a
 slot, not by which probe runs first; within one sweep the two probes
 draw victims from the same pool in turn.
 
 All eviction tiers are threshold-gated, so pressure can still dry up:
 if the "Probation due" and all "Evictable" readouts sit at zero while
-tier-1 is pinned at cap and the mint probe keeps skipping, no release
+the corpus is pinned at cap and the mint probe keeps skipping, no release
 path has material and formation is starved. This state actually
 occurred (2026-08-08): the first two tiers had zero victims - the
 judge rework engages most fires now, so `confirm_count = 0` rows
-(tier one's requirement) barely exist, and nothing could yet be 90
+(the untested tier's requirement) barely exist, and nothing could yet be 90
 days stale in a corpus whose judge only started ruling in July - and
 every mint path sat blocked at cap for ~42 hours while the
 association backlog grew. The health tier is the remedy: it keys on
@@ -1313,7 +1244,7 @@ Design of record + the model's derivation:
 
 Two passes per `samskara_collapse_by_cofiring()` call.
 
-**Primary pass: behavioural redundancy.** A tier-1 pair (A, B)
+**Primary pass: behavioural redundancy.** A pair (A, B)
 merges when all three hold:
 
 ```text
@@ -1337,7 +1268,7 @@ behaviourally. Pairs
 are merged in descending (ratio, cosine) order so the strongest
 redundancies consolidate first.
 
-**Safety cap: population overflow.** If the tier-1 count still
+**Safety cap: population overflow.** If the count still
 exceeds `p_target_count` (default 150) after the primary pass,
 fall through to pure embedding-cosine greedy merge in ascending
 cosine-distance order, refusing to merge pairs with centered
@@ -1348,7 +1279,7 @@ same-idea-family boundary (the labeled probe set's ~0.92-AUC
 split - see "Similarity calibration"). It guards against a
 diverse-but-overflowing pool where no pair meets the co-firing
 bar but the count is still growing without bound. With the mint
-probes' `TIER1_POPULATION_CAP` gate in place this pass is a
+probes' `SAMSKARA_POPULATION_CAP` gate in place this pass is a
 backstop for races (a mint slipping through while the count query
 fails open), not the routine make-room mechanism - see the
 treadmill gotcha.
@@ -1359,7 +1290,7 @@ per active user per tick; a genuinely over-populated pool drains
 across ticks rather than one giant transaction.
 
 **Winner selection.** Always the older row, matching the
-mint-tier1 dedup-reinforce semantics. Fires, provenance, and
+mint dedup-reinforce semantics. Fires, provenance, and
 counters fold into the winner via the private
 `_samskara_merge_pair(winner, loser, user)` helper; the loser is
 deleted.
@@ -1368,102 +1299,6 @@ Spirit note: co-firing as the primary signal maps onto Hebbian
 binding - habits that reliably co-activate consolidate into one
 habit, regardless of how similar their descriptions sound. Text
 embedding becomes a sanity floor, not the primary gate.
-
-### Tier-2 detection formula
-
-`samskara_tier2_candidate` returns at most one co-fire
-constellation per call. The eligible edge set is the tier-1
-co-fire self-join, filtered:
-
-```text
-eligible(A, B) when:
-  cofires(A, B) >= p_min_cofires             -- default 10
-  lift(A, B)    >= p_min_lift                 -- default 2.0
-  p_cosine_lo <= centered cosine(A, B)       -- default 0.10
-  centered cosine(A, B) < p_cosine_hi        -- default 0.35 (< dedup floor 0.50)
-
-  where lift(A, B) = cofires(A, B) * cohorts / (fires_A * fires_B)
-```
-
-Lift is the load-bearing selectivity: observed co-fires over the
-co-fires expected if A and B fired independently. Base-rate
-binding - two busy predictions colliding because both fire on a
-large share of turns - sits at lift ~1 (at or below chance);
-genuine co-activation runs several times chance. Raw co-fire
-ranking, and even dedup's `cofires / min(fires)` ratio, both fail
-here: the ratio still reads ~0.5 for two busy-but-independent
-predictions because the rarer member is also busy. A 2026-06-15
-prod audit measured the grab-bag pairs (emoji + pork chops + Thai,
-each firing 600-1300x) at lift < 1.5 while real constellations ran
-2x-25x, so `p_min_lift = 2.0` splits them. The companion
-`p_min_cofires = 10` is an absolute-mass guard against lift's
-small-sample variance (a pair firing 4x that always co-fires
-scores a huge lift on 4 points). Lift is a rate ratio, so the
-threshold holds as the corpus grows.
-
-The half-open cosine top end is a separate guard: tier-2 only ever
-groups pairs whose centered embedding similarity sits *below* the
-same-idea-family zone, so it claims the "related but distinct"
-band dedup deliberately leaves alone (see the dedup-coupling
-Gotcha). On the centered scale (see "Similarity calibration") the
-labeled probe set puts the unrelated/related boundary at ~0.09
-and the same-idea-family zone at ~0.35+, hence the
-`[0.10, 0.35)` defaults. The
-`p_cosine_lo` floor is a loose pre-filter - lift is the real
-coherence gate, and the minter's judgment is the second one -
-and is left loose on purpose: prediction-cosine is template
-similarity, not topical similarity, so tightening the floor
-would filter noise, not gate coherence. Coherence rides on lift
-plus the minter's judgement, not the cosine band.
-
-The group is the strongest-LIFT eligible edge plus every node
-sharing an eligible edge with BOTH seed members (not either -
-co-firing with one seed member is adjacent, not part of the
-constellation), strongest combined lift first, capped at
-`p_max_group_size` (default 6). A group smaller than
-`p_min_group_size` (default 3) is rejected - a 2-member group is a
-dedup candidate, not a compound. The coverage skip then *advances*:
-a *covered region* overlaps the candidate by Jaccard >=
-`p_overlap_skip` (default 0.50), that seed is skipped and detection
-walks to the next-strongest *uncovered* edge rather than returning
-empty, so one tier-2 on a dense region no longer masks every other
-constellation. The 0.50 is set so two three-child groups sharing two
-children (Jaccard exactly 2/4) read as one region: at 0.60 they did
-not, and the first clean month after the 2026-09 reset produced 26
-compounds over 35 distinct children, 22 sharing two or more children
-with another compound. A covered region is either an existing tier-2's
-child-set OR a recent minter decline (below). The probe budget
-(`64 + 16 * (existing_tier2_count + recent_decline_count)`) bounds the
-walk while keeping the first uncovered, non-declined seed reachable. A
-cheap precondition (at least 8 tier-1 samskaras with `fire_count > 0`)
-gates the whole thing before the expensive self-join runs.
-
-Per-member `cofire_weight` (summed co-fire count of that
-member's in-group edges) rides back on the result and becomes
-the provenance `weight`.
-
-The lift redesign is recorded in
-[`plans/samskara-tier2-detection-quality-plan.md`](plans/samskara-tier2-detection-quality-plan.md);
-it superseded an earlier raw-co-fire-then-ratio detection that
-minted exactly one tier-2 in a 151-samskara / ~29k-fire corpus and
-returned empty every sweep.
-
-**Decline memory.** The coverage skip would otherwise know only
-*minted* tier-2s, so a candidate the minter *declines* (`confirm:false`)
-would be re-offered every sweep - and a persistently-declined top
-candidate would starve every weaker uncovered constellation behind it.
-`mintTier2Probe` records each clean decline (the sorted child-set) into
-`samskara_tier2_declines`, and the candidate RPC folds recent declines
-into the same coverage test that handles minted tier-2s. A `null` from
-the minter (transport/parse failure) is NOT a verdict and is never
-recorded - same non-verdict discipline as the association-mint decline
-stamp. Unlike `samskara_pair_declines`, this ledger is **TTL'd, not
-permanent** (`v_decline_ttl`, 7 days): a pair decline is over immutable
-substrate so the verdict can never change, but a tier-2 decline is over
-a co-fire constellation, and the co-fire graph keeps growing - a group
-too weak to compound today may accumulate enough joint firing to be
-worth re-offering after the window. A re-decline upserts on `group_key`
-(the sorted child ids), re-arming the window.
 
 ### Compound-regen trigger
 
@@ -1575,7 +1410,7 @@ summarizer reads samskaras to feed the agent.
   Three near-dead samskaras co-firing is exactly the signal we
   want to surface, because cohort reinforcement can pull them
   back from the brink and the formation pipeline can mint a
-  tier-2 compound from the cohort later. The fire RPC ranks by
+  merged later. The fire RPC ranks by
   `cosine^1.3 * sqrt(health * confidence) * (1 + 0.1 * ln(1 +
   N))` so weak-but-relevant samskaras break through (the 1.3
   power on the cosine factor is a relevance nudge, not a
@@ -1588,7 +1423,7 @@ summarizer reads samskaras to feed the agent.
   whose health decayed to ~0 (score ~0), which contribute nothing
   to priming yet would otherwise bloat cohorts to ~20 members,
   inflate fire_count, pad the next-day judge's per-thread
-  prediction list, and poison co-fire dedup / tier-2 detection
+  prediction list, and poison co-fire dedup
   with spurious Hebbian binding. Live-but-weak matches (the long tail) all sit
   above it.
 - **pgvector reads back as a string, not an array.** PostgREST
@@ -1757,89 +1592,30 @@ summarizer reads samskaras to feed the agent.
   adding one to the sweep adds it per active user per hour -
   budget accordingly. The tail/sweep phase split is the design,
   not an accident: the assimilate drain and exploratory probes are
-  tail-driven (session-responsive), mint-tier2 / dedup / compound-regen
+  tail-driven (session-responsive), dedup / compound-regen
   are cron-only
   (heavy or timing-insensitive), and moving a phase across that
   line should be a deliberate decision.
 - **Minting is population-gated; the overflow merge is a backstop,
-  not the make-room mechanism.** Both tier-1 mint probes go through
-  the shared `ensureTier1Headroom` gate: at `TIER1_POPULATION_CAP`
+  not the make-room mechanism.** Both mint probes go through
+  the shared cap-or-evict gate: at `SAMSKARA_POPULATION_CAP`
   (150) they first try cap-pressure eviction and skip when no victim
   qualifies, so at cap the corpus changes only through the reaper
   (repeated real failure), the Hebbian dedup pass (true duplicates),
   and eviction of provably-useless rows. Without the gate,
   every mint at cap forced the collapse RPC's overflow pass to
   greedy-merge two DISTINCT claims at its 0.40 centered-cosine floor - the
-  same "related but distinct" band tier-2 detection owns - and a
+  same "related but distinct" band - and a
   2026-07 prod audit measured 49 mints/week churning through that
   treadmill: Venice spend to mint a claim, then a merge that blurs
   two others to make room for it. The gate fails OPEN on a count
   error (a transient blip must not silence minting), which is why
   the overflow pass stays: it catches the rare mint that slips
-  through at cap. `TIER1_POPULATION_CAP` and the RPC's
+  through at cap. `SAMSKARA_POPULATION_CAP` and the RPC's
   `p_target_count` must move together - the Deno suite pins the TS
   side and both sites carry mirror comments. Raising the cap is now
   the sanctioned way to grow the corpus; removing the gate is not.
-- **Tier-2 detection and dedup read the same co-fire self-join
-  and must not overlap.** `samskara_tier2_candidate` and
-  `samskara_collapse_by_cofiring` both self-join `samskara_fires`
-  on `cohort_id`, but they are opposites: dedup MERGES pairs that
-  are the same claim (high co-fire AND centered cosine >= its
-  `p_cosine_floor` 0.30, loser deleted); tier-2 GROUPS claims that
-  co-activate but stay distinct (high co-fire, centered cosine
-  strictly below that floor, parent added). The tier-2 cosine band
-  `[p_cosine_lo, p_cosine_hi)` defaults to `[0.10, 0.35)` - its
-  top end sits below the same-idea-family zone on purpose. If you raise
-  `p_cosine_hi` to or past 0.50 (the mint-dedup bar) the two phases
-  fight over the same
-  pairs (dedup deleting what tier-2 just grouped); the symptom is
-  tier-2 rows that keep vanishing a tick after they mint. Keep
-  the band below the floor.
-- **Tier-2 re-mint storm without the coverage skip.** Once a
-  tier-2 covers a constellation, that group keeps co-firing, so
-  detection would re-surface it every probe. Two guards stop
-  the loop: `samskara_tier2_candidate`'s Jaccard `p_overlap_skip`
-  (skip a group an existing tier-2's child-set already covers) and
-  the mint phase's tier-scoped embedding dedup (reinforce the
-  nearest existing tier-2 instead of inserting when cosine >=
-  `MINT_DEDUP_COSINE`). The first catches the same-children case,
-  the second a different child set the agent synthesized into the
-  same claim. Neither is optional.
-- **Tier-2 rides the hot path with one rule of its own; orphans are
-  fine.** `samskara_apply_evaluation` has no tier filter, and
-  `samskara_fire_top_k` scores both tiers alike - its only tier-aware
-  step is parent-wins (see "Fire ranking formula"): a compound in the
-  top-k drops its own children from that cohort. So a tier-2 fires,
-  gets judged, and updates its posterior exactly like a tier-1 the
-  moment it exists - no chat-loop or UI change was needed to ship
-  it. Because provenance has no FK on `ref_id`, a tier-2 whose
-  children dedup later merges or deletes simply keeps standing on
-  its own embedding and fire history. That is intended - a
-  compound that earned its confidence does not need its
-  scaffolding. The `tier in (1, 2)` check on `samskaras` is
-  load-bearing; lifting it to tier-3+ (a compound-of-compounds
-  noise amplifier) should be a deliberate design change, not an
-  oversight.
-- **`samskara_tier2_candidate` clears its temp table with
-  TRUNCATE, not DELETE.** The local stack's PostgREST
-  connections preload pg-safeupdate, which rejects an
-  unqualified `delete from _tier2_edges` with `DELETE requires
-  a WHERE clause` (SQLSTATE 21000) - so a "simpler" unqualified
-  DELETE breaks every tier-2 probe against the local stack
-  while passing hosted. Keep the TRUNCATE.
-- **Tier-2 gates on lift; dedup gates on the rarer-member ratio -
-  the divergence is deliberate.** dedup (`cofires / min(fires) >=
-  0.5`) is hunting *duplicates*, which are perfectly correlated
-  (ratio -> 1), so the ratio is the right tool. Tier-2 is hunting
-  *distinct-but-co-activating* pairs, and there the ratio fails:
-  two busy-but-independent predictions still reach ratio ~0.5
-  because the rarer member is also busy. Only lift
-  (`cofires * cohorts / (fires_A * fires_B)`, observed over
-  expected-under-independence) separates genuine association
-  (several times chance) from base-rate binding (~1x). Do not
-  "align" tier-2 with dedup by porting the ratio gate - a
-  2026-06-15 prod audit proved it admits the exact grab-bag it is
-  meant to reject. See the Tier-2 detection formula section.
+
 - **Pair-relate seeds corpus-wide, round-robin, not on the
   recency frontier.** One pair per probe, but the seed is the
   longest-unseeded embedded substrate row (`pair_seeded_at` asc,
@@ -1866,7 +1642,7 @@ summarizer reads samskaras to feed the agent.
   stall. An agent-null result (transport/parse failure) is NOT
   a verdict and leaves the pair unadjudicated for retry.
 - **Association-mint self-quenches the same way - stamp on
-  decline or loop forever.** Mint-tier1-assoc stamps `minted_at`
+  decline or loop forever.** The association mint probe stamps `minted_at`
   on the fed edges for EVERY minter verdict, decline included;
   without stamping declines, a stable graph re-feeds the same hub
   every sweep and burns a minter call per hour re-asking an
@@ -1896,7 +1672,7 @@ summarizer reads samskaras to feed the agent.
   guard keeps it honest. If messy hubs ever prove a meaningful
   fraction of real hubs, revisit from scratch.
 - **Mixed-kind provenance breaks the first-row heading.**
-  Association-minted tier-1s are the only rows with two
+  Association-minted claims are the only rows with two
   provenance kinds (substrate + association), and the detail RPC
   orders by `weight` desc - an edge with reinforcement > 1
   outranks substrate weight 1.0 - so heading the section off
@@ -1993,11 +1769,10 @@ implied they belonged to the selected instinct; lifting them to the top
 row removed the sub-nav entirely. The button-merge is the second step of
 that same simplification.)
 
-- **Corpus** - browse/search/filter/sort the samskara corpus, with a
-  tier filter and a "hide similar" cosine slider (the corpus analog of
+- **Corpus** - browse/search/sort the samskara corpus, with a
+  "hide similar" cosine slider (the corpus analog of
   the cohort dropdown's cluster slider). Selecting a row shows its
-  detail + provenance; for a tier-2 the provenance is its tier-1
-  children. Backed by `listSamskarasPage`,
+  detail + provenance. Backed by `listSamskarasPage`,
   `searchSamskarasByEmbedding` / `searchSamskarasByText`,
   `samskara_cluster_corpus`, `samskara_provenance_detail`, and
   `samskara_verdict_counts` (the per-samskara lifetime verdict tally).
@@ -2039,20 +1814,11 @@ that same simplification.)
     so a delta stuck past the bar is a real "not keeping up" signal. The
     age is still shown, as an informational, dot-less row. The windowed
     mint/fire/
-    resolution rates, the corpus counters, and the tier-2-candidate
-    readout are shown but NOT severity-bearing (see the calibration note
+    resolution rates and the corpus counters are shown but NOT
+    severity-bearing (see the calibration note
     below). Backed by `samskara_health_snapshot`, `samskara_rates`, and
     the severity thresholds in `src/lib/ui/samskara-health.ts` (named
     constants, tune against observed behaviour).
-  - **Tier-2 candidate readout** - "Tier-2 candidate: available (N
-    members) / none" in the Corpus card, via `samskaraTier2CandidateSize`
-    (calls the same `samskara_tier2_candidate` detection RPC the sweep's
-    mint-tier2 phase uses, security-invoker, scoped to `auth.uid()`).
-    Informational, not thresholded: a non-empty result is GOOD (detection
-    is finding an uncovered constellation to compound) and "none" is the
-    normal resting state. This is the instrument that makes the tier-2
-    detector's liveness visible - the "empty every sweep" stall the lift
-    redesign fixed used to need a manual self-join to diagnose.
 
 **Verdict legibility.** The four judge verdicts (held / contradicted /
 not-borne-out / not-engaged) surface on three reads so the soft-miss
@@ -2105,7 +1871,7 @@ spare-the-pending-test guards in `samskara_reap_untested` and
 `samskara_evict_for_mint` read every one of them as a test in
 flight - which is how sediment shields rows from release. Both
 audits measured the same damage from different shapes: 132 of 150
-tier-1 rows shielded (2026-08-10), then 65 of 131 (2026-09-01).
+rows shielded (2026-08-10), then 65 of 131 (2026-09-01).
 `samskara_expire_unjudgeable_fires` (first on the :13 reaper cron,
 so the same tick's reapers see cleared guards) stamps them
 `not-engaged` - terminal, and carrying no health evidence. The
@@ -2150,7 +1916,7 @@ tiers - keep them in lockstep). All are informational, not dotted:
 probation-due
 drains at the next hourly reap tick (a value that never drains means
 the reaper cron is stalled), and a nonzero evictable pool is the normal
-resting state while the tier-1 cap is pinned. The Corpus detail pane
+resting state while the cap is pinned. The Corpus detail pane
 adds an **engagement** stat (genuine/judged, `engagementSummary`) to
 the verdict tally and a one-line **release status** under it
 (`releaseStatus` - established / weakly-established-gone-stale /

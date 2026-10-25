@@ -2,7 +2,7 @@
  * Reactive store for the Samskara diagnostics tab's Corpus panel.
  * `SamskaraBrowseList.svelte` (sidebar) and `Samskaras.svelte` (detail)
  * both bind `samskaraBrowseStore`, so a search keystroke or a
- * sort/tier/hide-similar change in the controls reflows the list and the
+ * sort/hide-similar change in the controls reflows the list and the
  * detail panel together.
  *
  * Read-only: this store never writes samskara state. It mirrors the
@@ -32,7 +32,6 @@ interface SamskaraBrowseStore {
   /** Cluster assignments for the hide-similar collapse; empty when the slider is off. */
   clusterMap: Map<string, { seq: number; size: number }>;
   query: string;
-  tier: number | null;
   sort: SamskaraBrowseSort;
   hideSimilar: boolean;
   hideSimilarThreshold: number;
@@ -49,7 +48,6 @@ export const samskaraBrowseStore = $state<SamskaraBrowseStore>({
   results: [],
   clusterMap: new Map(),
   query: '',
-  tier: null,
   sort: 'recent',
   hideSimilar: false,
   hideSimilarThreshold: DEFAULT_HIDE_SIMILAR_THRESHOLD,
@@ -73,7 +71,6 @@ let currentAbort: AbortController | null = null;
 async function searchSamskaras(
   supabase: SupabaseService,
   query: string,
-  tier: number | null,
   signal: AbortSignal
 ): Promise<SamskaraCorpusRow[]> {
   let rawEmbedding: number[] | undefined;
@@ -85,15 +82,15 @@ async function searchSamskaras(
     });
     rawEmbedding = resp.data[0]?.embedding;
   } catch {
-    return supabase.searchSamskarasByText(query, CORPUS_LIST_LIMIT, tier);
+    return supabase.searchSamskarasByText(query, CORPUS_LIST_LIMIT);
   }
   if (!rawEmbedding || rawEmbedding.length === 0) {
-    return supabase.searchSamskarasByText(query, CORPUS_LIST_LIMIT, tier);
+    return supabase.searchSamskarasByText(query, CORPUS_LIST_LIMIT);
   }
   const queryEmbedding = padEmbeddingForStorage(rawEmbedding);
   const [vectorHits, textHits] = await Promise.all([
-    supabase.searchSamskarasByEmbedding(queryEmbedding, CORPUS_LIST_LIMIT, tier),
-    supabase.searchSamskarasByText(query, CORPUS_LIST_LIMIT, tier),
+    supabase.searchSamskarasByEmbedding(queryEmbedding, CORPUS_LIST_LIMIT),
+    supabase.searchSamskarasByText(query, CORPUS_LIST_LIMIT),
   ]);
   const seen = new Set<string>();
   const merged: SamskaraCorpusRow[] = [];
@@ -107,7 +104,7 @@ async function searchSamskaras(
 }
 
 /**
- * (Re)load the Corpus list from the current {query, tier, sort,
+ * (Re)load the Corpus list from the current {query, sort,
  * hideSimilar} state. The single entry point the controls call; it
  * dispatches across the three regimes and, when hide-similar is on,
  * fetches the cluster map for the collapse. Callers debounce the query
@@ -125,7 +122,7 @@ export async function refreshSamskaraView(supabase: SupabaseService): Promise<vo
       // Search regime: capped relevance set, no pagination.
       const ctl = new AbortController();
       currentAbort = ctl;
-      const hits = await searchSamskaras(supabase, trimmed, samskaraBrowseStore.tier, ctl.signal);
+      const hits = await searchSamskaras(supabase, trimmed, ctl.signal);
       if (ctl.signal.aborted) return;
       samskaraBrowseStore.results = hits;
       samskaraBrowseStore.offset = hits.length;
@@ -137,7 +134,6 @@ export async function refreshSamskaraView(supabase: SupabaseService): Promise<vo
       const page = await supabase.listSamskarasPage({
         offset: 0,
         pageSize: CORPUS_LIST_LIMIT * 20,
-        tier: samskaraBrowseStore.tier,
         sort: samskaraBrowseStore.sort,
       });
       samskaraBrowseStore.results = page.rows;
@@ -148,7 +144,6 @@ export async function refreshSamskaraView(supabase: SupabaseService): Promise<vo
       const page = await supabase.listSamskarasPage({
         offset: 0,
         pageSize: CORPUS_LIST_LIMIT,
-        tier: samskaraBrowseStore.tier,
         sort: samskaraBrowseStore.sort,
       });
       samskaraBrowseStore.results = page.rows;
@@ -162,8 +157,7 @@ export async function refreshSamskaraView(supabase: SupabaseService): Promise<vo
     if (samskaraBrowseStore.hideSimilar) {
       try {
         samskaraBrowseStore.clusterMap = await supabase.samskaraClusterCorpus(
-          samskaraBrowseStore.hideSimilarThreshold,
-          samskaraBrowseStore.tier
+          samskaraBrowseStore.hideSimilarThreshold
         );
       } catch {
         samskaraBrowseStore.clusterMap = new Map();
@@ -197,7 +191,6 @@ export async function loadMoreSamskaras(supabase: SupabaseService): Promise<void
     const page = await supabase.listSamskarasPage({
       offset: samskaraBrowseStore.offset,
       pageSize: CORPUS_LIST_LIMIT,
-      tier: samskaraBrowseStore.tier,
       sort: samskaraBrowseStore.sort,
     });
     samskaraBrowseStore.results = [...samskaraBrowseStore.results, ...page.rows];

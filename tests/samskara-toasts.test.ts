@@ -22,13 +22,12 @@ import {
 
 function mint(
   valence: number,
-  confidence: number,
-  tier: 1 | 2 = 1
+  confidence: number
 ): SamskaraMintEventDetail {
   // The other fields on SamskaraMintEventDetail (samskaraId, etc.)
   // aren't read by the primitives under test - the structural cast
   // keeps the fixture tight.
-  return { valence, confidence, tier } as SamskaraMintEventDetail;
+  return { valence, confidence } as SamskaraMintEventDetail;
 }
 
 describe('defaultMood', () => {
@@ -36,7 +35,6 @@ describe('defaultMood', () => {
     expect(defaultMood()).toEqual({
       emoji: DEFAULT_EMOJI,
       label: DEFAULT_LABEL,
-      tier: 1,
       isDefault: true,
     });
   });
@@ -57,19 +55,18 @@ describe('defaultMood', () => {
 
 describe('nextMoodFromMint', () => {
   describe('storeUpdate (unconditional)', () => {
-    it('always carries the raw triple from the mint detail', () => {
+    it('always carries the raw pair from the mint detail', () => {
       // No prior mood; visual will materialise, but the contract
       // here is that storeUpdate is identical whether or not the
       // dedup path takes the visual.
-      const out = nextMoodFromMint(null, mint(0.6, 0.9, 2));
+      const out = nextMoodFromMint(null, mint(0.6, 0.9));
       expect(out.storeUpdate).toEqual({
         valence: 0.6,
         confidence: 0.9,
-        tier: 2,
       });
     });
 
-    it('still carries the triple when the visual is dedup-skipped', () => {
+    it('still carries the pair when the visual is dedup-skipped', () => {
       // The diagnostics-modal dot reads the shared store directly,
       // so it must track every mint event even when the local
       // pill skips its visual swap.
@@ -80,7 +77,6 @@ describe('nextMoodFromMint', () => {
       expect(second.storeUpdate).toEqual({
         valence: 0.62,
         confidence: 0.91,
-        tier: 1,
       });
     });
   });
@@ -90,7 +86,6 @@ describe('nextMoodFromMint', () => {
       const out = nextMoodFromMint(null, mint(0.6, 0.9));
       expect(out.visual).not.toBeNull();
       expect(out.visual?.isDefault).toBe(false);
-      expect(out.visual?.tier).toBe(1);
     });
 
     it('replaces the default placeholder with a real mood', () => {
@@ -102,7 +97,7 @@ describe('nextMoodFromMint', () => {
 
     it('is null when the incoming mint lands in the same band', () => {
       // Two mints in the same valence/confidence neighbourhood
-      // should produce identical emoji + label + tier - the dedup
+      // should produce identical emoji + label - the dedup
       // skips the visual swap so the fly transition does not
       // re-play.
       const first = nextMoodFromMint(null, mint(0.6, 0.9));
@@ -117,16 +112,6 @@ describe('nextMoodFromMint', () => {
       expect(out.visual).not.toBeNull();
       expect(out.visual?.emoji).not.toBe(prev.emoji);
     });
-
-    it('materialises a new shape when tier changes even at the same valence', () => {
-      // Tier-2 carries a halo so the visual treatment differs from
-      // tier-1 at the same valence band. Dedup must NOT skip in
-      // that case.
-      const prev = nextMoodFromMint(null, mint(0.6, 0.9, 1)).visual as MoodShape;
-      const out = nextMoodFromMint(prev, mint(0.6, 0.9, 2));
-      expect(out.visual).not.toBeNull();
-      expect(out.visual?.tier).toBe(2);
-    });
   });
 });
 
@@ -135,13 +120,11 @@ describe('nextMoodFromSeed', () => {
     const out = nextMoodFromSeed(defaultMood(), {
       valence: 0.6,
       confidence: 0.9,
-      tier: 1,
     });
     expect(out).not.toBeNull();
     expect(out?.storeUpdate).toEqual({
       valence: 0.6,
       confidence: 0.9,
-      tier: 1,
     });
     expect(out?.visual.isDefault).toBe(false);
     expect(out?.visual.emoji).not.toBe(DEFAULT_EMOJI);
@@ -159,7 +142,7 @@ describe('nextMoodFromSeed', () => {
     // brand-new-chat case); a seed result must not materialise a
     // mood out of nowhere.
     expect(
-      nextMoodFromSeed(null, { valence: 0.6, confidence: 0.9, tier: 1 })
+      nextMoodFromSeed(null, { valence: 0.6, confidence: 0.9 })
     ).toBeNull();
   });
 
@@ -174,18 +157,7 @@ describe('nextMoodFromSeed', () => {
     const out = nextMoodFromSeed(realMint, {
       valence: -0.3,
       confidence: 0.5,
-      tier: 1,
     });
     expect(out).toBeNull();
-  });
-
-  it('preserves the seed tier on both visual and storeUpdate', () => {
-    const out = nextMoodFromSeed(defaultMood(), {
-      valence: 0.6,
-      confidence: 0.9,
-      tier: 2,
-    });
-    expect(out?.visual.tier).toBe(2);
-    expect(out?.storeUpdate.tier).toBe(2);
   });
 });

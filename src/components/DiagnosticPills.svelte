@@ -88,7 +88,6 @@
         type="button"
         class="diag-pill"
         class:is-disabled={!enabled}
-        class:tier-2={d.id === 'samskara' && ctx.moodVisual?.tier === 2}
         style="bottom: {p.bottom};"
         disabled={!enabled}
         title={d.title(ctx)}
@@ -218,15 +217,6 @@
   .diag-pill:disabled:hover,
   .diag-pill.is-disabled:hover {
     border-color: color-mix(in srgb, var(--border) 80%, transparent);
-  }
-
-  /* Tier-2 (compound-of-compounds) samskara mints get an extra accent
-     ring so a higher-order claim is distinguishable from a flat tier-1
-     one. Only the samskara pill ever carries .tier-2. */
-  .diag-pill.tier-2 {
-    box-shadow:
-      0 4px 12px rgba(0, 0, 0, 0.22),
-      0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
   }
 
   .diag-pill .emoji {

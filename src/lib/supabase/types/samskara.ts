@@ -17,7 +17,6 @@ export type SamskaraBrowseSort = 'recent' | 'strongest' | 'most_fired' | 'recent
  */
 export interface SamskaraCorpusRow {
   id: string;
-  tier: number;
   prediction: string;
   innerVoice: string | null;
   valence: number | null;
@@ -33,20 +32,16 @@ export interface SamskaraCorpusRow {
 
 /** One labelled provenance edge of a samskara, for the detail view. */
 export interface SamskaraProvenanceRow {
-  kind: 'substrate' | 'association' | 'samskara';
+  kind: 'substrate' | 'association';
   refId: string;
   weight: number;
   /** Resolved label (child prediction / situation / relation), or null if the target was deleted. */
   label: string | null;
-  /** Tier of the referenced samskara, present only for kind='samskara'. */
-  refTier: number | null;
 }
 
 /** Corpus-wide live health snapshot for the Health panel. */
 export interface SamskaraHealthSnapshot {
   totalSamskaras: number;
-  tier1: number;
-  tier2: number;
   nearDead: number;
   neverFired: number;
   /** Never genuinely tested and past the 45-day probation window - the
@@ -54,7 +49,7 @@ export interface SamskaraHealthSnapshot {
    *  stalled. */
   probationEligible: number;
   /** Untested rows judged 10+ times with zero genuine engagements - the
-   *  pool a capped tier-1 mint may evict from. */
+   *  pool a capped mint may evict from. */
   evictable: number;
   /** Weakly-established rows (at most one test's worth of evidence)
    *  whose last genuine verdict is 90+ days old - the eviction
@@ -64,13 +59,6 @@ export interface SamskaraHealthSnapshot {
    *  population prior - repeatedly disproven claims, the last-resort
    *  eviction tier when neither of the above qualifies. */
   evictableUnhealthy: number;
-  /** Tier-1 parts of an ESTABLISHED compound (compound health >= the
-   *  population prior, >= 3.0 evidence, >= 14 days old) with no fire
-   *  awaiting judgment - the graduation tier, last resort after the
-   *  three above. Parent-wins at fire time leaves these frozen; the
-   *  compound stands in for them, so the slot goes back into
-   *  circulation. */
-  evictableGraduated: number;
   associations: number;
   /** Association edges not yet fed to the association-mint pass. Drains across sweeps. */
   associationsUnconsumed: number;
@@ -156,7 +144,6 @@ export interface SamskaraFireDiagnosticRow {
   /** Null only when the samskara was deleted after the fire logged;
    *  the row keeps pointing to the now-orphaned id. */
   samskara: {
-    tier: number;
     prediction: string;
     innerVoice: string | null;
     valence: number | null;

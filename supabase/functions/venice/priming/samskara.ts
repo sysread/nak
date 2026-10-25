@@ -153,7 +153,7 @@ export async function queryFiredSamskaras(opts: {
   // abbreviated), so rows past it never reach the model and exist
   // only as bookkeeping: they pad the next-day judge's per-thread
   // prediction list, inflate fire_count, and saturate the co-fire
-  // graph that dedup and tier-2 detection read. A score-based cutoff
+  // graph that dedup reads. A score-based cutoff
   // was measured as the alternative (2026-08 prod audit) and
   // rejected: the fire RPC truncates at k BY SCORE, so the recorded
   // cohort is definitionally the closest-scored k rows and its

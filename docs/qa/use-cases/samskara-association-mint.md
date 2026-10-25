@@ -2,7 +2,7 @@
 
 ## Covers
 
-The `mint-tier1-assoc` sweep phase
+The association-mint sweep phase
 (`mintTier1FromAssociationsProbe`) and its supporting pieces: the
 `samskara_association_cluster` hub-selection RPC, the per-edge
 `minted_at` consumption stamp (set on mint / dedup-hit / decline,
@@ -65,7 +65,7 @@ dev shim's tick of it), never a chat turn.
    ```
 
 2. **Record the pre-state.** Note the unconsumed edge count and
-   the current tier-1 corpus size:
+   the current corpus size:
 
    ```sql
    select count(*) filter (where minted_at is null) as unconsumed,

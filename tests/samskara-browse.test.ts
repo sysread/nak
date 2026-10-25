@@ -24,7 +24,6 @@ import type { SamskaraCorpusRow, SamskaraProvenanceRow } from '../src/lib/supaba
 function row(id: string): SamskaraCorpusRow {
   return {
     id,
-    tier: 1,
     prediction: `pred ${id}`,
     innerVoice: null,
     valence: 0,
@@ -85,7 +84,7 @@ describe('groupProvenance', () => {
     kind: SamskaraProvenanceRow['kind'],
     refId: string,
     weight = 1,
-  ): SamskaraProvenanceRow => ({ kind, refId, weight, label: refId, refTier: null });
+  ): SamskaraProvenanceRow => ({ kind, refId, weight, label: refId });
 
   it('groups mixed provenance into display order, one section per kind', () => {
     // Intentionally interleaved + association weight above substrate, to
@@ -104,10 +103,10 @@ describe('groupProvenance', () => {
   });
 
   it('drops empty kinds: a single-kind samskara yields exactly one group', () => {
-    const groups = groupProvenance([row('samskara', 'c1'), row('samskara', 'c2')]);
+    const groups = groupProvenance([row('substrate', 's1')]);
     expect(groups).toHaveLength(1);
-    expect(groups[0].kind).toBe('samskara');
-    expect(groups[0].heading).toBe('Compounded from (tier-1 children)');
+    expect(groups[0].kind).toBe('substrate');
+    expect(groups[0].heading).toBe('Formed from (substrate)');
   });
 
   it('returns no groups for empty provenance', () => {

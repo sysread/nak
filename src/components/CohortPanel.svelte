@@ -194,7 +194,6 @@
 
 {#snippet fireRow(fire: SamskaraFireDiagnosticRow)}
   <div class="fire-head">
-    <span class="fire-tier">T{fire.samskara?.tier ?? '?'}</span>
     <!-- Per-fire verdict from the next-day judge. Distinct from the
          cohort header's single resolution read (off the boolean
          was_confirmed): fires in a cohort can carry DIFFERENT verdicts -
@@ -344,13 +343,9 @@
     font-size: 0.72rem;
     color: var(--muted);
   }
-  .fire-tier {
-    font-weight: 600;
-    color: var(--text);
-  }
   /* Per-fire verdict pill. Reuses the .status-* colorways (shared with
      the cohort header) but at the smaller weight of the fire-head meta
-     row so it sits inline beside tier and score without dominating. */
+     row so it sits inline beside the score without dominating. */
   .fire-verdict {
     font-size: 0.66rem;
     font-weight: 600;

@@ -11,7 +11,7 @@ interface BroadcastBody {
     topic: string;
     event: string;
     private: boolean;
-    payload: { tier: number; valence: number; confidence: number };
+    payload: { valence: number; confidence: number };
   }>;
 }
 
@@ -28,7 +28,7 @@ Deno.test('publishSamskaraMint posts a private samskara-mint broadcast on the us
 
   await publishSamskaraMint(
     'user-123',
-    { tier: 2, valence: -0.4, confidence: 0.8 },
+    { valence: -0.4, confidence: 0.8 },
     { fetchImpl: fakeFetch, supabaseUrl: 'https://proj.supabase.co', serviceKey: 'svc-key' },
   );
 
@@ -39,7 +39,6 @@ Deno.test('publishSamskaraMint posts a private samskara-mint broadcast on the us
   assertEquals(msg.topic, 'samskaras:user-123');
   assertEquals(msg.event, 'samskara-mint');
   assertEquals(msg.private, true);
-  assertEquals(msg.payload.tier, 2);
   assertEquals(msg.payload.valence, -0.4);
   assertEquals(msg.payload.confidence, 0.8);
 });
@@ -52,7 +51,7 @@ Deno.test('publishSamskaraMint skips the broadcast when env is absent', async ()
   }) as typeof fetch;
   await publishSamskaraMint(
     'u',
-    { tier: 1, valence: 0, confidence: 0.5 },
+    { valence: 0, confidence: 0.5 },
     { fetchImpl: fakeFetch, supabaseUrl: '', serviceKey: '' },
   );
   assertEquals(called, false);
@@ -63,7 +62,7 @@ Deno.test('publishSamskaraMint swallows a transport error - a toast never fails 
   // Resolves rather than throwing; the mint path must not see this.
   await publishSamskaraMint(
     'u',
-    { tier: 1, valence: 0, confidence: 0.5 },
+    { valence: 0, confidence: 0.5 },
     { fetchImpl: fakeFetch, supabaseUrl: 'https://x.co', serviceKey: 'k' },
   );
 });

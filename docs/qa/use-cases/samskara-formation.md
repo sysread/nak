@@ -5,9 +5,8 @@
 The samskara formation loop's six phases - assimilate (claim a
 substrate stub, extract situation/outcome/valence), pair-relate
 (label a relation between the two closest recent substrate rows),
-mint-tier1 (crystallize a topical substrate cluster into a
-predictive claim), mint-tier2 (compound a co-fire constellation of
-tier-1s), dedup (collapse redundant tier-1s by co-firing), and
+mint (crystallize a topical substrate cluster into a
+predictive claim), dedup (collapse redundant claims by co-firing), and
 compound-regen (re-synthesize the per-user summary prose) - plus the
 mint toast surface (the mood pill). Health/decay and reaction scoring
 are NOT covered here: health has its own use-case
@@ -26,13 +25,13 @@ observable contract - claims, writes, toasts - is the same.
 
 - Local stack up (`mise run dev-start`), signed in as the dev
   user, Logs drawer open at `Trace+`.
-- A corpus with history: >= 8 fired tier-1 samskaras (tier-2
+- A corpus with history: >= 8 fired samskaras (
   detection's precondition), >= 10 embedded substrate rows, and an
   existing `samskara_compound_summary` row. The long-lived dev
   corpus qualifies; check with:
 
   ```sql
-  select (select count(*) from samskaras where tier = 1 and fire_count > 0) as fired_t1,
+  select (select count(*) from samskaras where fire_count > 0) as fired,
          (select count(*) from samskara_substrate where situation_embedding is not null) as embedded,
          (select count(*) from samskara_compound_summary) as summaries;
   ```
@@ -42,13 +41,13 @@ observable contract - claims, writes, toasts - is the same.
   reload kills the worker WITHOUT releasing the lease - the fresh
   tab polls until the TTL expires, so keep one tab open and avoid
   reloads, or budget ~6 minutes after one. Idle nap is 300s and
-  the exploratory phases throttle (pair-relate/mint-tier1 60s,
-  mint-tier2 5 min), so a forged work item can legitimately wait
+  the exploratory phases throttle (pair-relate/mint 60s),
+  so a forged work item can legitimately wait
   several minutes for pickup.
 - Substrate embedding is the embed backfill's job, not this
   loop's. Locally that means the dev cron shim must be ticking
   `/backfill` (or curl it manually) before a freshly assimilated
-  row becomes visible to pair-relate/mint-tier1.
+  row becomes visible to pair-relate/mint.
 
 ## Steps
 
@@ -99,26 +98,15 @@ observable contract - claims, writes, toasts - is the same.
           (select count(*) from samskara_pair_declines) as declined;
    ```
 
-4. Watch one mint-tier1 probe. Three valid outcomes, record which:
+4. Watch one mint probe. Three valid outcomes, record which:
    `minted samskara` (a genuinely new claim - the mood pill toast
    must appear), `dedup-reinforced existing` (near-duplicate of an
    existing samskara - no toast), or `agent declined` / `no
    coherent cluster` (trace).
-5. Watch one mint-tier2 probe (fires at most every 5 minutes in
-   the browser era). Record the outcome. Direct repro of the
-   candidate RPC, bypassing the worker (`SR`/`ANON` from
-   `supabase status -o json`; sign in as the dev user for a JWT):
-
-   ```sh
-   curl -s "http://127.0.0.1:54321/rest/v1/rpc/samskara_tier2_candidate" \
-        -H "apikey: $ANON" -H "Authorization: Bearer $USER_JWT" \
-        -H "Content-Type: application/json" -d '{}'
-   ```
-
-6. Watch one dedup pass: `dedup: nothing to collapse` (trace) or
+5. Watch one dedup pass: `dedup: nothing to collapse` (trace) or
    `dedup: collapsed samskaras` (debug). Both are valid; record
    the count.
-7. Force a compound regen and watch the chain
+6. Force a compound regen and watch the chain
    (`compound-regen: synthesizing ...` then `saved summary`):
 
    ```sql
@@ -131,7 +119,7 @@ observable contract - claims, writes, toasts - is the same.
           length(summary) from samskara_compound_summary;
    ```
 
-8. Mint toast relay, deterministically: with the app open on a
+7. Mint toast relay, deterministically: with the app open on a
    thread, publish a `samskara-mint` Broadcast event on the user's
    private topic - the same event `insertMint` sends on a real mint.
    The toast rides Broadcast, not a postgres_changes echo on
@@ -140,7 +128,7 @@ observable contract - claims, writes, toasts - is the same.
 
    ```sql
    select realtime.send(
-     jsonb_build_object('tier', 1, 'valence', 0.8, 'confidence', 0.9),
+     jsonb_build_object('valence', 0.8, 'confidence', 0.9),
      'samskara-mint',
      'samskaras:' || (select id::text from auth.users
                        where email = 'dev@nak.local'),
@@ -179,18 +167,12 @@ observable contract - claims, writes, toasts - is the same.
   Flat counts on a fully-adjudicated corpus are the designed
   silence, not a stall.
 - (4) Exactly one of mint / dedup-reinforce / decline. On a true
-  mint: a `samskaras` row with `tier = 1`, provenance rows
+  mint: a `samskaras` row, provenance rows
   pointing at the cluster's substrate ids, and the mood pill
   toast renders in-session.
-- (5) The candidate RPC returns a group or an empty set without
-  error. **Known baseline failure:** on the pre-C3 schema it
-  errors on EVERY call locally with SQLSTATE 21000 (`DELETE
-  requires a WHERE clause`) - pg-safeupdate on the local
-  PostgREST connections rejects the function's unqualified
-  temp-table `delete`, so mint-tier2 has never run locally.
-- (6) Dedup returns a collapse count >= 0; zero is the steady
+- (5) Dedup returns a collapse count >= 0; zero is the steady
   state on a healthy corpus.
-- (7) The summary regenerates: `last_regen_at` bumps to now,
+- (6) The summary regenerates: `last_regen_at` bumps to now,
   `samskara_count_at_regen` matches the current corpus count,
   and the prose changes only if the corpus did.
 - (8) The mood pill updates within a few seconds of the broadcast

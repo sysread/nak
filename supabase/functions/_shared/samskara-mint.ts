@@ -1,6 +1,6 @@
 // Mint-toast delivery over Realtime Broadcast.
 //
-// A freshly minted tier-1/tier-2 samskara should pop the mood-pill toast
+// A freshly minted samskara should pop the mood-pill toast
 // in any open client. The formation pipeline runs server-side in the
 // venice function (turn tail + hourly sweep), so the browser can't learn
 // of a mint through an in-process callback - it needs a wire event.
@@ -23,7 +23,6 @@
 // private `samskaras:<user-uuid>` topic the browser subscribes to.
 
 export interface SamskaraMintDetail {
-  tier: 1 | 2;
   valence: number;
   confidence: number;
 }

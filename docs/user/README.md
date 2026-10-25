@@ -80,8 +80,8 @@ You can reach these pages two ways:
   ingredient checkboxes on every recipe and direct adds, with new
   items auto-filed into your sections for you.
 - [Samskara](./samskara.md) — the instincts Nak forms about you as you
-  chat: the read-only Samskara tab (browse the whole corpus, tier-1 and
-  tier-2 compounds, plus a pipeline-health readout), the per-conversation
+  chat: the read-only Samskara tab (browse the whole corpus,
+  plus a pipeline-health readout), the per-conversation
   mood pill, and the per-message "what fired this turn" dropdown.
 - [Working intentions](./intents.md) — the opt-in feature that lets Nak
   form and pursue standing goals about how to help you grow, and decide

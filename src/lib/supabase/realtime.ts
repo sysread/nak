@@ -646,7 +646,7 @@ export function subscribeToRecipeRecordChanges(
  * Subscribe to the signed-in user's freshly minted samskaras. The
  * formation pipeline runs in the venice function and publishes a
  * `samskara-mint` Broadcast event per mint (insertMint ->
- * publishSamskaraMint); this relay maps its (tier, valence,
+ * publishSamskaraMint); this relay maps its (valence,
  * confidence) payload into the mood-pill toast (the caller routes it to
  * notifySamskaraMint).
  *
@@ -667,17 +667,14 @@ export function subscribeToRecipeRecordChanges(
 export function subscribeToSamskaraInserts(
   client: SupabaseClient,
   userId: string,
-  onMint: (detail: { tier: 1 | 2; valence: number; confidence: number }) => void
+  onMint: (detail: { valence: number; confidence: number }) => void
 ): () => void {
   const channel = client
     .channel(`samskaras:${userId}`, { config: { private: true } })
     .on('broadcast', { event: 'samskara-mint' }, ({ payload }) => {
       const detail = payload as Record<string, unknown> | undefined;
       if (!detail) return;
-      const tier = detail.tier;
-      if (tier !== 1 && tier !== 2) return;
       onMint({
-        tier,
         valence: typeof detail.valence === 'number' ? detail.valence : 0,
         confidence: typeof detail.confidence === 'number' ? detail.confidence : 0.5,
       });

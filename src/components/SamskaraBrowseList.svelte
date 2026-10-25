@@ -1,7 +1,7 @@
 <script lang="ts">
   /*
    * Sidebar for the Samskara diagnostics tab's Corpus panel. Owns the
-   * search input, the tier filter, the sort control, and the
+   * search input, the sort control, and the
    * "hide similar" slider - all bound to `samskaraBrowseStore` so the
    * main panel's detail view reflows in lock-step. Clicking a row sets
    * `route.samskara_id` so the panel shows that samskara's detail.
@@ -9,7 +9,7 @@
    * Read-only: no edit/delete. This is an observability surface (see
    * docs/dev/samskara.md's observability section), not a curation tool.
    *
-   * All decision logic - the sort/tier option lists, the hide-similar
+   * All decision logic - the sort option list, the hide-similar
    * collapse, label/valence formatting - lives in
    * `$lib/ui/samskara-browse`; this file is Svelte glue only.
    */
@@ -22,10 +22,8 @@
   } from '$lib/samskara-browse-store.svelte';
   import {
     SEARCH_DEBOUNCE_MS,
-    TIER_FILTERS,
     SORT_OPTIONS,
     emptyMessage,
-    tierBadge,
     collapseSimilar,
     matchSummary,
     type CollapsedRow,
@@ -59,15 +57,14 @@
     };
   });
 
-  // Immediate re-load when the structural controls change (tier, sort,
+  // Immediate re-load when the structural controls change (sort,
   // hide-similar toggle, threshold). These aren't typed character by
   // character, so no debounce.
   $effect(() => {
-    const _t = samskaraBrowseStore.tier;
     const _s = samskaraBrowseStore.sort;
     const _h = samskaraBrowseStore.hideSimilar;
     const _th = samskaraBrowseStore.hideSimilarThreshold;
-    void [_t, _s, _h, _th];
+    void [_s, _h, _th];
     if (!app.supabase) return;
     void refreshSamskaraView(app.supabase);
   });
@@ -83,10 +80,6 @@
   function pick(id: string): void {
     navigate({ samskara_id: id });
     onSelect?.();
-  }
-
-  function setTier(value: number | null): void {
-    samskaraBrowseStore.tier = value;
   }
 </script>
 
@@ -105,17 +98,6 @@
   </div>
 
   <div class="samskara-list-filters">
-    <div class="samskara-tier-seg" role="group" aria-label="Tier filter">
-      {#each TIER_FILTERS as opt (opt.label)}
-        <button
-          type="button"
-          class="samskara-seg-btn"
-          class:active={samskaraBrowseStore.tier === opt.value}
-          aria-pressed={samskaraBrowseStore.tier === opt.value}
-          onclick={() => setTier(opt.value)}
-        >{opt.label}</button>
-      {/each}
-    </div>
     <select
       class="samskara-sort-select"
       aria-label="Sort samskaras"
@@ -169,7 +151,6 @@
           onclick={() => pick(item.row.id)}
           title={item.row.prediction}
         >
-          <span class="samskara-row-badge" class:t2={item.row.tier === 2}>{tierBadge(item.row.tier)}</span>
           <span class="samskara-row-pred">{item.row.prediction}</span>
           {#if item.similarCount > 0}
             <span class="samskara-row-similar" title="{item.similarCount} similar folded here">+{item.similarCount}</span>
@@ -208,29 +189,6 @@
     gap: 0.4rem;
     align-items: center;
     margin: 0 0.6rem 0.4rem;
-  }
-  /* Tier segmented control - three small buttons sharing one border. */
-  .samskara-tier-seg {
-    display: inline-flex;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
-  .samskara-seg-btn {
-    padding: 0.2rem 0.5rem;
-    font-size: 0.75rem;
-    background: var(--surface);
-    color: var(--muted);
-    border: none;
-    border-right: 1px solid var(--border);
-    cursor: pointer;
-  }
-  .samskara-seg-btn:last-child {
-    border-right: none;
-  }
-  .samskara-seg-btn.active {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    color: var(--text);
   }
   .samskara-sort-select {
     flex: 1;
@@ -290,20 +248,6 @@
     align-items: center;
     gap: 0.4rem;
     min-width: 0;
-  }
-  /* Tier badge - tier 1 muted, tier 2 accented so compounds stand out. */
-  .samskara-row-badge {
-    flex-shrink: 0;
-    font-size: 0.65rem;
-    font-weight: 600;
-    padding: 0.05rem 0.3rem;
-    border-radius: var(--radius-pill);
-    background: var(--bg-2);
-    color: var(--muted);
-  }
-  .samskara-row-badge.t2 {
-    background: color-mix(in srgb, var(--accent) 25%, transparent);
-    color: var(--text);
   }
   .samskara-row-pred {
     overflow: hidden;

@@ -9,8 +9,7 @@
    *   1. The compound summary - the prose block that rides in every
    *      system prompt - at the top, below the refresh row.
    *   2. Pipeline health - backlog depths, staleness, inconsistencies,
-   *      windowed activity rates, corpus shape, and whether a tier-2
-   *      candidate is currently offerable. Computed live on open from
+   *      windowed activity rates, and corpus shape. Computed live on open from
    *      existing rows, no stored history (see docs/dev/samskara.md
    *      observability section).
    *
@@ -30,7 +29,6 @@
     worstSeverity,
     healthHeadline,
     verdictBreakdown,
-    tier2CandidateLabel,
     samskaraCountPhrase,
     HEALTH_THRESHOLDS,
     type Severity,
@@ -48,11 +46,6 @@
     lastRegenAt: string | null;
     samskaraCountAtRegen: number;
   } | null>(null);
-  // How many tier-1 members the tier-2 detector would currently offer
-  // the minter (0 = none). Surfaced so the "is detection finding
-  // uncovered constellations?" question is visible without a self-join.
-  let tier2CandidateSize = $state(0);
-
   async function load(): Promise<void> {
     if (!app.supabase) {
       error = 'Not connected to Supabase yet.';
@@ -71,7 +64,6 @@
       snap = await sb.samskaraHealthSnapshot();
       rates = await sb.samskaraRates(7);
       compound = await sb.samskaraGetCompoundSummary();
-      tier2CandidateSize = await sb.samskaraTier2CandidateSize();
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -255,17 +247,7 @@
     <div class="health-card">
       <div class="health-row">
         <span class="health-label">Samskaras</span>
-        <span class="health-value">{snap.totalSamskaras} (T1 {snap.tier1} · T2 {snap.tier2})</span>
-      </div>
-      <!-- Informational, not thresholded: a non-empty candidate is GOOD
-           (detection is finding an uncovered constellation to compound),
-           and "none" is the normal resting state, so neither warrants a
-           severity dot. This is the readout that makes the tier-2
-           detector's liveness visible - an empty result with few tier-2s
-           used to require a manual self-join to diagnose. -->
-      <div class="health-row">
-        <span class="health-label">Tier-2 candidate</span>
-        <span class="health-value">{tier2CandidateLabel(tier2CandidateSize)}</span>
+        <span class="health-value">{snap.totalSamskaras}</span>
       </div>
       <div class="health-row">
         <span class="health-label">Near-dead / never-fired</span>
@@ -285,9 +267,9 @@
         <span class="health-value">{snap.probationEligible}</span>
       </div>
       <div class="health-row">
-        <span class="health-label">Evictable (untested / stale / unhealthy / graduated)</span>
+        <span class="health-label">Evictable (untested / stale / unhealthy)</span>
         <span class="health-value">
-          {snap.evictable} / {snap.evictableStale} / {snap.evictableUnhealthy} / {snap.evictableGraduated}
+          {snap.evictable} / {snap.evictableStale} / {snap.evictableUnhealthy}
         </span>
       </div>
       <div class="health-row">

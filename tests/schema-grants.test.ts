@@ -120,7 +120,7 @@ describe('schema Data API grant guardrail', () => {
     // fix; raise them as the schema grows. The canaries pin a
     // long-established name and the most recently added table, so a
     // scanner that only matches some subset still fails loudly.
-    expect(tables.length).toBeGreaterThanOrEqual(53);
+    expect(tables.length).toBeGreaterThanOrEqual(52);
     expect(views.length).toBeGreaterThanOrEqual(1);
     const names = new Set(tables.map((t) => t.name));
     expect(names.has('profiles'), 'scanner lost the profiles create-table').toBe(true);

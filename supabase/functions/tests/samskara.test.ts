@@ -14,7 +14,6 @@ const {
   ASSIMILATOR_PROMPT,
   RELATOR_PROMPT,
   MINTER_PROMPT,
-  TIER2_MINTER_PROMPT,
   COMPOUND_SUMMARY_PROMPT,
   SAMSKARA_MODEL,
   TAIL_ASSIMILATE_CAP,
@@ -24,7 +23,7 @@ const {
   PAIR_RELATE_COSINE_FLOOR,
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
-  TIER1_POPULATION_CAP,
+  SAMSKARA_POPULATION_CAP,
   ASSOC_HUBS_PER_TICK,
   buildTopicalCluster,
   buildAssociationCluster,
@@ -97,23 +96,17 @@ Deno.test('relator prompt enumerates all five kinds', () => {
   assert(RELATOR_PROMPT.includes('Bias toward orthogonal'));
 });
 
-Deno.test('both minter prompts share the confirm-gated output shape', () => {
-  for (const prompt of [MINTER_PROMPT, TIER2_MINTER_PROMPT]) {
-    for (const field of [
-      '"confirm"',
-      '"prediction"',
-      '"inner_voice"',
-      '"valence"',
-      '"confidence"',
-    ]) {
-      assert(prompt.includes(field), `missing ${field}`);
-    }
-    assert(prompt.includes('confirm:false'));
+Deno.test('the minter prompt carries the confirm-gated output shape', () => {
+  for (const field of [
+    '"confirm"',
+    '"prediction"',
+    '"inner_voice"',
+    '"valence"',
+    '"confidence"',
+  ]) {
+    assert(MINTER_PROMPT.includes(field), `missing ${field}`);
   }
-  // The tier-2 prompt's distinguishing demand: generalize, never
-  // enumerate the children.
-  assert(TIER2_MINTER_PROMPT.includes('GENERALIZE'));
-  assert(TIER2_MINTER_PROMPT.includes('children'));
+  assert(MINTER_PROMPT.includes('confirm:false'));
 });
 
 // The candor contract. Without it the minter drifts toward flattering,
@@ -126,7 +119,6 @@ Deno.test('minter prompts state the private audience and the candor rule', () =>
   assert(MINTER_PROMPT.includes('the assistant tends to Y with this user'));
   assert(MINTER_PROMPT.includes('Do not take sides'));
   assert(MINTER_PROMPT.includes('welcomes correction or pushback'));
-  assert(TIER2_MINTER_PROMPT.includes('flattering or\nnot'));
 });
 
 // The minter reads whole rounds. Outcomes are where corrections and
@@ -210,7 +202,7 @@ Deno.test('caps and thresholds hold their designed relationships', () => {
   // samskara_collapse_by_cofiring (schema.sql). Drift re-opens the
   // mint/cap-merge treadmill (cap here higher) or freezes minting
   // permanently (cap here lower) - change both together.
-  assertEquals(TIER1_POPULATION_CAP, 150);
+  assertEquals(SAMSKARA_POPULATION_CAP, 150);
   // Bounded small on purpose: each hub is one minter call and the
   // probe runs every sweep tick - the cap IS the spend ceiling.
   assert(ASSOC_HUBS_PER_TICK >= 1 && ASSOC_HUBS_PER_TICK <= 5);
@@ -284,7 +276,6 @@ Deno.test('insertMint stamps the embedding model on every mint row', async () =>
       error: () => {},
       flush: () => Promise.resolve(),
     },
-    1,
     { prediction: 'p', innerVoice: '', valence: 0.1, confidence: 0.9 },
     new Array(2048).fill(0),
     [],

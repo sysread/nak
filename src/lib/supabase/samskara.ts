@@ -41,7 +41,6 @@ import type {
 /** Snake-case shape of a corpus row as it arrives from a select or RPC. */
 interface SamskaraCorpusRpcRow {
   id: string;
-  tier: number;
   prediction: string;
   inner_voice: string | null;
   valence: number | null;
@@ -59,7 +58,6 @@ interface SamskaraCorpusRpcRow {
 function mapSamskaraCorpusRow(r: SamskaraCorpusRpcRow): SamskaraCorpusRow {
   return {
     id: r.id,
-    tier: r.tier,
     prediction: r.prediction,
     innerVoice: r.inner_voice,
     valence: r.valence,
@@ -178,7 +176,7 @@ export async function samskaraListSubstrateForThread(
 }
 
 /**
- * Most recent fire's valence + tier + confidence for a thread, used
+ * Most recent fire's valence + confidence for a thread, used
  * to seed the mood pill on conversation reopen so the user doesn't
  * have to wait for a fresh mint to see anything other than 💤.
  * Filters out fires whose joined samskara has a null valence (rare,
@@ -193,7 +191,7 @@ export async function samskaraListSubstrateForThread(
 export async function samskaraGetLatestFireMood(
   client: SupabaseClient,
   threadId: string
-): Promise<{ valence: number; tier: 1 | 2; confidence: number } | null> {
+): Promise<{ valence: number; confidence: number } | null> {
   // `samskaras!inner` collapses fires whose FK target was deleted
   // out of the result at the DB level, and the
   // `.not('samskaras.valence', 'is', null)` filter additionally
@@ -203,7 +201,7 @@ export async function samskaraGetLatestFireMood(
   // hiding a perfectly good fire one row below.
   const { data, error } = await client
     .from('samskara_fires')
-    .select('samskaras!inner(valence, tier, confidence)')
+    .select('samskaras!inner(valence, confidence)')
     .eq('thread_id', threadId)
     .not('samskaras.valence', 'is', null)
     .order('fired_at', { ascending: false })
@@ -211,7 +209,6 @@ export async function samskaraGetLatestFireMood(
   if (error) throw new SupabaseError(error.message);
   interface EmbeddedMood {
     valence: number | null;
-    tier: number;
     confidence: number | null;
   }
   const rows = (data ?? []) as unknown as {
@@ -226,12 +223,8 @@ export async function samskaraGetLatestFireMood(
     ? (row.samskaras[0] ?? null)
     : row.samskaras;
   if (!joined || joined.valence === null) return null;
-  // Collapse any unexpected tier value to tier 1 so the consumer's
-  // narrow union doesn't drift.
-  const tier: 1 | 2 = joined.tier === 2 ? 2 : 1;
   return {
     valence: joined.valence,
-    tier,
     confidence: joined.confidence ?? 1,
   };
 }
@@ -250,7 +243,7 @@ export async function samskaraListFiresForThread(
   const { data, error } = await client
     .from('samskara_fires')
     .select(
-      'id, cohort_id, samskara_id, score, fired_at, was_confirmed, verdict, user_round, samskaras(tier, prediction, inner_voice, valence, confidence, health)'
+      'id, cohort_id, samskara_id, score, fired_at, was_confirmed, verdict, user_round, samskaras(prediction, inner_voice, valence, confidence, health)'
     )
     .eq('thread_id', threadId)
     .order('fired_at', { ascending: false });
@@ -260,7 +253,6 @@ export async function samskaraListFiresForThread(
   // relationship resolves to one row. Treat either shape uniformly
   // and pick the first match; null when the FK target was deleted.
   interface EmbeddedSamskara {
-    tier: number;
     prediction: string;
     inner_voice: string | null;
     valence: number | null;
@@ -293,7 +285,6 @@ export async function samskaraListFiresForThread(
       userRound: r.user_round,
       samskara: joined
         ? {
-            tier: joined.tier,
             prediction: joined.prediction,
             innerVoice: joined.inner_voice,
             valence: joined.valence,
@@ -359,23 +350,21 @@ export async function samskaraClusterThreadFires(
  * browse list (empty-query regime). `prediction_embedding` is
  * deliberately omitted - 2048 floats x a page of rows is far too fat
  * for a list. Sort maps to a deterministic order; `id` tiebreak keeps
- * cross-page order stable. Optional tier filter.
+ * cross-page order stable.
  */
 export async function listSamskarasPage(
   client: SupabaseClient,
   opts: {
     offset: number;
     pageSize: number;
-    tier?: number | null;
     sort: SamskaraBrowseSort;
   }
 ): Promise<OffsetPage<SamskaraCorpusRow>> {
   let q = client
     .from('samskaras')
     .select(
-      'id, tier, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at'
+      'id, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at'
     );
-  if (opts.tier != null) q = q.eq('tier', opts.tier);
   // Order columns per sort key. last_fired_at is nullable, so
   // recently-fired pushes never-fired rows to the bottom.
   switch (opts.sort) {
@@ -406,19 +395,17 @@ export async function listSamskarasPage(
  * Corpus semantic search: nearest samskaras by cosine on
  * `prediction_embedding`. Plain cosine, NOT the fire-ranking formula -
  * browse wants closest-to-query, not most-likely-to-fire. Optional
- * tier filter. Returns the same shape as the browse list plus a
+ * Returns the same shape as the browse list plus a
  * `cosine` relevance score.
  */
 export async function searchSamskarasByEmbedding(
   client: SupabaseClient,
   embedding: number[],
   kMax: number,
-  tier?: number | null
 ): Promise<SamskaraCorpusRow[]> {
   const { data, error } = await client.rpc('samskara_search_by_prediction', {
     p_query_embedding: embedding,
     p_k_max: kMax,
-    p_tier: tier ?? null,
   });
   if (error) throw new SupabaseError(error.message);
   return ((data ?? []) as SamskaraCorpusRpcRow[]).map(mapSamskaraCorpusRow);
@@ -429,23 +416,21 @@ export async function searchSamskarasByEmbedding(
  * Every samskara is embedded (the column is NOT NULL), so unlike
  * memories there is no disjoint unembedded set - this is purely to
  * surface exact-phrase matches a cosine ranking might bury. Optional
- * tier filter.
+ *
  */
 export async function searchSamskarasByText(
   client: SupabaseClient,
   query: string,
-  limit: number,
-  tier?: number | null
+  limit: number
 ): Promise<SamskaraCorpusRow[]> {
   let q = client
     .from('samskaras')
     .select(
-      'id, tier, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at'
+      'id, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at'
     )
     .ilike('prediction', `%${query}%`)
     .order('health', { ascending: false })
     .limit(limit);
-  if (tier != null) q = q.eq('tier', tier);
   const { data, error } = await q;
   if (error) throw new SupabaseError(error.message);
   return (data ?? []).map(mapSamskaraCorpusRow);
@@ -455,17 +440,15 @@ export async function searchSamskarasByText(
  * Greedy cosine clustering of the corpus for the "hide similar"
  * slider. Returns a map keyed by samskara id; each entry names the
  * cluster sequence (representative shares the lowest seq) and the
- * cluster's size so the UI can render "+N similar". Optional tier
+ * cluster's size so the UI can render "+N similar"
  * filter must match the list's filter so the assignments line up.
  */
 export async function samskaraClusterCorpus(
   client: SupabaseClient,
-  threshold: number,
-  tier?: number | null
+  threshold: number
 ): Promise<Map<string, { seq: number; size: number }>> {
   const { data, error } = await client.rpc('samskara_cluster_corpus', {
     p_threshold: threshold,
-    p_tier: tier ?? null,
   });
   if (error) throw new SupabaseError(error.message);
   const map = new Map<string, { seq: number; size: number }>();
@@ -481,8 +464,7 @@ export async function samskaraClusterCorpus(
 
 /**
  * Resolve a samskara's provenance to labelled rows for the detail
- * view. For a tier-2 compound these are its tier-1 children (label =
- * child prediction); for a tier-1 they're substrate situations and
+ * view. Provenance rows point at substrate situations and
  * association labels. A null label means the target was deleted since
  * minting - the UI renders that as "(removed)".
  */
@@ -499,13 +481,11 @@ export async function samskaraProvenanceDetail(
     ref_id: string;
     weight: number;
     label: string | null;
-    ref_tier: number | null;
   }[]).map((r) => ({
     kind: r.kind as SamskaraProvenanceRow['kind'],
     refId: r.ref_id,
     weight: r.weight,
     label: r.label,
-    refTier: r.ref_tier,
   }));
 }
 
@@ -524,15 +504,12 @@ export async function samskaraHealthSnapshot(
   const r = (Array.isArray(data) ? data[0] : data) as Record<string, number> | null;
   return {
     totalSamskaras: r?.total_samskaras ?? 0,
-    tier1: r?.tier1 ?? 0,
-    tier2: r?.tier2 ?? 0,
     nearDead: r?.near_dead ?? 0,
     neverFired: r?.never_fired ?? 0,
     probationEligible: r?.probation_eligible ?? 0,
     evictable: r?.evictable ?? 0,
     evictableStale: r?.evictable_stale ?? 0,
     evictableUnhealthy: r?.evictable_unhealthy ?? 0,
-    evictableGraduated: r?.evictable_graduated ?? 0,
     associations: r?.associations ?? 0,
     associationsUnconsumed: r?.associations_unconsumed ?? 0,
     substrateTotal: r?.substrate_total ?? 0,
@@ -598,17 +575,3 @@ export async function samskaraVerdictCounts(
   };
 }
 
-/**
- * Health panel readout: how many tier-1 members the tier-2 detector
- * would currently offer the minter (0 = nothing available). Calls the
- * same detection RPC the sweep's mint-tier2 phase uses - a non-empty
- * return with few tier-2s is the signal detection is finding uncovered
- * constellations again (the instrument that would have surfaced the
- * "empty every sweep" stall the lift redesign fixed). The RPC is
- * security-invoker and scopes to auth.uid() with no args.
- */
-export async function samskaraTier2CandidateSize(client: SupabaseClient): Promise<number> {
-  const { data, error } = await client.rpc('samskara_tier2_candidate');
-  if (error) throw new SupabaseError(error.message);
-  return Array.isArray(data) ? data.length : 0;
-}

@@ -16,8 +16,6 @@
 export const SAMSKARA_MINT_EVENT = 'nak:samskara:mint';
 
 export interface SamskaraMintEventDetail {
-  /** Samskara tier (1 minted from substrate, 2 from tier-1 cohorts). */
-  tier: 1 | 2;
   /**
    * Continuous scalar in [-1, 1]. Zero is neutral; positive is a
    * warm / satisfied predictive claim, negative is cool / friction.

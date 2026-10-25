@@ -84,13 +84,12 @@ singleton share (hub picker needs >= 2 distinct partners) plus
 inflow/outflow balance - compute both rates over the last N days, not
 just the level.
 
-### 4. Association graph + recency window -> tier-1 minting
+### 4. Association graph + recency window -> minting
 
 Contract: BOTH mint probes get headroom when they have evidence.
 Headroom = population below cap OR an eviction victim exists.
 
-- Tier-1 count vs cap; `max(created_at)` of tier-1 rows (mint
-  liveness).
+- Count vs cap; `max(created_at)` of rows (mint liveness).
 - Eviction pool: run all victim-tier predicates from
   `samskara_evict_for_mint` (or read the snapshot's evictable
   columns) - all zero while the cap is pinned and evidence waits =
@@ -103,7 +102,7 @@ Headroom = population below cap OR an eviction victim exists.
 Contract: near-identical claims reinforce instead of accumulating;
 behaviorally-redundant pairs get merged by the co-fire collapse.
 
-- Nearest-neighbor cosine distribution across tier-1
+- Nearest-neighbor cosine distribution across the corpus
   (`prediction_embedding <=> ...`): pairs at/above the mint dedup bar
   should be ~0 (they should have become reinforcements or merges).
 - New-mint crowding: for mints in the last ~2 weeks, max cosine to the
@@ -111,32 +110,7 @@ behaviorally-redundant pairs get merged by the co-fire collapse.
   variants of known instincts; check whether the co-fire collapse is
   catching up (are older near-band twins still separate rows?).
 
-### 6. Co-fire graph -> tier-2 aggregation
-
-Contract: recurring co-fire constellations become compounds, and the
-tier-2 minter actually filters (declines exist).
-
-- Tier-2 count and growth rate; decline count
-  (`samskara_tier2_declines`); tier-2 share of corpus. All-confirm
-  with steady growth = rubber-stamp suspicion (open calibration item
-  in `docs/dev/planned-changes.md`).
-- Child overlap: how many compounds share 2+ children with another
-  compound, and the compound-to-nearest-compound claim-centered
-  cosine. The candidate finder's coverage guard skips a group at
-  Jaccard >= 0.50 (lowered from 0.60 on 2026-10-01, when 22 of 26
-  compounds shared 2+ children); compounds never enter the collapse
-  pass, so nothing merges siblings that already exist. Expect the
-  sibling count to stop growing, not to shrink.
-- Parent-wins at fire time (2026-10-01): a compound in the top-k
-  drops its children from that cohort. Suppressed children sit with
-  frozen posteriors until the graduation eviction tier (2026-10-02;
-  compound health >= p0, >= 3.0 evidence, >= 14d) retires them.
-  Check: `evictable_graduated` on the snapshot vs. the hand-run
-  predicate, and whether graduations are actually happening under
-  cap pressure (children of established compounds should be
-  shrinking, not accumulating).
-
-### 7. Corpus -> firing (priming)
+### 6. Corpus -> firing (priming)
 
 Contract: the corpus is REACHABLE (every row's vector shares a
 coordinate space with the query, and firing spreads across the
@@ -207,7 +181,7 @@ Fired well above control = selection works. Parity = retrieval is
 decorative; the rerank / query-rewrite option in planned-changes
 moves to the front. Needs ~100 control rows before calling it.
 
-### 8. Firing -> judging
+### 7. Firing -> judging
 
 Contract: fires get verdicts the NEXT day; the backlog is bounded by
 "today's fires plus still-active threads", not growing without bound.
@@ -221,7 +195,7 @@ Contract: fires get verdicts the NEXT day; the backlog is bounded by
   not-engaged). Not-borne-out ~0 or contradicted ~0 for weeks = the
   judge prompt may have regressed toward a degenerate verdict.
 
-### 9. Judging -> health
+### 8. Judging -> health
 
 Contract: health = confidence = the posterior; low health is earned
 by misses; p0 tracks the aggregate hit rate.
@@ -231,18 +205,18 @@ by misses; p0 tracks the aggregate hit rate.
   toward p0 = evidence not discriminating; everything hugging 1.0 =
   the pre-judge bug shape.
 
-### 10. Population control (the release paths together)
+### 9. Population control (the release paths together)
 
 Contract: probation reap, dead reap, eviction, and collapse together
 keep the corpus turning over - some release path fires within any
 multi-week window of active use.
 
-- Deletions/merges are not directly logged: infer from tier-1 count
+- Deletions/merges are not directly logged: infer from count
   history, `max(created_at)` vs cap pressure, and the evictable/
   probation pools. Zero turnover for weeks at a pinned cap = all
   release paths dry (the 2026-08 failure).
 
-### 11. Corpus -> compound summary and surfaces
+### 10. Corpus -> always-on summary and surfaces
 
 Contract: the compound summary regenerates within its staleness
 ceiling; the Health panel's snapshot mirrors the SQL predicates
@@ -252,7 +226,7 @@ drain).
 - `samskara_compound_summary.last_regen_at` age vs ceiling.
 - Spot-check one snapshot column against its hand-run predicate.
 
-### 12. Cron liveness (the whole engine's clock)
+### 11. Cron liveness (the whole engine's clock)
 
 ```sql
 select j.jobname, max(d.start_time) as last_run, bool_and(d.status = 'succeeded') as ok
