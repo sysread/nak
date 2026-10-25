@@ -261,14 +261,37 @@ SCHEMA (supabase/schema.sql):
    (leading_compounds / covered_children CTEs and the tier
    reference in scored).
 7. Remove 'samskara' from the provenance kind check.
-8. Remove the p_tier param and tier columns from
-   `samskara_search_by_prediction` and `samskara_cluster_corpus`
-   (the debug page's tier filter).
-9. KEEPS: `samskara_compound_summary` + its three regen RPCs
-   (the always-on paragraph; check and strip any tier refs in
-   them), `samskara_reinforce_existing`, the centering family,
-   `samskara_verdict_counts`, `samskara_provenance_detail`.
-10. The evictor's caller-side comments referencing graduation.
+8. Remove the p_tier param and tier columns from the
+   observability and mint RPCs: `samskara_search_by_prediction`
+   AND `samskara_cluster_corpus` (the debug page's tier filter)
+   AND `samskara_nearest_by_prediction` (the mint dedup guard -
+   its tier-1 call sites pass no p_tier, so the strip is
+   behavior-neutral for the surviving path; the p_tier: 2 call
+   dies with mintTier2Probe).
+9. Strip tier from the remaining tier-aware SQL:
+   - `samskara_health_snapshot` (the debug page's Health
+     snapshot RPC: tier1/tier2/evictable_graduated return
+     columns, s.tier filters, the graduation mirror's
+     kind='samskara' provenance join) - consumers: the src
+     slice's tier2 row map and SamskaraHealthPanel.
+   - `samskara_provenance_detail` (KEEP list - strip the
+     ref_tier output column and the kind='samskara' case).
+   - `samskara_collapse_by_cofiring` (tier = 1 filters in both
+     passes - plpgsql, so an unedited body ships green and
+     kills the sweep's dedup phase at first runtime call).
+   - the three surviving eviction branches in
+     `samskara_evict_for_mint` each carry `and s.tier = 1` -
+     strip the predicates (same runtime-death class).
+10. KEEPS: `samskara_compound_summary` + its three regen RPCs
+   (the always-on paragraph; verified tier-blind: no tier filter,
+   column, or payload ref in the regen probe or the RPCs),
+   `samskara_reinforce_existing`, the centering family,
+   `samskara_verdict_counts`.
+11. The evictor's caller-side comments referencing graduation.
+12. tests/schema-grants.test.ts pins `tables.length >= 53` and
+   the retirement removes one table - lower the floor to 52 in
+   the same PR (verify the dml-columns floors survive the
+   removal rather than assuming).
 
 AGENT (supabase/functions/venice/agents/samskara.ts):
 - Remove TIER2_MINTER_PROMPT, mintTier2Probe, the sweep's
@@ -293,15 +316,26 @@ SRC (browser):
 - src/lib/supabase/types/samskara.ts + src/lib/supabase/
   samskara.ts: remove tier from row types, selects, row maps,
   and samskaraGetLatestFireMood; remove the tier param from the
-  observability RPC calls.
+  observability RPC calls; remove the samskaraTier2CandidateSize
+  wrapper (calls the dropped candidate RPC) and the
+  tier2CandidateLabel in src/lib/ui/samskara-health.ts.
 - src/lib/samskara/events.ts + mood.svelte.ts: the MintEvent
   tier field and the mood pill's tier axis (check
   SamskaraMoodSync, SamskaraMoodLegend, SamskaraMood - the pill
   keeps valence and confidence axes; the tier axis goes).
+- The mood-pill tier axis ALSO feeds the shared diagnostics
+  column (DiagnosticPills.svelte class:tier-2 halo, the pill
+  title in src/lib/ui/diagnostic-pills.ts, and
+  tests/diagnostic-pills.test.ts fixtures) - the registry-driven
+  pill surface, per docs/dev/diagnostic-pills.md.
 - src/lib/supabase/realtime.ts: the toast payload tier.
 - Debug page (src/screens/Samskaras.svelte + SamskaraBrowseList,
   CohortPanel, SamskaraHealthPanel + their ui/ modules): remove
   tier badges, tier filters, tier rows; the panels stay.
+- Stragglers the gate will catch, named for completeness: the
+  src/lib/supabase.ts facade (onMint type, mood return, tier
+  params), src/lib/ui/samskara-toasts.ts source tier fields,
+  src/lib/samskara-browse-store.svelte.ts tier state.
 - src/lib/chat/*: the compound-summary paragraph wiring STAYS.
 
 TESTS:
@@ -310,9 +344,11 @@ TESTS:
   (no tier).
 - samskara-mint.test.ts: the publish payload pin (no tier).
 - priming-samskara-format.test.ts + priming-orchestration/
-  payloads: compound-summary block tests STAY; tier refs swept.
+  payloads: compound-summary block tests STAY; tier refs swept
+  (the formatter carries two tier-2 words in comments, not one).
 - vitest: samskara-browse(-store), samskara-events, samskara-
-  health, samskara-toasts - tier fixtures and assertions swept.
+  health, samskara-toasts, AND tests/diagnostic-pills.test.ts
+  (tier fixtures) - tier fixtures and assertions swept.
 
 DOCS AND USE CASES (the sweep the owner called out):
 - docs/dev/samskara.md: tier-2 sections removed (with M0); the
@@ -334,10 +370,13 @@ DOCS AND USE CASES (the sweep the owner called out):
   updated to current behavior.
 - .claude/skills/samskara-audit/SKILL.md: stage 6 (tier-2
   aggregation) removed; the tier-2 checks in stages 4-6 swept.
-- docs/dev/plans/samskara-tier-2-plan.md and the other
-  tier-2-named plans: HISTORICAL archive - one status line each
-  ("retired 2026-10-25"), not deleted (the plans dir is the
-  archive; samskara.md is the living reference).
+- docs/dev/plans/ tier-2-named plans get a one-line "retired
+  2026-10-25" status banner, enumerated (not name-matched):
+  samskara-tier-2-plan.md, samskara-tier2-detection-quality-
+  plan.md, samskara-association-mint-plan.md (tier-2 refs),
+  samskara-observability-section-plan.md (tier-2 + compound
+  refs). Not deleted - the plans dir is the archive; the dev
+  doc is the living reference.
 
 PROD SEQUENCING (with the owner, at deploy time):
 - The snapshot is taken (2026-10-25, decision 5).
@@ -358,9 +397,18 @@ PROD SEQUENCING (with the owner, at deploy time):
 - Measurements (readout gates): hour one - zero tier-2 rows,
   fires per message roughly doubles for the former parts (the
   28 living parts resume firing unsuppressed), the paragraph
-  regenerates. Day 7 - cohort diversity: watch for the
-  pre-2026-10-01 shape (one idea family taking 3-4 of the 11
-  slots; the audit skill's concentration metric is the
+  regenerates, and EVERY sweep phase runs green for the first
+  24 hours (the dedup phase and cap-pressure eviction are the
+  runtime-only breakage class this review caught by grep - the
+  sync going green proves nothing about them). Days 1-7 - the
+  p0 discontinuity: deleting 47 compounds (a lower-confirm-share
+  slice of the evidence pool) RAISES pooled p0 for every
+  survivor, and both death bars are p0-relative - watch the
+  certificate's death counts and reasons histogram for the
+  predicted one-time eviction/reap uptick spreading across the
+  14-day/90-day quiet windows. Day 7 - cohort diversity: watch
+  for the pre-2026-10-01 shape (one idea family taking 3-4 of
+  the 11 slots; the audit skill's concentration metric is the
   instrument). Day 21 - the input to the cap conversation:
   backlog slope, at-cap skip rate, eviction pool composition.
 - Side effects: named above; the paragraph is unchanged in
@@ -413,7 +461,17 @@ verified 2026-10-25 for the retirement:
 - The tier-2 artifact inventory above was grepped file-by-file
   (frontier-model false positives excluded; the samskara
   surface is the list above; e2e has no samskara specs; the
-  bias system's tier vocabulary is its own, untouched).
+  bias system's tier vocabulary is its own, untouched), then
+  reviewed by a fresh-context removal reviewer whose four
+  inventory blockers (samskara_health_snapshot, the
+  provenance_detail strip, samskara_nearest_by_prediction,
+  samskara_collapse_by_cofiring) and the surviving-branch
+  s.tier strips are folded in. The apply is not guaranteed
+  atomic (the sync POSTs the whole file as one query; mid-file
+  failure leaves a partial state) - the mitigation is
+  completeness of the same-file strip (no later statement
+  references the dropped column) plus the file's idempotence:
+  a retry re-applies cleanly from the top.
 
 ## REVIEWER INSTRUCTIONS (for the refinement round on this revision)
 
