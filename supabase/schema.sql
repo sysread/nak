@@ -7325,7 +7325,6 @@ $$;
 -- The chat model's progressively-built predictive model of the user.
 -- Per-round observations (substrate) compound through background
 -- clustering into emergent predictive claims (samskaras); cohorts of
--- samskaras that fire together compound once more into higher-tier
 -- samskaras. The accumulated set is summarised into prose that lives
 -- always-on in the system prompt; per-turn cosine fire surfaces
 -- situationally-relevant samskaras on top.
@@ -7333,7 +7332,7 @@ $$;
 -- See docs/dev/samskara.md for the full design including why the
 -- pieces are split this way, what each phase of the formation worker
 -- does, and the load-bearing gotchas (no health threshold at fire
--- time, log10 dampening of compound regen, recursion cap at tier 2).
+-- time, log10 dampening of compound regen).
 --
 -- Conventions inherited from the rest of this file:
 --   - All tables RLS-scoped to `auth.uid() = user_id`.
@@ -7463,7 +7462,7 @@ create table if not exists public.samskara_associations (
   reinforcement integer not null default 1,
   last_reinforced_at timestamptz not null default now(),
   -- Consumption stamp for the association-mint probe. NULL until the
-  -- edge has been fed to the tier-1 minter; set to now() once it has -
+  -- edge has been fed to the association mint probe; set to now() once it has -
   -- on a fresh mint, a dedup-hit, OR a decline alike. A stamped edge
   -- leaves the candidate pool permanently: substrate is immutable
   -- after assimilation, so this edge's evidence cannot change. Fresh
@@ -7703,47 +7702,12 @@ drop policy if exists "samskara pair declines self-selectable" on public.samskar
 create policy "samskara pair declines self-selectable" on public.samskara_pair_declines
   for select using (auth.uid() = user_id);
 
--- Tier-2 candidate declines --
---
--- Memory of tier-2-minter "confirm:false" verdicts on a co-fire
--- constellation, so detection (samskara_tier2_candidate) advances past
--- a declined group instead of re-offering the SAME strongest-lift group
--- every sweep. Without this, a persistently-declined top candidate
--- starves every weaker uncovered constellation behind it - the
--- coverage skip only knew about MINTED tier-2s, not declines.
---
--- Unlike samskara_pair_declines, this ledger is TTL'd, NOT permanent:
--- the candidate walk only honors a decline within a recency window (see
--- the candidate function's v_decline_ttl). A pair decline is permanent
--- because substrate is immutable, so the verdict can never change. A
--- tier-2 decline is over a CO-FIRE constellation, and the co-fire graph
--- keeps growing - a group the minter rejected as too weak today may
--- accumulate enough joint firing to be worth re-offering later. The TTL
--- is the re-arm: a declined group goes quiet for the window, then
--- re-qualifies.
---
--- `group_key` is the sorted child ids joined with ',' - a stable
--- identity for the constellation so a re-decline upserts (refreshing
--- declined_at, re-arming the window) rather than inserting a duplicate.
--- `children` is the sorted child-id array, read back for the Jaccard
--- overlap test. No per-element FK (arrays can't reference) - a deleted
--- child leaves a stale id in the array, which only weakens the Jaccard
--- match slightly and is cleared by the TTL within the window anyway.
-create table if not exists public.samskara_tier2_declines (
-  user_id uuid not null references auth.users(id) on delete cascade,
-  group_key text not null,
-  children uuid[] not null,
-  declined_at timestamptz not null default now(),
-  primary key (user_id, group_key)
-);
-
-alter table public.samskara_tier2_declines enable row level security;
-
--- Select-only for the owner; writes come exclusively from the venice
--- function's service-role client, same as samskara_pair_declines.
-drop policy if exists "samskara tier2 declines self-selectable" on public.samskara_tier2_declines;
-create policy "samskara tier2 declines self-selectable" on public.samskara_tier2_declines
-  for select using (auth.uid() = user_id);
+-- Retired 2026-10-25: the tier-2 (compound) layer was removed
+-- outright; this drops the minter-decline ledger that existed to
+-- stop the tier-2 candidate probe re-offering declined groups.
+-- The final tier-2 state was snapshotted before removal (see
+-- docs/dev/in-progress/samskara-lifecycle-plan.md, decision 5).
+drop table if exists public.samskara_tier2_declines;
 
 -- Pair-relate seed rotation + partner selection --
 --
@@ -7857,16 +7821,12 @@ grant execute on function public.samskara_pair_probe_candidates(uuid, int, real)
 
 -- Samskaras --
 --
--- The unit. Tier 1 are minted from substrate-cluster mints; tier 2
--- are minted from cohort co-fire patterns of tier-1 samskaras (a
--- compound is a samskara-of-samskaras). The `tier in (1, 2)` check is
--- load-bearing — tier 3+ would be a compounds-of-compounds noise
--- amplifier; lifting the cap should be a deliberate design change,
--- not an oversight.
+-- The unit: short predictive claims minted from substrate clusters
+-- and association edges. (A tier-2 "compound of samskaras" layer was
+-- retired 2026-10-25; the tier column went with it.)
 create table if not exists public.samskaras (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  tier int not null check (tier in (1, 2)),
   -- The minter agent's one-or-two-line predictive claim. This is what
   -- the cosine fire query runs against (via `prediction_embedding`)
   -- and what the priming block actually renders.
@@ -7876,20 +7836,23 @@ create table if not exists public.samskaras (
   -- in the priming block when present; truncated aggressively if the
   -- token budget is tight.
   inner_voice text,
-  -- Aggregated from substrate or child-samskara provenance. Same
-  -- continuous scalar as substrate — no enum.
+  -- Aggregated from substrate provenance at mint time. Same
+  -- continuous scalar as substrate - no enum.
   valence real,
-  -- Bayesian-ish via reaction reinforcement. See
-  -- bump_samskara_confidence and decay_samskara_confidence for the
-  -- formula. Initial 0.5 leaves room for either direction.
+  -- Health and confidence are BOTH the empirical-Bayes posterior of
+  -- the verdict tallies (see samskara_apply_evaluation): at mint a
+  -- row carries the column defaults until its first evidence event
+  -- or the next deploy's reconcile pass snaps both to the posterior.
+  -- They are written identically on every evidence apply; the
+  -- minter's confidence bet survives only in the mint broadcast
+  -- event, never here.
   confidence real not null default 0.5,
-  -- Decays over time and on disconfirm; clamped to [0, 1]. NO health
-  -- threshold filter at fire time — three near-dead samskaras
-  -- co-firing is exactly the cohort-reinforcement signal we want to
-  -- preserve. The fire RPC ranks by cosine^1.3 * sqrt(health *
-  -- confidence) so weak-but-relevant samskaras can break through, and
-  -- the formatPriming token budget bounds the long tail in the
-  -- application layer.
+  -- NO health threshold filter at fire time - three near-dead
+  -- samskaras co-firing is exactly the cohort-reinforcement signal
+  -- we want to preserve. The fire RPC ranks by cosine ramp *
+  -- sqrt(health * confidence) so weak-but-relevant samskaras can
+  -- break through, and the formatPriming token budget bounds the
+  -- long tail in the application layer.
   health real not null default 1.0,
   fire_count int not null default 0,
   -- Verdict tallies are REAL, not integer. samskara_apply_evaluation
@@ -7907,8 +7870,22 @@ create table if not exists public.samskaras (
   updated_at timestamptz not null default now()
 );
 
-create index if not exists samskaras_user_tier_idx
-  on public.samskaras (user_id, tier);
+-- Retired 2026-10-25 with the tier-2 (compound) layer: the tier
+-- column is gone (single-tier corpus), so the tier index goes with
+-- it. Before the drop, a one-shot cleanup deletes the tier-2 rows
+-- (their fires, provenance, and control verdicts cascade) so no
+-- orphaned data survives the column removal. Guarded on the
+-- column existing so it is a no-op after the first apply.
+do $retire_tier2$
+begin
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'samskaras'
+               and column_name = 'tier') then
+    delete from public.samskaras where tier = 2;
+    alter table public.samskaras drop column tier;
+  end if;
+end
+$retire_tier2$;
 
 create index if not exists samskaras_user_health_idx
   on public.samskaras (user_id, health desc, confidence desc);
@@ -7961,18 +7938,29 @@ alter table public.samskaras
 --
 -- Audit trail for what each samskara was minted from. Kept even if
 -- the underlying substrate or association is deleted (no FK on
--- `ref_id`) — debugging beats normalisation here. Three kinds:
--- 'substrate' and 'association' for tier-1 mints, 'samskara' for
--- tier-2 (compound) mints whose provenance points at their tier-1
--- children.
+-- `ref_id`) - debugging beats normalisation here. Two kinds:
+-- 'substrate' and 'association', the mint inputs. (A third kind,
+-- 'samskara' for the retired compound layer, was removed with it;
+-- rows carrying it were cascade-deleted with their compounds.)
 create table if not exists public.samskara_provenance (
   samskara_id uuid not null references public.samskaras(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
-  kind text not null check (kind in ('substrate', 'association', 'samskara')),
+  kind text not null check (kind in ('substrate', 'association')),
   ref_id uuid not null,
   weight real not null default 1.0,
   primary key (samskara_id, kind, ref_id)
 );
+
+-- Re-create the kind check without the retired 'samskara' kind.
+-- The auto-generated constraint name is identical on fresh and
+-- existing databases, so drop-then-add is idempotent both ways;
+-- the loose old check on existing databases is harmless (nothing
+-- writes that kind anymore) but this removes it outright.
+alter table public.samskara_provenance
+  drop constraint if exists samskara_provenance_kind_check;
+alter table public.samskara_provenance
+  add constraint samskara_provenance_kind_check
+  check (kind in ('substrate', 'association'));
 
 alter table public.samskara_provenance enable row level security;
 
@@ -7999,7 +7987,7 @@ alter table public.samskara_provenance
 --
 -- One row per samskara fired per turn. `cohort_id` is shared across
 -- the whole set fired together on a single turn — lets the reaction
--- classifier and the tier-2 mint phase both operate on the cohort as
+-- classifier both operate on the cohort as
 -- a unit. `was_confirmed` starts NULL, set to true/false by the
 -- reaction classifier on the next user turn. Older unresolved fires
 -- (>10 minutes) are left at NULL and age out via decay rather than
@@ -8162,7 +8150,7 @@ create index if not exists samskara_control_verdicts_user_idx
 alter table public.samskara_control_verdicts enable row level security;
 
 -- Select-only for the owner; writes come exclusively from the venice
--- function's service-role client, same as samskara_tier2_declines.
+-- function's service-role client.
 drop policy if exists "samskara control verdicts self-selectable"
   on public.samskara_control_verdicts;
 create policy "samskara control verdicts self-selectable"
@@ -8351,7 +8339,7 @@ $$;
 
 -- Minimum claims before the claim mean is trusted. Below it the mean
 -- is noise over a handful of rows, and the claim-space similarity work
--- (dedup, collapse, tier-2) must SKIP rather than run on raw cosine -
+-- (dedup, collapse) must SKIP rather than run on raw cosine -
 -- see the table comment for why raw is worse than skipping.
 create or replace function public._samskara_claim_centering_min()
 returns int
@@ -8361,7 +8349,7 @@ $$;
 
 -- The claim mean for claim-vs-claim comparisons. Zero vector when the
 -- row is absent OR the claim count is below the floor; callers that
--- must not run on raw cosine (dedup, collapse, tier-2) check
+-- must not run on raw cosine (dedup, collapse) check
 -- _samskara_claim_centering_ready first.
 create or replace function public._samskara_claim_centering_mean(
   p_user_id uuid
@@ -8378,7 +8366,7 @@ $$;
 -- Readiness gate for the claim-space similarity work. False below the
 -- claim floor: samskara_nearest_by_prediction returns no rows (the
 -- minter proceeds without dedup - correct cold start), the collapse
--- and tier-2 RPCs return empty (merging or grouping on raw cosine
+-- and collapse RPCs return empty (merging on raw cosine
 -- would be destructive noise).
 create or replace function public._samskara_claim_centering_ready(
   p_user_id uuid
@@ -8469,8 +8457,8 @@ end $$;
 -- now dominates health in cohort ranking, which is the goal. The 0.30
 -- saturation point therefore sits at the very top of the observed
 -- range and is effectively never reached: cohort ordering is
--- relevance-dominated throughout, with health as a modifier, not a
--- tier above it. If a future register shift pushes message-vs-claim
+-- relevance-dominated throughout, with health as a modifier. If a
+-- future register shift pushes message-vs-claim
 -- centered cosine past the knee, re-check the ramp constant.
 --
 -- Why centered and ramped: raw gte-small cosine between this user's
@@ -8523,7 +8511,6 @@ language sql stable security invoker as $$
   ),
   scored as (
     select s.id,
-           s.tier,
            s.prediction,
            s.inner_voice,
            s.valence,
@@ -8543,32 +8530,6 @@ language sql stable security invoker as $$
      -- auth.uid() (the b-strict overload pattern, as on the bias RPCs).
      where s.user_id = coalesce(p_user_id, auth.uid())
        and s.prediction_embedding is not null
-  ),
-  -- Parent wins: a compound (tier 2) that makes the cut stands in for
-  -- the tier-1 claims it was built from. A compound's vector is a
-  -- blend of its children's, so any message that matches it matches
-  -- them too - measured 2026-10-01 on prod, every one of 272 compound
-  -- fires arrived with ALL of its children in the same cohort, and
-  -- children took a third of the slots in those cohorts. Without this
-  -- rule the cohort narrows to one idea family stated four ways and
-  -- the compound adds a slot instead of saving three. The leading set
-  -- is the unfiltered top-k: a compound there is certainly in the
-  -- final set (dropping its children can only move it up), and a
-  -- compound ranked below the cut keeps its children in play.
-  -- Consequences, by mechanism: a suppressed child's posterior
-  -- freezes (health has no wall clock), so it neither weakens nor is
-  -- reaped on evidence; if the compound later proves wrong and
-  -- samskara_reap_dead removes it, the children simply resume firing.
-  leading_compounds as (
-    select l.id
-      from (select sc.id, sc.tier from scored sc order by sc.score desc limit p_k_max) l
-     where l.tier = 2
-  ),
-  covered_children as (
-    select p.ref_id
-      from public.samskara_provenance p
-      join leading_compounds lc on lc.id = p.samskara_id
-     where p.kind = 'samskara'
   )
   select sc.id,
          sc.prediction,
@@ -8578,7 +8539,6 @@ language sql stable security invoker as $$
          sc.health,
          sc.score
     from scored sc
-   where sc.id not in (select cc.ref_id from covered_children cc)
    order by sc.score desc
    limit p_k_max
 $$;
@@ -9443,7 +9403,7 @@ grant execute on function public.samskara_reap_dead(real, int) to service_role;
 -- genuinely arose at all - the one-off-lookup mints (a burst of
 -- questions about some technology, a single shopping errand) that
 -- otherwise sit at the p0 baseline forever, each holding a capped
--- tier-1 slot.
+-- capped slot.
 --
 -- Why an age window is honest evidence here: measured on the live
 -- corpus (2026-07), samskaras that ever get genuinely tested see their
@@ -9497,7 +9457,7 @@ grant execute on function public.samskara_reap_untested(int) to service_role;
 -- samskara_evict_for_mint reads each stuck fire as "test in flight"
 -- and permanently shields its samskara from every guarded release
 -- path. Both audits that found this measured the same damage:
--- 132 of 150 tier-1 rows shielded (2026-08-10, shape 1), then
+-- 132 of 150 capped rows shielded (2026-08-10, shape 1), then
 -- 65 of 131 still shielded (2026-09-01, shape 2).
 --
 -- The shapes, each identified by a STATE the system itself records,
@@ -9602,7 +9562,7 @@ end $$;
 revoke all on function public.samskara_expire_unjudgeable_fires() from public, anon, authenticated;
 grant execute on function public.samskara_expire_unjudgeable_fires() to service_role;
 
--- Cap-pressure eviction: free one tier-1 slot for a pending mint by
+-- Cap-pressure eviction: free one capped slot for a pending mint by
 -- deleting the corpus's most-disproven untested row. Called by the
 -- mint-tier1 probe only when the population cap blocks a mint, so
 -- eviction happens exactly as fast as formation pressure demands -
@@ -9629,10 +9589,10 @@ grant execute on function public.samskara_expire_unjudgeable_fires() to service_
 -- pressure alive as the corpus matures: weakly-established rows gone
 -- stale. Without it, one genuine test ever is a lifetime pass - a row
 -- that held once and never genuinely engaged again is untouchable by
--- probation (nonzero tally) and by tier one here, and a mature corpus
+-- probation (nonzero tally) and by staleness here, and a mature corpus
 -- fills with exactly those. A stale-tier victim must be:
 --   - genuinely tested at some point (tally > 0 - never-tested rows
---     belong to tier one / probation, not here), but only weakly:
+--     never tested at all), but only weakly:
 --     total tally <= 1.0, i.e. at most one full test's worth of
 --     evidence (a single held is 1.0; a lone soft miss is 0.25). A
 --     row with a real track record is not evictable.
@@ -9674,7 +9634,6 @@ begin
   select s.id into victim
     from public.samskaras s
    where s.user_id = p_user_id
-     and s.tier = 1
      and s.confirm_count = 0
      and s.disconfirm_count = 0
      and s.created_at < now() - interval '14 days'
@@ -9698,7 +9657,6 @@ begin
     select s.id into victim
       from public.samskaras s
      where s.user_id = p_user_id
-       and s.tier = 1
        and s.confirm_count + s.disconfirm_count > 0
        and s.confirm_count + s.disconfirm_count <= 1.0
        and not exists (
@@ -9724,47 +9682,10 @@ begin
     select s.id into victim
       from public.samskaras s
      where s.user_id = p_user_id
-       and s.tier = 1
        and s.health < 0.85 * public.samskara_population_p0(p_user_id)
      order by s.health asc,
        s.confirm_count + s.disconfirm_count desc,
        s.id
-     limit 1;
-  end if;
-  if victim is null then
-    -- Graduation tier: a tier-1 claim whose compound has become
-    -- established. Parent-wins at fire time (samskara_fire_top_k)
-    -- means such a claim no longer fires when its compound does, so
-    -- its posterior is frozen and it holds a capped slot while doing
-    -- no work the compound is not already doing. Once the compound
-    -- has earned its own standing - health at or above the user's
-    -- prior, at least three genuine tests' worth of evidence (the
-    -- k=5 prior strength means its own record now carries real
-    -- weight), and two weeks old - the part retires. Provenance has
-    -- no FK on ref_id, so the compound keeps standing on its own
-    -- record; if the compound later dies, the part re-forms from
-    -- substrate like any claim. Ordered last on purpose: wrong claims
-    -- (the tiers above) leave before merely redundant ones. The
-    -- pending-fire guard stays - a part can still fire on a turn its
-    -- compound misses, and that fire may be a genuine test.
-    select s.id into victim
-      from public.samskaras s
-      join public.samskara_provenance p
-        on p.ref_id = s.id and p.kind = 'samskara' and p.user_id = s.user_id
-      join public.samskaras t
-        on t.id = p.samskara_id and t.tier = 2 and t.user_id = s.user_id
-     where s.user_id = p_user_id
-       and s.tier = 1
-       and t.health >= public.samskara_population_p0(p_user_id)
-       and t.confirm_count + t.disconfirm_count >= 3.0
-       and t.created_at < now() - interval '14 days'
-       and not exists (
-         select 1 from public.samskara_fires f
-          where f.samskara_id = s.id and f.verdict is null
-       )
-     order by s.confirm_count + s.disconfirm_count asc,
-       t.confirm_count + t.disconfirm_count desc,
-       s.created_at asc
      limit 1;
   end if;
   if victim is null then
@@ -10002,20 +9923,23 @@ end $$;
 -- existing row (health bump + appended substrate provenance) instead
 -- of minting a twin. The long-tail fire behaviour (no health-
 -- threshold filter) is unchanged; this only affects MINT, not FIRE.
--- The tier filter was added after the original 2-arg shape shipped;
+-- (A tier filter param, added after the original 2-arg shape,
+-- was removed 2026-10-25 with the retired compound layer.)
 -- drop the old signature so the 3-arg version doesn't create an
 -- overload that PostgREST can't disambiguate.
 drop function if exists public.samskara_nearest_by_prediction(vector, int);
 drop function if exists public.samskara_nearest_by_prediction(vector, int, int);
+-- Drop before recreate: the tier-filter overloads are retired with
+-- the compound layer; only the (vector, int, uuid) shape remains.
+drop function if exists public.samskara_nearest_by_prediction(vector, int, int);
+drop function if exists public.samskara_nearest_by_prediction(vector, int, int, uuid);
 create or replace function public.samskara_nearest_by_prediction(
   p_query_embedding vector(2048),
   p_k_max int,
-  p_tier int default null,
   p_user_id uuid default null
 ) returns table (
   id uuid,
-  cosine real,
-  tier int
+  cosine real
 )
 language sql stable security invoker as $$
   -- Returns the k nearest samskaras by CENTERED cosine similarity
@@ -10038,31 +9962,21 @@ language sql stable security invoker as $$
   -- row comes first; the caller reads `cosine` (1 - distance) for a
   -- threshold check. No index: expression ordering bypasses any
   -- vector index anyway, and this corpus is small by design.
-  --
-  -- p_tier null (the default) searches every tier - the original
-  -- behaviour, used by the tier-1 mint dedup guard where a tier-2
-  -- compound duplicating a tier-1 prediction is still worth catching.
-  -- p_tier = N restricts to that tier, which the tier-2 mint dedup
-  -- guard needs: "is there an existing COMPOUND this close?" can.t be
-  -- answered by post-filtering a global-k list, because nearer tier-1
-  -- rows would crowd a genuine tier-2 twin out of the top k.
   with v_mean as (
     select public._samskara_claim_centering_mean(coalesce(p_user_id, auth.uid())) as v
   )
   select s.id,
-         (1 - ((s.prediction_embedding - m.v) <=> (p_query_embedding - m.v)))::real as cosine,
-         s.tier
+         (1 - ((s.prediction_embedding - m.v) <=> (p_query_embedding - m.v)))::real as cosine
     from public.samskaras s cross join v_mean m
    where public._samskara_claim_centering_ready(coalesce(p_user_id, auth.uid()))
      and s.user_id = coalesce(p_user_id, auth.uid())
      and s.prediction_embedding is not null
-     and (p_tier is null or s.tier = p_tier)
    order by (s.prediction_embedding - m.v) <=> (p_query_embedding - m.v) asc
    limit p_k_max
 $$;
 
 -- Reinforce an existing samskara on re-observation. Called by the
--- mint-tier1 / mint-tier2 dedup paths when the proposed prediction is
+-- mint dedup paths when the proposed prediction is
 -- semantically too close to an existing row. Nudges health up by a
 -- small amount - capped at 1.0 - because a re-observation is a weak
 -- positive signal (the user didn't actively confirm, they just said
@@ -10197,7 +10111,7 @@ begin
    where id = p_loser_id and user_id = p_user_id;
 end $$;
 
--- Maintenance: collapse redundant tier-1 samskaras using co-firing
+-- Maintenance: collapse redundant samskaras using co-firing
 -- as the primary signal, with an embedding-similarity safety cap.
 --
 -- Primary pass ("behavioural redundancy"). Two samskaras that
@@ -10219,7 +10133,7 @@ end $$;
 -- mint-tier1 dedup-reinforce behaviour.
 --
 -- Safety cap ("population overflow"). If the primary pass leaves
--- the tier-1 pool above `p_target_count`, fall through to a pure
+-- the pool above `p_target_count`, fall through to a pure
 -- embedding-cosine greedy merge down to the target, refusing to
 -- merge pairs with cosine < `p_cap_cosine_floor`. This guards
 -- against a diverse-but-overflowing pool where no pair meets the
@@ -10316,8 +10230,6 @@ begin
     join public.samskaras sb on sb.id = pc.b_id
     where sa.user_id = v_uid
       and sb.user_id = v_uid
-      and sa.tier = 1
-      and sb.tier = 1
       and sa.prediction_embedding is not null
       and sb.prediction_embedding is not null
       and (pc.cofires::real / greatest(least(sa.fire_count, sb.fire_count), 1)::real) >= p_min_cofire_ratio
@@ -10351,7 +10263,7 @@ begin
   -- the pool is still over target.
   select count(*) into v_current_count
     from public.samskaras
-   where user_id = v_uid and tier = 1;
+   where user_id = v_uid;
 
   if v_current_count > p_target_count then
     for v_pair in
@@ -10366,8 +10278,6 @@ begin
         on sa.user_id = sb.user_id
        and sa.id < sb.id
       where sa.user_id = v_uid
-        and sa.tier = 1
-        and sb.tier = 1
         and sa.prediction_embedding is not null
         and sb.prediction_embedding is not null
         and (1 - ((sa.prediction_embedding - v_mean) <=> (sb.prediction_embedding - v_mean)))::real >= p_cap_cosine_floor
@@ -10398,357 +10308,17 @@ begin
 
   return v_collapsed;
 end $$;
-
--- Tier-2 (compound) candidate detection -----------------------------------
---
--- Finds ONE recurring co-fire constellation of tier-1 samskaras worth
--- compounding into a tier-2 parent, or returns nothing. The worker's
--- mint-tier2 phase calls this, hands the child predictions to the
--- minter agent, and (if the agent confirms) inserts a tier-2 row whose
--- provenance points back at these children.
---
--- This is the INVERSE of samskara_collapse_by_cofiring, and the two
--- read the same co-fire self-join, so the distinction is load-bearing:
---   - dedup merges pairs that are the SAME claim - high co-fire AND
---     high embedding cosine (>= p_cosine_floor, default 0.70). One is
---     deleted.
---   - tier-2 groups claims that CO-ACTIVATE BUT STAY DISTINCT - high
---     co-fire but cosine strictly BELOW that floor. Nothing is deleted;
---     a parent is added.
--- The cosine band [p_cosine_lo, p_cosine_hi) is the seam. p_cosine_hi
--- MUST stay below dedup's p_cosine_floor or the two phases fight over
--- the same pairs - dedup deleting what tier-2 just grouped.
---
--- Group shape: eligible edges are ranked strongest-LIFT first; the
--- strongest edge whose grown group is large enough AND not already
--- covered by an existing tier-2 seeds the candidate. Around a seed,
--- every node sharing an eligible edge with BOTH seed members joins (up
--- to p_max_group_size, strongest first). Requiring both - not either -
--- keeps the constellation coherent: a node co-firing with only one seed
--- member is adjacent, not part of the pattern.
---
--- Lift gate (the load-bearing selectivity): eligibility is NOT raw
--- co-fire count, and NOT the rarer-member ratio dedup uses. Raw count
--- ranks the busiest predictions to the top - two samskaras that each
--- fire on a large fraction of turns co-fire hundreds of times by base
--- rate alone, with no real association (a forced candidate built that
--- way came back a cross-topic grab-bag of the highest-firing claims:
--- emojis + pork chops + Thai food). dedup's ratio (cofires /
--- min(fires)) does not catch this either: two busy-but-independent
--- predictions still reach ratio ~0.5, because the rarer member is also
--- busy. The measure that DOES isolate association is lift:
---     lift = cofires * v_cohorts / (fire_count_a * fire_count_b)
--- i.e. observed co-fires over co-fires expected under independence.
--- Base-rate binding sits at lift ~1 (at or below chance); genuine
--- co-activation runs several times chance. Eligibility requires
--- lift >= p_min_lift (default 2.0, comfortably above the ~1.5 ceiling
--- the grab-bag pairs reach in production). Lift is a rate ratio, so the
--- threshold stays meaningful as the corpus grows. The companion
--- p_min_cofires floor (raised to 10) is an absolute-mass guard against
--- lift's small-sample variance - a pair firing 4 times that always
--- co-fires scores a huge lift on 4 data points.
---
--- Cosine band [p_cosine_lo, p_cosine_hi): the UPPER bound is
--- load-bearing - it MUST stay below dedup's p_cosine_floor (above) or
--- the two phases fight over the same pairs. The LOWER bound is currently
--- non-binding: every prediction shares the "In situations like X, this
--- user tends to Y" template, which floors pairwise prediction-cosine
--- around 0.38, so no co-firing pair sits below p_cosine_lo = 0.30.
--- Coherence is carried by the lift gate, not this floor; the band's only
--- live job is keeping tier-2 out of dedup's territory. (Do not "fix" the
--- floor by raising p_cosine_lo - prediction-cosine is template
--- similarity, not topical similarity, so a higher floor filters noise,
--- not for coherence.)
---
--- Seed iteration (coverage): a candidate group whose child-set overlaps
--- a COVERED region by Jaccard >= p_overlap_skip is SKIPPED, and
--- detection advances to the next-strongest uncovered seed rather than
--- giving up. The threshold is 0.50 so that two three-child groups
--- sharing two children (Jaccard exactly 2/4) count as the same region:
--- at the earlier 0.60 they did not, and the first clean month after the
--- 2026-09 reset minted 26 compounds over 35 distinct children, 22 of
--- them sharing two or more children with another compound - sibling
--- compounds restating one constellation, which nothing downstream
--- merges (compounds never enter the co-fire collapse). A covered region is either an existing tier-2's child-set
--- (already compounded) OR a recent tier-2-minter decline (the minter
--- just rejected that group and would reject it again - see
--- samskara_tier2_declines, TTL'd so a strengthening group re-qualifies
--- after the window). Without the existing-tier-2 skip, once one tier-2
--- exists the single strongest edge sits in the densest (already-
--- compounded) region forever, the skip fires every cycle, and detection
--- returns empty permanently while many uncovered constellations
--- elsewhere go unseen. Without the decline skip, a group the minter
--- keeps refusing re-wins the seed every sweep and starves every weaker
--- uncovered constellation behind it. The probe budget scales with the
--- covered-region count (existing tier-2s + recent declines) so the
--- first uncovered, non-declined seed is always reachable. The mint
--- phase's embedding dedup is the second net (it catches a different
--- child set that synthesized to the same claim).
---
--- Volatile (not stable): builds temp edge + existing-child-set tables so
--- the seed loop, neighbour scans, and per-member weight read hit the
--- eligible self-join once rather than per iteration. `on commit drop`
--- scopes them to the PostgREST call's transaction.
+-- Retired 2026-10-25 with the tier-2 (compound) layer: the
+-- candidate detection RPC (co-fire constellations, lift gate,
+-- centered-cosine band, Jaccard coverage guard over child lists and
+-- the decline ledger) is dropped with it. The final tier-2 state was
+-- snapshotted before removal (docs/dev/in-progress/
+-- samskara-lifecycle-plan.md, decision 5).
 drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real);
 drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real, uuid);
 drop function if exists public.samskara_tier2_candidate(int, real, real, real, int, int, real, uuid);
-create or replace function public.samskara_tier2_candidate(
-  p_min_cofires      int  default 10,
-  p_min_lift         real default 2.0,
-  -- CENTERED-cosine band (see samskara_centering): "related but
-  -- distinct". Lower bound at the labeled unrelated/related boundary
-  -- (~0.09, 2026-09-05 probe set); upper bound below the
-  -- same-idea-family zone (~0.35+) so constellations generalize from
-  -- genuinely distinct claims, not near-copies. The lift criterion is
-  -- the real filter; the band just keeps the LLM call on-topic.
-  p_cosine_lo        real default 0.10,
-  p_cosine_hi        real default 0.35,
-  p_min_group_size   int  default 3,
-  p_max_group_size   int  default 6,
-  p_overlap_skip     real default 0.50,
-  p_user_id          uuid default null
-) returns table (
-  samskara_id uuid,
-  prediction text,
-  valence real,
-  cofire_weight real
-)
-language plpgsql security invoker as $$
-declare
-  v_uid uuid := coalesce(p_user_id, auth.uid());
-  v_active int;
-  v_cohorts int;
-  v_existing_count int;
-  v_decline_count int;
-  v_seed record;
-  v_extra uuid[];
-  v_group uuid[];
-  v_max_overlap real;
-  v_mean vector(2048);
-  -- How long a tier-2-minter decline suppresses re-offering its group.
-  -- TTL'd (not permanent like pair-declines) because the co-fire graph
-  -- keeps growing: a group too weak to compound today may accumulate
-  -- enough joint firing to be worth re-offering after the window. See
-  -- samskara_tier2_declines.
-  v_decline_ttl constant interval := interval '7 days';
-begin
-  -- Cold-start gate: the cosine band is meaningless on raw scale (raw
-  -- claim-claim similarity never enters the band), so below the
-  -- claim-mean floor this probe must SKIP, not fall back to raw.
-  if not public._samskara_claim_centering_ready(v_uid) then
-    return;
-  end if;
-  v_mean := public._samskara_claim_centering_mean(v_uid);
-  -- Cheap precondition before the costly self-join: tier-2 is
-  -- meaningless until a substantial tier-1 corpus has actually fired.
-  -- Floor at min-group-size + 1 so a group can even form.
-  select count(*) into v_active
-    from public.samskaras
-   where user_id = v_uid and tier = 1 and fire_count > 0;
-  if v_active < greatest(p_min_group_size + 1, 8) then
-    return;
-  end if;
+drop function if exists public.samskara_tier2_candidate();
 
-  -- Total fire cohorts - the denominator for the lift gate. Lift =
-  -- observed co-fires / co-fires expected under independence
-  -- (fires_a * fires_b / v_cohorts): how many times more often a pair
-  -- fires together than chance. Computed once; used in the edge filter.
-  select count(distinct cohort_id) into v_cohorts
-    from public.samskara_fires
-   where user_id = v_uid;
-  if coalesce(v_cohorts, 0) = 0 then
-    return;
-  end if;
-
-  -- Eligible edges materialized once. Each is a tier-1<->tier-1 pair
-  -- that co-fires in >= p_min_cofires cohorts (an absolute-mass floor
-  -- that controls the small-sample variance of lift - a pair firing 4
-  -- times that always co-fires scores a huge lift on 4 data points),
-  -- clears the lift gate (>= p_min_lift times more co-firing than
-  -- independence predicts - genuine association, not two busy
-  -- predictions colliding by base rate), AND whose prediction-embedding
-  -- cosine sits in the [lo, hi) band - strictly below hi (dedup's
-  -- floor) so we only ever group claims dedup deliberately leaves
-  -- distinct. The lo bound is non-binding in practice (the prediction
-  -- template floors cosine ~0.38); the lift gate, not lo, is what keeps
-  -- base-rate noise out. See the preamble.
-  create temporary table if not exists _tier2_edges (
-    a_id uuid,
-    b_id uuid,
-    cofires int,
-    lift real
-  ) on commit drop;
-  -- TRUNCATE, not an unqualified DELETE: PostgREST connections can
-  -- preload pg-safeupdate (the local stack does), which rejects
-  -- DELETE without a WHERE clause even inside function bodies -
-  -- SQLSTATE 21000 on every call, which is how this function spent
-  -- weeks never running locally. TRUNCATE is a different command
-  -- class safeupdate doesn't hook, and is faster besides.
-  truncate _tier2_edges;
-  insert into _tier2_edges (a_id, b_id, cofires, lift)
-  with pair_cofires as (
-    select least(f1.samskara_id, f2.samskara_id) as a_id,
-           greatest(f1.samskara_id, f2.samskara_id) as b_id,
-           count(*)::int as cofires
-      from public.samskara_fires f1
-      join public.samskara_fires f2
-        on f1.cohort_id = f2.cohort_id
-       and f1.samskara_id < f2.samskara_id
-     where f1.user_id = v_uid
-       and f2.user_id = v_uid
-     group by 1, 2
-     having count(*) >= p_min_cofires
-  )
-  select pc.a_id, pc.b_id, pc.cofires,
-         (pc.cofires::real * v_cohorts::real
-            / greatest(sa.fire_count::real * sb.fire_count::real, 1)::real)::real as lift
-    from pair_cofires pc
-    join public.samskaras sa on sa.id = pc.a_id
-    join public.samskaras sb on sb.id = pc.b_id
-   where sa.user_id = v_uid
-     and sb.user_id = v_uid
-     and sa.tier = 1
-     and sb.tier = 1
-     and sa.prediction_embedding is not null
-     and sb.prediction_embedding is not null
-     and (pc.cofires::real * v_cohorts::real
-            / greatest(sa.fire_count::real * sb.fire_count::real, 1)::real) >= p_min_lift
-     and (1 - ((sa.prediction_embedding - v_mean) <=> (sb.prediction_embedding - v_mean)))::real >= p_cosine_lo
-     and (1 - ((sa.prediction_embedding - v_mean) <=> (sb.prediction_embedding - v_mean)))::real <  p_cosine_hi;
-
-  -- Existing tier-2 child-sets, materialized once. The seed loop tests
-  -- each candidate group's Jaccard overlap against these to skip
-  -- already-compounded regions.
-  create temporary table if not exists _tier2_existing (
-    t2_id uuid,
-    children uuid[]
-  ) on commit drop;
-  truncate _tier2_existing;
-  insert into _tier2_existing (t2_id, children)
-    select sp.samskara_id, array_agg(sp.ref_id)
-      from public.samskara_provenance sp
-      join public.samskaras s2 on s2.id = sp.samskara_id
-     where sp.user_id = v_uid
-       and sp.kind = 'samskara'
-       and s2.tier = 2
-     group by sp.samskara_id;
-  select count(*) into v_existing_count from _tier2_existing;
-
-  -- Recent tier-2-minter declines, materialized once. A group whose
-  -- child-set overlaps one of these by Jaccard >= p_overlap_skip is
-  -- skipped exactly like a minted-tier2-covered group - that is what
-  -- stops detection re-offering a declined constellation every sweep.
-  -- Only declines inside v_decline_ttl count; older ones have re-armed
-  -- (the co-fire structure may have shifted), so the group re-qualifies.
-  create temporary table if not exists _tier2_declined (
-    children uuid[]
-  ) on commit drop;
-  truncate _tier2_declined;
-  insert into _tier2_declined (children)
-    select d.children
-      from public.samskara_tier2_declines d
-     where d.user_id = v_uid
-       and d.declined_at >= now() - v_decline_ttl;
-  select count(*) into v_decline_count from _tier2_declined;
-
-  -- Seed iteration. Walk eligible edges strongest-LIFT first - NOT raw
-  -- co-fire: raw co-fire ranks the busiest base-rate-bound pairs to the
-  -- top, which is what produced the original cross-topic grab-bag. The
-  -- first seed whose grown group is both large enough and uncovered
-  -- wins. Deterministic tie-break on the ids so repeated calls pick the
-  -- same order when lift ties. Probe budget = 64 + 16 per covered
-  -- region, where a covered region is an existing tier-2 OR a recent
-  -- decline: each covers up to C(size,2) of the strongest edges (<= 15
-  -- at size 6), so 16 apiece keeps the first uncovered, non-declined
-  -- seed reachable as covered regions accumulate; the 64 base covers
-  -- the common no/one-tier-2 case. Declines count for the same reason
-  -- minted tier-2s do - a declined group sits among the strongest seeds
-  -- and gets skipped, consuming budget on the way to a fresh one.
-  for v_seed in
-    select e.a_id, e.b_id
-      from _tier2_edges e
-     order by e.lift desc, e.a_id, e.b_id
-     limit (64 + 16 * (v_existing_count + v_decline_count))
-  loop
-    -- Grow: nodes sharing an eligible edge with BOTH seed members,
-    -- strongest combined LIFT first, capped at the group budget. Lift,
-    -- not raw co-fire, for the same reason as the seed ordering - the
-    -- group should accrete the most genuinely-associated neighbours,
-    -- not the busiest.
-    select coalesce(array_agg(node order by w desc), array[]::uuid[])
-      into v_extra
-      from (
-        select i.node, sum(i.lift)::real as w
-          from (
-            select a_id as node, b_id as other, lift from _tier2_edges
-            union all
-            select b_id as node, a_id as other, lift from _tier2_edges
-          ) i
-         where i.other in (v_seed.a_id, v_seed.b_id)
-           and i.node not in (v_seed.a_id, v_seed.b_id)
-         group by i.node
-        having count(distinct i.other) = 2
-         order by w desc
-         limit greatest(p_max_group_size - 2, 0)
-      ) picked;
-
-    v_group := array[v_seed.a_id, v_seed.b_id] || v_extra;
-    if coalesce(array_length(v_group, 1), 0) < p_min_group_size then
-      continue;
-    end if;
-
-    -- Coverage: max Jaccard of this group against every covered region -
-    -- existing tier-2 child-sets AND recent minter declines. Skip to the
-    -- next-strongest seed if any covers it. Declines sit in the same test
-    -- as minted tier-2s because both mean "do not offer this group": a
-    -- minted one is already compounded, a recently-declined one the
-    -- minter just rejected and would reject again within the window.
-    select coalesce(max(
-      cardinality(array(
-        select unnest(v_group) intersect select unnest(x.children)
-      ))::real
-      / nullif(cardinality(array(
-          select unnest(v_group) union select unnest(x.children)
-        )), 0)::real
-    ), 0) into v_max_overlap
-      from (
-        select children from _tier2_existing
-        union all
-        select children from _tier2_declined
-      ) x;
-    if v_max_overlap >= p_overlap_skip then
-      continue;
-    end if;
-
-    -- Uncovered winner. Emit the members with a per-member weight =
-    -- summed co-fire count of that member's eligible edges to the rest
-    -- of the group. Becomes the provenance weight on the minted tier-2's
-    -- child links; the compound's own valence is the minter agent's
-    -- call, not a weighted mean here. One candidate per call: return.
-    return query
-      with mem as (
-        select unnest(v_group) as mid
-      ),
-      weighted as (
-        select m.mid,
-               coalesce(sum(e.cofires), 0)::real as cw
-          from mem m
-          left join _tier2_edges e
-            on (e.a_id = m.mid and e.b_id = any(v_group))
-            or (e.b_id = m.mid and e.a_id = any(v_group))
-         group by m.mid
-      )
-      select s.id, s.prediction, s.valence, w.cw
-        from weighted w
-        join public.samskaras s
-          on s.id = w.mid
-         and s.user_id = v_uid;
-    return;
-  end loop;
-
-  -- No uncovered constellation among the probed seeds.
-  return;
-end $$;
 
 -- Observability reads -----------------------------------------------------
 --
@@ -10763,7 +10333,7 @@ end $$;
 -- sqrt(health*confidence) * sample-size that samskara_fire_top_k uses).
 -- Browse wants "closest to what I typed"; folding health/confidence in
 -- would bury the weak-but-relevant samskaras the operator most wants to
--- find. Optional tier filter. Returns the display fields the list and
+-- find. Returns the display fields the list and
 -- detail views render, plus cosine for an optional relevance readout.
 -- Drop before recreate: the confirm/disconfirm columns widened from
 -- int to real (see the samskaras table comment), and Postgres refuses
@@ -10771,13 +10341,12 @@ end $$;
 -- int return type here would re-truncate the real column values on the
 -- way out, re-introducing the exact frozen-tally bug downstream.
 drop function if exists public.samskara_search_by_prediction(vector, int, int);
+drop function if exists public.samskara_search_by_prediction(vector, int);
 create or replace function public.samskara_search_by_prediction(
   p_query_embedding vector(2048),
-  p_k_max int,
-  p_tier int default null
+  p_k_max int
 ) returns table (
   id uuid,
-  tier int,
   prediction text,
   inner_voice text,
   valence real,
@@ -10794,14 +10363,13 @@ language sql stable security invoker as $$
   with v_mean as (
     select public._samskara_claim_centering_mean(auth.uid()) as v
   )
-  select s.id, s.tier, s.prediction, s.inner_voice, s.valence,
+  select s.id, s.prediction, s.inner_voice, s.valence,
          s.confidence, s.health, s.fire_count, s.confirm_count,
          s.disconfirm_count, s.last_fired_at, s.created_at,
          (1 - ((s.prediction_embedding - m.v) <=> (p_query_embedding - m.v)))::real as cosine
     from public.samskaras s cross join v_mean m
    where s.user_id = auth.uid()
      and s.prediction_embedding is not null
-     and (p_tier is null or s.tier = p_tier)
    order by (s.prediction_embedding - m.v) <=> (p_query_embedding - m.v) asc
    limit p_k_max
 $$;
@@ -10814,15 +10382,14 @@ $$;
 -- strongest member because we walk health-then-confidence first) and
 -- folds the rest under a "+N similar" affordance. Seeds are never
 -- re-evaluated, so cluster_seq is deterministic across calls at a given
--- threshold and the renderer can cache by it. Optional tier filter.
+-- threshold and the renderer can cache by it.
 --
 -- Cost is O(n * seeds) from the per-(row, seed) embedding reload, same
 -- as the thread version. The corpus is small by design (dedup targets
--- ~150 tier-1), and this only runs when the slider is engaged, so the
+-- ~150 claims), and this only runs when the slider is engaged, so the
 -- naive reload is fine - not on any hot path.
 create or replace function public.samskara_cluster_corpus(
-  p_threshold real,
-  p_tier int default null
+  p_threshold real
 ) returns table (
   samskara_id uuid,
   cluster_seq int,
@@ -10855,8 +10422,7 @@ begin
       from public.samskaras s
      where s.user_id = v_uid
        and s.prediction_embedding is not null
-       and (p_tier is null or s.tier = p_tier)
-     order by s.health desc, s.confidence desc, s.id
+       order by s.health desc, s.confidence desc, s.id
   loop
     v_emb := rec.embedding;
     v_best_cos := -1.0;
@@ -10892,8 +10458,7 @@ begin
         from public.samskaras s
        where s.user_id = v_uid
          and s.prediction_embedding is not null
-         and (p_tier is null or s.tier = p_tier)
-    ),
+        ),
     sizes as (
       select a_seq, count(*)::int as a_size
         from assigned
@@ -10906,34 +10471,33 @@ begin
 end $$;
 
 -- Resolve a samskara's provenance rows to human-readable labels for the
--- Corpus detail view. Tier-2 compounds carry kind='samskara' rows
--- pointing at their tier-1 children (label = child prediction, plus the
--- child's tier); tier-1 carry 'substrate' (label = situation) and
+-- Corpus detail view. (A third kind, 'samskara' for the retired
+-- compound layer, was removed with it.)
+-- Rows carry 'substrate' (label = situation) or
 -- 'association' (label = articulated_relation). ref_id has no FK, so a
 -- target deleted since minting yields a null label - the UI renders
 -- that as "(removed)". `asc2` alias because `asc` is reserved.
+-- Drop before recreate: the ref_tier output column was removed with
+-- the compound layer, and CREATE OR REPLACE cannot change a
+-- function's OUT columns.
+drop function if exists public.samskara_provenance_detail(uuid);
 create or replace function public.samskara_provenance_detail(
   p_samskara_id uuid
 ) returns table (
   kind text,
   ref_id uuid,
   weight real,
-  label text,
-  ref_tier int
+  label text
 )
 language sql stable security invoker as $$
   select p.kind,
          p.ref_id,
          p.weight,
          case p.kind
-           when 'samskara' then cs.prediction
            when 'substrate' then sub.situation
            when 'association' then asc2.articulated_relation
-         end as label,
-         cs.tier as ref_tier
+         end as label
     from public.samskara_provenance p
-    left join public.samskaras cs
-      on p.kind = 'samskara' and cs.id = p.ref_id and cs.user_id = auth.uid()
     left join public.samskara_substrate sub
       on p.kind = 'substrate' and sub.id = p.ref_id and sub.user_id = auth.uid()
     left join public.samskara_associations asc2
@@ -11016,15 +10580,12 @@ drop function if exists public.samskara_health_snapshot();
 create or replace function public.samskara_health_snapshot()
 returns table (
   total_samskaras int,
-  tier1 int,
-  tier2 int,
   near_dead int,
   never_fired int,
   probation_eligible int,
   evictable int,
   evictable_stale int,
   evictable_unhealthy int,
-  evictable_graduated int,
   associations int,
   associations_unconsumed int,
   substrate_total int,
@@ -11040,10 +10601,6 @@ language sql stable security invoker as $$
   select
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid())::int,
-    (select count(*) from public.samskaras s
-      where s.user_id = auth.uid() and s.tier = 1)::int,
-    (select count(*) from public.samskaras s
-      where s.user_id = auth.uid() and s.tier = 2)::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid() and s.health < 0.2)::int,
     (select count(*) from public.samskaras s
@@ -11061,7 +10618,6 @@ language sql stable security invoker as $$
         ))::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid()
-        and s.tier = 1
         and s.confirm_count = 0 and s.disconfirm_count = 0
         and s.created_at < now() - interval '14 days'
         and not exists (
@@ -11072,7 +10628,6 @@ language sql stable security invoker as $$
               where f.samskara_id = s.id and f.verdict is not null) >= 10)::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid()
-        and s.tier = 1
         and s.confirm_count + s.disconfirm_count > 0
         and s.confirm_count + s.disconfirm_count <= 1.0
         and not exists (
@@ -11085,37 +10640,11 @@ language sql stable security invoker as $$
             < now() - interval '90 days')::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid()
-        and s.tier = 1
         -- samskara_population_p0 inlined and scoped to auth.uid(): the
         -- standalone function is service-role only (its p_user_id param
         -- would let any signed-in caller probe another user's prior),
         -- and this snapshot runs security invoker.
         and s.health < 0.85 * (
-          select case
-            when coalesce(sum(p.confirm_count + p.disconfirm_count), 0) < 20.0 then 0.66
-            else sum(p.confirm_count) / nullif(sum(p.confirm_count + p.disconfirm_count), 0)
-          end
-          from public.samskaras p
-          where p.user_id = auth.uid()
-        ))::int,
-    -- Graduation tier mirror: a tier-1 part of an established compound
-    -- (compound health >= p0, >= 3.0 evidence, >= 14 days old), with no
-    -- fire awaiting judgment. Same inlined, auth.uid()-scoped p0 as
-    -- the tier above, for the same reason.
-    (select count(distinct s.id) from public.samskaras s
-      join public.samskara_provenance pv
-        on pv.ref_id = s.id and pv.kind = 'samskara' and pv.user_id = s.user_id
-      join public.samskaras t
-        on t.id = pv.samskara_id and t.tier = 2 and t.user_id = s.user_id
-      where s.user_id = auth.uid()
-        and s.tier = 1
-        and t.confirm_count + t.disconfirm_count >= 3.0
-        and t.created_at < now() - interval '14 days'
-        and not exists (
-          select 1 from public.samskara_fires f
-           where f.samskara_id = s.id and f.verdict is null
-        )
-        and t.health >= (
           select case
             when coalesce(sum(p.confirm_count + p.disconfirm_count), 0) < 20.0 then 0.66
             else sum(p.confirm_count) / nullif(sum(p.confirm_count + p.disconfirm_count), 0)
@@ -14443,7 +13972,7 @@ create policy "agent-run channel: owner subscribe" on realtime.messages
 
 -- Same owner-subscribe shape for the samskara mint-toast channel. The
 -- venice function publishes a 'samskara-mint' event to 'samskaras:<uuid>'
--- when insertMint lands a fresh tier-1/tier-2 row; the browser pops the
+-- when insertMint lands a fresh row; the browser pops the
 -- mood-pill toast. This replaced a postgres_changes INSERT subscription
 -- on the samskaras table: the table's fire-bookkeeping UPDATE churn made
 -- it the heaviest table for realtime.list_changes to decode, so it was
@@ -15623,7 +15152,7 @@ end
 $cron$;
 
 -- Hourly samskara formation sweep: the catch-up driver behind the
--- chat-turn tail (and the ONLY driver for mint-tier2, dedup, and
+-- chat-turn tail (and the ONLY driver for dedup and
 -- compound-regen). Same vault -> pg_net dispatch shape as the other
 -- sweep triggers.
 create or replace function public.nak_trigger_samskara_sweep()
@@ -15738,7 +15267,7 @@ $cron$;
 -- samskara_reap_dead deletes repeatedly-contradicted, long-quiet
 -- samskaras; samskara_reap_untested deletes never-genuinely-tested rows
 -- past the 45-day probation window (the one-off-lookup mints that would
--- otherwise hold tier-1 slots at the p0 baseline forever).
+-- otherwise hold capped slots at the p0 baseline forever).
 -- Tested-and-baseline rows are spared by both. Was :13/:43; one pass a
 -- day's worth of cadence suffices, so a single :13 tick runs all three
 -- in one statement.
