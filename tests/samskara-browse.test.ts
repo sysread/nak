@@ -293,7 +293,7 @@ describe('releaseStatus', () => {
         now,
         { activatedAt: null, backfillAttempts: 8 }
       );
-      expect(s).toMatch(/releases at the next hourly sweep/);
+      expect(s).toMatch(/the hourly reaper collects it/);
     });
 
     it('an activated row falls through to the existing branches', () => {

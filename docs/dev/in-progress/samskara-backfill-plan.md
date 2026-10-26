@@ -89,8 +89,9 @@ but not its value; the cap revisit reads this plan's M5 data.
 8. "Warming up" is the user-facing copy for a QUARANTINED row with
    attempts remaining; a budget-spent never-engaged row reads
    "warmed up - history never engaged this claim" (still
-   QUARANTINED mechanically - it dies at the reaper). The state's
-   name everywhere mechanical is QUARANTINED.
+   QUARANTINED mechanically - it dies at the reaper; the copy says
+   so rather than borrowing the activation word "release"). The
+   state's name everywhere mechanical is QUARANTINED.
 
 ## STATE AND TRANSITION MATRIX
 

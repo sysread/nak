@@ -307,8 +307,8 @@ export function releaseStatus(
     const ageDays = (nowMs - new Date(createdAt).getTime()) / 86_400_000;
     const remaining = Math.ceil(PROBATION_DAYS - ageDays);
     return remaining <= 0
-      ? 'warmed up - history never engaged this claim; releases at the next hourly sweep'
-      : `warmed up - history never engaged this claim; probation in ${remaining}d`;
+      ? 'warmed up - history never engaged this claim; the hourly reaper collects it'
+      : `warmed up - history never engaged this claim; release at probation in ${remaining}d`;
   }
   const { judged, genuine } = engagementSummary(counts);
   if (genuine > 0) {

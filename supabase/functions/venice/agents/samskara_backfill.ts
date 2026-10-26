@@ -186,6 +186,7 @@ async function tickOneClaim(
           backfill_claim_expires: null,
         })
         .eq('id', row.id)
+        .eq('backfill_claim_holder', holderId)
         .is('activated_at', null);
       if (actErr) throw new Error(`empty-corpus activation failed: ${actErr.message}`);
       log.debug(`backfill: claim ${row.id} activated on empty corpus`);
