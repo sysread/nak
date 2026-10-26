@@ -153,7 +153,7 @@ these deltas. Each row verified against the source this drafting.
 | Model | EVALUATION_MODEL = BIG_WINDOW_MODEL (agent-models.ts:71, samskara_evaluation.ts:38,559). | Same model constant. |
 | Parse defense | JSON parse; malformed/missing/out-of-enum entries dropped silently (parseVerdicts). | Reused - the symbols are exported from the same module (M3). |
 | Discount | Evidence aged by d per genuine test, inside apply_evaluation. | Same discount math inside apply_backfill; a claim's backfill attempts fold in one batch (one discount event per tick), vs the live judge's once-per-thread. Comment in the fold RPC. |
-| Reuse mechanics | parseVerdicts / buildVerdictRequest / VerdictKind are module-private. | Exported from samskara_evaluation.ts; the backfill agent is the export's first (and currently only) external consumer. |
+| Reuse mechanics | parseVerdicts / buildVerdictRequest / VerdictKind are module-private (test-reachable only via the __test namespace). | Promoted to top-level production exports of samskara_evaluation.ts; the backfill agent is their first production consumer. |
 
 ## VERIFIED MECHANICS THIS PLAN BUILDS ON
 
@@ -202,12 +202,17 @@ these deltas. Each row verified against the source this drafting.
   outcome) and the skeptical bias exist because prod data killed
   their absence (92.5% held-rate incident; agents/
   samskara_evaluation.ts:141-161).
-- Mint provenance resolves to threads: samskara_provenance kinds
-  ('substrate', 'association') carry ref_id into
-  samskara_substrate rows, which carry thread_id
-  (schema.sql:7354-7380, 7945-7950). Substrate pointers are SOFT -
-  they survive message deletion (schema.sql:7358-7363), so
-  candidate retrieval must join to messages for existence.
+- Mint provenance resolves to threads by TWO paths:
+  samskara_provenance kind 'substrate' carries ref_id directly into
+  a samskara_substrate row (thread_id at schema.sql:7357); kind
+  'association' carries ref_id into samskara_associations
+  (:7453), whose a_id/b_id point into substrate - a TWO-hop join.
+  The birthplace exclusion must resolve both paths; a one-hop join
+  silently matches nothing for association-minted claims, which
+  are exactly the claims that have association provenance.
+  Substrate pointers are SOFT - they survive message deletion
+  (schema.sql:7358-7363), so candidate retrieval must join to
+  messages for existence.
 - The claim-RPC pattern is the house mutual-exclusion primitive
   (per-row claim columns + claim RPC + guarded save). The substrate
   table already carries TWO independent claim pairs for its two
@@ -268,6 +273,12 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   model text. ON DELETE CASCADE on samskara_id (house pattern,
   mirrors fires): the ledger is historical-only, a merged or dead
   claim's rows go with it, and M5 readouts accept the attrition.
+  UNIQUE (samskara_id, user_message_id) - the candidate-exclusion
+  key, doubled as the double-judge guard (the fires unique-
+  constraint precedent, schema.sql:8183-8189). Index on (user_id,
+  judged_at desc) for the M5 agreement joins and "n of m" counts
+  (mirrors samskara_control_verdicts_user_idx, :8147-8148). CHECK
+  verdict in the four kinds (mirrors control_verdicts, :8142-8143).
   RLS: owner-selectable, service-role writes. This table is the
   audit ledger (decision 3) and the candidate-exclusion and
   gate-check input.
@@ -282,8 +293,11 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   fire path's register), ordered cosine desc, where centered
   cosine >= p_floor (0.05 initial; re-derived on a labeled
   message-vs-claim probe set before deploy), EXCLUDING: rounds in
-  threads reachable from the claim's samskara_provenance rows
-  (decision 4), rounds whose user_message_id no longer resolves to
+  threads reachable from the claim's samskara_provenance rows -
+  resolving BOTH provenance paths (substrate: one hop;
+  association: provenance -> samskara_associations -> a_id/b_id ->
+  substrate; decision 4), rounds whose user_message_id no longer
+  resolves to
   a real message row (soft pointers survive deletion; the slice
   could not be judged), (claim, round) pairs already present in
   samskara_backfill_verdicts (crash-retry exclusion, M3), and
@@ -293,12 +307,20 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   (conversations settled before judging - the recorded next-day
   rationale). Invoker-safe with explicit p_user_id (b-strict
   overload pattern).
-- RPC `samskara_claim_quarantined_samskara(p_user_id, p_holder,
-  p_ttl)`: oldest quarantined row with backfill_attempts < budget
+- RPC `samskara_claim_quarantined_samskara(p_holder_id text,
+  p_ttl_seconds int)`: mirrors the sibling claim-RPC shape - polls
+  across ALL users (the service-role worker does not pre-enumerate
+  users), oldest quarantined row with backfill_attempts < budget
   and claim columns free, `for update skip locked`, stamps the
-  claim pair, returns the claim's prediction text + embedding.
-  The save path (fold RPC) only commits if the claim still belongs
-  to the caller - the canonical guarded save.
+  claim pair, returns the claim id + prediction TEXT (not the
+  embedding - vectors read back as strings; the candidates RPC
+  re-reads it by id). The save path (fold RPC) only commits if the
+  claim still belongs to the caller - the canonical guarded save.
+- RPC grants: every new RPC (claim, candidates, fold) gets the
+  house `revoke all ... from public, anon, authenticated; grant
+  execute ... to service_role` block - all are security definer or
+  cross-user, and an un-revoked claim or fold RPC would let any
+  authenticated caller pass another user's id.
 - RPC `samskara_apply_backfill(p_user_id, p_samskara_id, p_held
   uuid[], p_contradicted uuid[], p_not_borne_out uuid[],
   p_not_engaged_count int, p_claim_holder text)`: folds genuine
@@ -313,6 +335,12 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   parity (the SAMSKARA_POPULATION_CAP precedent); the alternative
   - generalizing the live RPC to take a weight - would drop/
   recreate load-bearing prod SQL and was rejected.
+- Activation write path: the gate check (M3 step 6) runs while the
+  worker still holds the claim, and the activation itself is a
+  direct service-role `update samskaras set activated_at = now()
+  where id = $1` (same writer class as the mint writes) performed
+  by the holder before releasing - so the matrix's precedence rule
+  (only the holder transitions a claimed row) stays honest.
 - Fire RPC filter: samskara_fire_top_k gains
   `and s.activated_at is not null`. Quarantined claims cannot fire,
   join cohorts, inflate fire_count, or enter the co-fire graph.
@@ -366,7 +394,11 @@ are single-vector). Components:
   message TEXT via a join to messages (the text is not stored on
   substrate - only user_message_id).
 - Save RPC writing query_embedding only, guarded on the query
-  claim pair.
+  claim pair. The poll predicate also requires the round's user
+  message to be non-empty (mirroring the situation gate), so an
+  empty round cannot cycle claim -> fail -> re-claim; partial
+  index on (user_id, created_at) where query_embedding is null,
+  matching the sibling substrate polls (:7404-7406).
 - embed-input.test.ts pins the full EMBED_SOURCES name list with
   assertEquals - the new name is added to that pin in the same
   change (the 2026-08 outage's guardrail).
@@ -383,9 +415,9 @@ outage's full causal story - three weeks of dark corpus, held-rate
 
 New agent `supabase/functions/venice/agents/samskara_backfill.ts`,
 route `/samskara-backfill-sweep`, cron `21 * * * *` (pg_net POST,
-house dispatch shape). CLAIMS_PER_TICK = 2 (the hub-probe
-precedent: enough to drain ahead of a ~20/day mint rate, capped
-spend). Work registered under EdgeRuntime.waitUntil.
+house dispatch shape). CLAIMS_PER_TICK = 2 (enough to drain well
+ahead of the mint rate, capped spend; headroom math in the
+constants block below). Work registered under EdgeRuntime.waitUntil.
 
 Per-claim flow:
 
@@ -432,8 +464,8 @@ centered cosine (substrate-mean register), w_backfill = 0.5,
 exchange context = +-1 adjacent exchange, candidate age >= 48h,
 CLAIMS_PER_TICK = 2 (drains 48 slots/day against a measured
 ~7/day mint rate - 49 mints/week, docs/dev/samskara.md:1610; the
-2026-10 vetting saw 9 mints in a 48-hour burst, so headroom covers
-bursts).
+2026-10 vetting observed 9 mints in a 48-hour burst (owner
+datum), so headroom covers bursts).
 
 ## M4 - SURFACES
 
