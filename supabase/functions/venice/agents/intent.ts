@@ -392,7 +392,10 @@ async function evaluateTargetedIntents(
     const { data: sams } = await admin
       .from('samskaras')
       .select('id,valence')
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      // Quarantined claims (the backfill warmup pool) cannot have been
+      // employed - they never fire - so they stay out of the valence map.
+      .not('activated_at', 'is', null);
     for (const s of (sams ?? []) as Array<{ id: string; valence: number }>) {
       valence.set(s.id, s.valence ?? 0);
     }
@@ -513,6 +516,9 @@ async function gatherMinterInput(
         .from('samskaras')
         .select('id,prediction,valence,health')
         .eq('user_id', userId)
+        // Quarantined claims cannot have been employed (they never
+        // fire); warming-up rows stay out of the employment context.
+        .not('activated_at', 'is', null)
         .order('health', { ascending: false })
         .limit(TOP_SAMSKARA_LIMIT),
       admin

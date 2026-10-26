@@ -93,6 +93,7 @@
           { label: 'Orphan fires', value: snap.orphanFires, sev: severityFor(snap.orphanFires, HEALTH_THRESHOLDS.orphanFires) },
           { label: 'Stuck assimilate claims', value: snap.stuckAssimilateClaims, sev: severityFor(snap.stuckAssimilateClaims, HEALTH_THRESHOLDS.stuckClaims) },
           { label: 'Stuck embed claims', value: snap.stuckEmbedClaims, sev: severityFor(snap.stuckEmbedClaims, HEALTH_THRESHOLDS.stuckClaims) },
+          { label: 'Stuck backfill claims', value: snap.stuckBackfillClaims, sev: severityFor(snap.stuckBackfillClaims, HEALTH_THRESHOLDS.stuckClaims) },
         ]
       : []
   );
@@ -249,6 +250,14 @@
         <span class="health-label">Samskaras</span>
         <span class="health-value">{snap.totalSamskaras}</span>
       </div>
+      {#if snap.quarantined > 0}
+        <!-- Informational, never thresholded: warming-up depth is normal
+             between backfill ticks (see the evidence-backfill plan). -->
+        <div class="health-row">
+          <span class="health-label">Warming up</span>
+          <span class="health-value">{snap.quarantined}</span>
+        </div>
+      {/if}
       <div class="health-row">
         <span class="health-label">Near-dead / never-fired</span>
         <span class="health-value">{snap.nearDead} / {snap.neverFired}</span>

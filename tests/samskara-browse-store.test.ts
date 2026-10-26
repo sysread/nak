@@ -31,6 +31,8 @@ function row(id: string): SamskaraCorpusRow {
     disconfirmCount: 0,
     lastFiredAt: null,
     createdAt: '2026-01-01T00:00:00Z',
+    activatedAt: '2026-01-01T00:00:00Z',
+    backfillAttempts: 0,
   };
 }
 

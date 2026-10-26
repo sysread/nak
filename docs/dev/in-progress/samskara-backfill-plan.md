@@ -1,6 +1,6 @@
 # Samskara evidence backfill: the warmup pool (plan)
 
-Status: DRAFT rev 8, 2026-10-26. Revised through seven fresh-context
+Status: IMPLEMENTED rev 8, 2026-10-26. Revised through seven fresh-context
 review rounds (deep-mode seven-lens fan-out, then general,
 schema-and-data-model, cross-module-contracts, lifecycle, and
 prompt/UI lenses, then a general convergence round). Owner's

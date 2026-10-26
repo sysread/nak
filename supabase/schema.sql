@@ -7376,8 +7376,9 @@ create table if not exists public.samskara_substrate (
   valence real,
   -- Embedded by the embeddings worker via the samskara_substrate
   -- source. NULL until embedded; the worker polls for that condition.
-  -- Padded to 2048 from bge-m3's 1024 native dims; see memories'
-  -- preamble for the rationale.
+  -- gte-small's 384-dim output zero-extended to the 2048 storage dim
+  -- (the model rotated off bge-m3; see _shared/local-embed.ts and
+  -- memories' preamble for the rationale).
   situation_embedding vector(2048),
   embedding_model text,
   embedding_claim_holder text,

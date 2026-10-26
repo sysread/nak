@@ -235,6 +235,11 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [samskara-association-mint](./use-cases/samskara-association-mint.md) -
   the sweep-only association mint phase: minting from the
   association graph, the consumption stamp, mixed-kind provenance.
+- [samskara-backfill](./use-cases/samskara-backfill.md) - the
+  evidence-backfill warmup pool: quarantine at mint, candidate
+  exclusions (both provenance paths), fold weights, the activation
+  gate and never-engaged pin, the grandfather one-shot, and the UI
+  states. The load-bearing guard for the SQL RPCs (no SQL test net).
 - [attachments-lifecycle-ux](./use-cases/attachments-lifecycle-ux.md) -
   attaching files from the composer, waiting for processing,
   post-send previews, extracted-text drawers, and expired-file

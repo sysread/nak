@@ -375,7 +375,11 @@ async function sampleControlClaims(
       .from('samskaras')
       .select('id, prediction')
       .eq('user_id', userId)
-      .not('prediction_embedding', 'is', null);
+      .not('prediction_embedding', 'is', null)
+      // Quarantined claims (the backfill warmup pool) are not part of
+      // the fire-eligible pool the control instrument measures selection
+      // against; they have never met the ranker.
+      .not('activated_at', 'is', null);
     if (error) throw new Error(error.message);
     const pool = (data ?? [])
       .filter((r) =>

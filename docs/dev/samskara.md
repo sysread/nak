@@ -79,6 +79,17 @@ toast is just a glance cue that the bias model is forming.
 
 ## Files
 
+- `supabase/functions/venice/agents/samskara_backfill.ts` - the
+  evidence-backfill worker (the warmup pool). Hourly claim-based
+  tick: claims up to two quarantined claims, retrieves the
+  historical exchanges that would have fired each (centered cosine
+  over substrate query embeddings), judges each exchange in its own
+  completion (reusing the exported judge machinery from
+  `samskara_evaluation.ts`), writes the
+  `samskara_backfill_verdicts` ledger, and folds via
+  `samskara_apply_backfill` (the activation gate runs atomically
+  inside that RPC's claim guard). See "Evidence backfill: the
+  warmup pool" under Contracts.
 - `supabase/functions/venice/priming/samskara.ts` - the
   turn-entry IO half. Owns `getCompoundSummary` and
   `fireSamskaras`, run by `runServerPriming` as part of the
@@ -278,6 +289,12 @@ toast is just a glance cue that the bias model is forming.
   timeout; the worst case is a cohort logged whose think-block never
   reached the model - the next-day judge still rules on those fires,
   which typically read as loose topical matches and land not-engaged.
+- **`/samskara-backfill-sweep` cron route** - hourly at :21
+  (`nak-samskara-backfill-sweep`), gated by
+  `samskara_backfillable_exists()` (a cheap EXISTS on the
+  quarantine pool). Claims up to two quarantined claims and drives
+  each through retrieve -> judge -> fold -> gate under
+  EdgeRuntime.waitUntil. See "Evidence backfill: the warmup pool".
 - **Inline `CohortPanel` in `Chat.svelte`** - on thread load,
   `Chat.svelte` calls `samskaraListFiresForThread`,
   `samskaraListSubstrateForThread`, and
@@ -453,6 +470,16 @@ association edges (see Contracts).
   the `w_soft` soft-miss weight are sub-unit; an int column would
   truncate them to 0; see Gotchas);
   `last_fired_at`, `created_at`, `updated_at`.
+- `activated_at timestamptz nullable` - the evidence-backfill
+  warmup state. NULL = QUARANTINED: the claim is invisible to the
+  fire RPC (no priming, no fires, no cohorts), to the population
+  cap and collapse counts, to the eviction tiers, and to the
+  compound-summary + intent context reads. Non-null = ACTIVE,
+  identical to pre-backfill semantics. See "Evidence backfill:
+  the warmup pool" below.
+- `backfill_claim_holder` / `backfill_claim_expires` - the
+  worker's claim pair; `backfill_attempts int` - judged exchange
+  count.
 - Index on `(user_id, health desc, confidence desc)`.
 
 ### `samskara_provenance`
@@ -1106,6 +1133,70 @@ evaluation cadence. The old reaction-tally Laplace `(confirm+2) /
 (confirm+disconfirm+3)` is exactly the `k*p0` / `k` prior here, now
 population-derived instead of flat.
 
+### Evidence backfill: the warmup pool
+
+A freshly minted claim carries no evidence until the live judge
+happens to test it (p90 time-to-first-genuine-test is ~13 days), and
+age cannot distinguish a dormant claim from a dead one. The evidence
+backfill closes that gap at mint time, modelled on reconsidering
+past experience in light of a new pattern:
+
+- **Quarantine.** New claims insert with `activated_at` null. The
+  fire RPC excludes them, so they cannot fire, join cohorts, prime
+  replies, or enter the always-on summary or intent context until
+  activated. Cap counting, collapse, and eviction see ACTIVE rows
+  only (quarantined rows hold no live-corpus slots).
+- **Retrieval.** Every substrate round also carries a
+  `query_embedding` of the round's RAW user message text - the exact
+  text the live fire path embeds, so "would have fired" is an exact
+  predicate against the judged-fire population (the doubt-note splice
+  belongs to the read-only refinement probe, which records no fires).
+  Candidates for a claim are the top-8 rounds by centered cosine
+  (substrate-mean register - the fire RPC's register) above a LOW
+  floor (0.05; the register tops out at 0.299, so selection is rank,
+  not a 0.30-style bar), excluding the claim's birthplace threads
+  (BOTH provenance paths - association is a two-hop join), rounds
+  whose message is deleted, already-judged pairs, single-round
+  threads (the junk-data gate), and rounds younger than 48h.
+- **Judging.** One completion per (claim, exchange) pair - never
+  batched, never with other claims. The judge reuses the live
+  judge's two-step verdict machinery (`buildVerdictRequest` /
+  `parseVerdicts` exported from samskara_evaluation.ts) with the
+  framing sentence replaced and NO disclosure that the claim is new
+  or backfilled (a provenance hint risks a leniency or harshness
+  anchor). Slice: the target exchange plus one adjacent on each side.
+- **Folding.** Verdicts fold via `samskara_apply_backfill` at
+  `w_backfill = 0.5` of the live weights (held 0.5, contradicted
+  0.5, not-borne-out 0.125; not-engaged counts toward attempts only)
+  into the SAME tallies, one discount event per batch. The per-
+  verdict audit ledger is `samskara_backfill_verdicts` (unique on
+  claim + exchange, cascade) - never a fire row, so fire_count stays
+  "live fires" and the co-fire graph stays behavioural.
+- **Activation.** When the pool is exhausted (or 8 attempts spent)
+  and >= 1 genuine verdict exists, the claim activates
+  (`activated_at` set). The gate reads the LEDGER, not tallies -
+  ledger rows are written before the fold commits, so a crash cannot
+  strand a genuinely-engaged claim. A brand-new account with no
+  eligible history activates immediately. A claim whose history
+  never engaged it pins out of the queue (attempts forced to the
+  budget) and dies at the existing 45-day probation reaper - no new
+  death machinery.
+- **Weighting rationale.** Half weight in both directions encodes
+  the owner's framing: reconsider past experience in light of the
+  new pattern, but never let the new pattern overwrite it. The
+  backfill judge also lacks interactive context, and its slice gives
+  a not-borne-out verdict one chance per exchange where a thread
+  gives many - the slice biases slightly toward not-borne-out /
+  not-engaged when the pointable moment sits just outside it.
+- **Validity gate.** M5's readout: P(live verdict agrees with
+  backfill verdict) for claims with both. If backfill verdicts do
+  not predict live verdicts better than chance, the mechanism
+  measures the judge's mood, not the claim, and gets retired.
+  Constants (budget 8, floor 0.05, weight 0.5) carry the plan's
+  labeled-probe-set discipline - the floor needs a NEW labeled
+  message-vs-claim probe set (the existing probe set is claim-pairs
+  under claim-mean centering, a different register).
+
 ### Decay: relevance-gated forgetting (no wall clock)
 
 There is no wall-clock decay pass. Forgetting IS the evidence discount
@@ -1315,6 +1406,11 @@ grows. The log10 shows up again on the input-cap side when the
 summarizer reads samskaras to feed the agent.
 
 ## Interactions with other features
+
+- **Embeddings** - the embeddings worker drains the
+  `samskara-substrate-query` source (the backfill retrieval index);
+  a source missing from EMBED_SOURCES is the 2026-08 outage's
+  failure shape, and the name-list test pins membership.
 
 - **Chat** - two seams. Browser side, the chat loop is the only
   synchronous reader of samskara state: `runChatLoop` reads

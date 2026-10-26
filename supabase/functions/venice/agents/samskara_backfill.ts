@@ -318,12 +318,14 @@ async function loadExchangeSlice(
   threadId: string,
   userMessageId: string,
 ): Promise<StoredMessage[] | null> {
+  // thread_transcript: position-ordered and fork-resolving - the same
+  // transcript order the live judge reads. Never re-sort by created_at:
+  // position restarts per fork segment, so wall-clock ordering would mix
+  // inherited rows into the slice.
   const { data, error } = await admin
-    .from('messages')
-    .select('id, role, content, tool_call_id, name')
-    .eq('thread_id', threadId)
-    .order('created_at', { ascending: true });
-  if (error) throw new Error(`thread read failed: ${error.message}`);
+    .rpc('thread_transcript', { p_thread_id: threadId })
+    .select('id, thread_id, role, content, tool_calls, tool_call_id, name');
+  if (error) throw new Error(`thread transcript read failed: ${error.message}`);
   const msgs = (data ?? []) as StoredMessage[];
   const tIdx = msgs.findIndex((m) => m.id === userMessageId && m.role === 'user');
   if (tIdx < 0) return null;

@@ -103,7 +103,13 @@ fired, how often those fires genuinely engaged (the **engagement** stat),
 and a one-line **release status**: whether the instinct is established
 by real tests, weakly established but long idle (and so displaceable
 when a new instinct needs the room), still waiting on its first
-judgment, or counting down toward being released as never-relevant. Below that is where it came
+judgment, counting down toward being released as never-relevant, or -
+for the newest instincts - still **warming up**. A warming-up instinct
+does not influence replies yet: Nak first checks it against your own
+past conversations (each one judged separately, at half weight) so the
+instinct arrives with evidence instead of a guess. If your history
+never engages it, it is released as never-relevant without ever
+shaping a reply. Below that is where it came
 from. "Where it came from" lists the moments it
 was formed from, and - for an instinct built from recurring patterns
 across different conversations - the relations Nak noticed between them.

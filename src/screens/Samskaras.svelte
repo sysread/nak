@@ -232,7 +232,8 @@
               selected.createdAt,
               verdictCounts,
               selected.confirmCount + selected.disconfirmCount,
-              Date.now()
+              Date.now(),
+              { activatedAt: selected.activatedAt, backfillAttempts: selected.backfillAttempts }
             )}
           </p>
         {/if}

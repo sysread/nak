@@ -1179,10 +1179,14 @@ async function corpusAtCap(
   userId: string,
   log: EdgeLogger,
 ): Promise<boolean> {
+  // Only ACTIVE rows meter the cap: quarantined claims (the
+  // evidence-backfill warmup pool) hold no live-corpus slots, and no
+  // eviction tier can free them.
   const { count, error } = await admin
     .from('samskaras')
     .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId);
+    .eq('user_id', userId)
+    .not('activated_at', 'is', null);
   if (error) {
     log.debug('mint gate: corpus count failed, proceeding', { error: error.message });
     return false;
@@ -1634,6 +1638,9 @@ async function compoundRegenProbe(
     .from('samskaras')
     .select('prediction, inner_voice, valence, confidence, health')
     .eq('user_id', userId)
+    // The paragraph is fed by the LIVE corpus: a quarantined row's
+    // default health 1.0 would rank it at the very top of this read.
+    .not('activated_at', 'is', null)
     .order('health', { ascending: false })
     .order('confidence', { ascending: false })
     .limit(cap);

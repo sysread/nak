@@ -266,7 +266,14 @@ export function engagementSummary(counts: {
  * `evidenceTally` is the row's discounted confirm+disconfirm sum - the
  * "weakly established" test reads the same number the SQL stale tier
  * does, not the raw verdict counts.
+ *
+ * `activation` carries the evidence-backfill warmup state (the claim's
+ * activated_at + backfill_attempts). When present and activatedAt is
+ * null, the warming-up status takes precedence over every release
+ * branch; omit it for callers that predate the warmup pool.
  */
+const BACKFILL_ATTEMPT_BUDGET = 8; // MIRROR: ATTEMPT_BUDGET in agents/samskara_backfill.ts.
+
 export function releaseStatus(
   createdAt: string,
   counts: {
@@ -278,8 +285,28 @@ export function releaseStatus(
     lastGenuineAt: string | null;
   },
   evidenceTally: number,
-  nowMs: number
+  nowMs: number,
+  activation?: { activatedAt: string | null; backfillAttempts: number }
 ): string {
+  // Warmup precedence: a QUARANTINED claim (activated_at null - the
+  // evidence-backfill pool) reports its warming-up state ahead of every
+  // branch below. Backfill tallies sit in the same columns the probation
+  // branch reads and samskara_verdict_counts reads fires only, so without
+  // this precedence a mid-flight row falls through to the probation copy
+  // and predicts a release its evidence contradicts.
+  if (activation && activation.activatedAt === null) {
+    const { backfillAttempts } = activation;
+    if (backfillAttempts < BACKFILL_ATTEMPT_BUDGET) {
+      return `warming up - ${backfillAttempts} of ${BACKFILL_ATTEMPT_BUDGET} exchanges judged`;
+    }
+    // Budget spent with zero genuine verdicts: pinned out of the
+    // backfill queue; the 45-day probation reaper is the death path.
+    const ageDays = (nowMs - new Date(createdAt).getTime()) / 86_400_000;
+    const remaining = Math.ceil(PROBATION_DAYS - ageDays);
+    return remaining <= 0
+      ? 'warmed up - history never engaged this claim; releases at the next hourly sweep'
+      : `warmed up - history never engaged this claim; probation in ${remaining}d`;
+  }
   const { judged, genuine } = engagementSummary(counts);
   if (genuine > 0) {
     const label = `established - ${genuine} genuine ${genuine === 1 ? 'test' : 'tests'}`;

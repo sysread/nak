@@ -51,6 +51,8 @@ interface SamskaraCorpusRpcRow {
   disconfirm_count: number;
   last_fired_at: string | null;
   created_at: string;
+  activated_at: string | null;
+  backfill_attempts: number;
   cosine?: number;
 }
 
@@ -68,6 +70,8 @@ function mapSamskaraCorpusRow(r: SamskaraCorpusRpcRow): SamskaraCorpusRow {
     disconfirmCount: r.disconfirm_count,
     lastFiredAt: r.last_fired_at,
     createdAt: r.created_at,
+    activatedAt: r.activated_at,
+    backfillAttempts: r.backfill_attempts ?? 0,
     ...(typeof r.cosine === 'number' ? { cosine: r.cosine } : {}),
   };
 }
@@ -363,7 +367,7 @@ export async function listSamskarasPage(
   let q = client
     .from('samskaras')
     .select(
-      'id, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at'
+      'id, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at, activated_at, backfill_attempts'
     );
   // Order columns per sort key. last_fired_at is nullable, so
   // recently-fired pushes never-fired rows to the bottom.
@@ -425,7 +429,7 @@ export async function searchSamskarasByText(
   let q = client
     .from('samskaras')
     .select(
-      'id, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at'
+      'id, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at, activated_at, backfill_attempts'
     )
     .ilike('prediction', `%${query}%`)
     .order('health', { ascending: false })
@@ -518,6 +522,8 @@ export async function samskaraHealthSnapshot(
     orphanFires: r?.orphan_fires ?? 0,
     stuckAssimilateClaims: r?.stuck_assimilate_claims ?? 0,
     stuckEmbedClaims: r?.stuck_embed_claims ?? 0,
+    quarantined: r?.quarantined ?? 0,
+    stuckBackfillClaims: r?.stuck_backfill_claims ?? 0,
   };
 }
 

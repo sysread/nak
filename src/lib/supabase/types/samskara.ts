@@ -27,6 +27,12 @@ export interface SamskaraCorpusRow {
   disconfirmCount: number;
   lastFiredAt: string | null;
   createdAt: string;
+  /** Null while the claim is QUARANTINED (the backfill warmup pool):
+   *  it does not fire, prime, or join cohorts until evidence backfill
+   *  engages it. See docs/dev/in-progress/samskara-backfill-plan.md. */
+  activatedAt: string | null;
+  /** Exchanges already judged by the backfill worker. */
+  backfillAttempts: number;
   cosine?: number;
 }
 
@@ -70,6 +76,12 @@ export interface SamskaraHealthSnapshot {
   orphanFires: number;
   stuckAssimilateClaims: number;
   stuckEmbedClaims: number;
+  /** Claims still in the backfill warmup pool (activated_at null) -
+   *  informational, never thresholded. */
+  quarantined: number;
+  /** Backfill claims held past their TTL - the worker died mid-tick;
+   *  mirrors the stuckClaims leak detector bands. */
+  stuckBackfillClaims: number;
 }
 
 /** Windowed activity rates for the Health panel. */
