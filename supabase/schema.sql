@@ -7420,7 +7420,15 @@ create index if not exists samskara_substrate_pending_embed_idx
 -- Pending poll for the query_embedding source; partial like its
 -- siblings. Rounds whose user message was deleted (soft pointers
 -- survive) are excluded at the claim RPC by a messages-exists join,
--- so they never cycle here.
+-- so they never cycle here. Columns-over-migrations: the table-local
+-- definition above is a no-op on existing databases, so the columns
+-- add here too.
+alter table public.samskara_substrate
+  add column if not exists query_embedding vector(2048);
+alter table public.samskara_substrate
+  add column if not exists query_claim_holder text;
+alter table public.samskara_substrate
+  add column if not exists query_claim_expires timestamptz;
 create index if not exists samskara_substrate_pending_query_embed_idx
   on public.samskara_substrate (user_id, created_at)
   where query_embedding is null;
