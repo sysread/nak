@@ -1,12 +1,11 @@
 # Samskara evidence backfill: the warmup pool (plan)
 
-Status: DRAFT rev 2, 2026-10-26. Revised from the round-1
-deep-mode fan-out (seven lenses): the candidate floor, centering
-mean, death paths, cap interaction, grandfather mechanism, and
-cron minute were all re-derived; the state matrix was harmonized.
-Owner's framing: when a person adopts a new predictive pattern,
-they re-read past experience in light of it. The system should do
-the same: a newly minted claim is judged against the conversations
+Status: DRAFT rev 5, 2026-10-26. Revised through four fresh-context
+review rounds (deep-mode seven-lens fan-out, then general,
+schema-and-data-model, and cross-module-contracts lenses). Owner's
+framing: when a person adopts a new predictive pattern, they
+re-read past experience in light of it. The system should do the
+same: a newly minted claim is judged against the conversations
 that would have tested it, before it is allowed to fire live.
 
 ## SYNOPSIS
@@ -126,13 +125,38 @@ live-corpus slots (M1), so evicting one frees nothing; every victim
 tier gains the activation filter. The reaper and the reaper alone
 closes out never-engaged quarantine.
 
-Readers of the state: fire RPC (exclusion filter), health panel and
-browse list (badge), apply_backfill (gate arithmetic). Explicit
-non-readers: dedup-reinforce at mint time (geometry ignores
-activation; reinforcing a quarantined claim is allowed and honest),
-the population-cap count, the collapse RPC, and the eviction tiers
-(all three see ACTIVE rows only - see M1; quarantined rows are
-warming inventory, not live corpus).
+Readers of the activation state - the COMPLETE enumeration (every
+`.from('samskaras')` call site and every schema-side select on the
+table, classified):
+
+FILTERED readers (gain `activated_at is not null`, or the inverse
+where the death paths need it):
+
+| Reader | Where | Why filtered |
+| --- | --- | --- |
+| Fire RPC | schema.sql:8526 | Decision 1: no priming, no fires, no cohorts. |
+| corpusAtCap | agents/samskara.ts:1183 | Quarantined rows hold no live-corpus slots. |
+| Eviction tiers (x3) | schema.sql:9635-9683 | Evicting a quarantined row frees no slot. |
+| Collapse, both passes | schema.sql:10155+ | Overflow must never merge a quarantined claim. |
+| Control draw | agents/samskara_evaluation.ts:365 | The live selection instrument stays clean. |
+| Compound-regen sample | agents/samskara.ts:1634 | The always-on paragraph is fed by the LIVE corpus; a quarantined row (health 1.0 default, zero negative evidence) would rank at the TOP of this read and prime every system prompt - the exact outcome decision 1 forbids. |
+| Compound-regen count | schema.sql:9808 (samskara_should_regen_compound) | The regen trigger meters the live corpus; counting quarantine churn would trip regen on mints that cannot fire. |
+| Intent-agent context reads (x2) | agents/intent.ts:393,513 | The intent-employment prompt consumes claims as standing context; quarantined claims cannot have been employed (they never fire) and only pollute. |
+
+UNFILTERED readers, each an argued non-reader or deliberate death
+path:
+
+| Reader | Why unfiltered |
+| --- | --- |
+| Judge prediction fetch | agents/samskara_evaluation.ts:502 - reads by fired ids; only ACTIVE rows have fire rows. |
+| Mint insert | agents/samskara.ts:880 - writer. |
+| Claim-mean compute | schema.sql:8418 - geometry ignores activation (dedup register); consistent with the non-reader stance below. |
+| Embed poll | schema.sql:9150 - infrastructure writer. |
+| population_p0 | schema.sql:9237 - p0 sees all evidence (gotcha below). |
+| apply_evaluation + reconcile | schema.sql:9333,9769 - operates on rows with evidence events; a quarantined row's backfill tallies SHOULD reconcile to the posterior. |
+| reap_dead | schema.sql:9384-9386 - requires last_fired_at; quarantined rows never fire (verified). |
+| reap_untested (45d) | schema.sql:9436 - THE death path (transition 4); deliberately unfiltered. |
+| nearest_by_prediction, reinforce, merge_pair | schema.sql:9968,10013,10103 - geometry/evidence mechanics; activation-agnostic by the dedup non-reader stance. |
 
 ## DELTAS-FROM-TEMPLATE LEDGER
 
@@ -312,10 +336,12 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   across ALL users (the service-role worker does not pre-enumerate
   users), oldest quarantined row with backfill_attempts < budget
   and claim columns free, `for update skip locked`, stamps the
-  claim pair, returns the claim id + prediction TEXT (not the
-  embedding - vectors read back as strings; the candidates RPC
-  re-reads it by id). The save path (fold RPC) only commits if the
-  claim still belongs to the caller - the canonical guarded save.
+  claim pair, returns the claim id, user_id (the generic embed
+  wiring reads it for the per-user Logs tally), and prediction
+  TEXT (not the embedding - vectors read back as strings; the
+  candidates RPC re-reads it by id). The save path (fold RPC) only
+  commits if the claim still belongs to the caller - the canonical
+  guarded save.
 - RPC grants: every new RPC (claim, candidates, fold) gets the
   house `revoke all ... from public, anon, authenticated; grant
   execute ... to service_role` block - all are security definer or
@@ -331,10 +357,15 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   attempts. Advances backfill_attempts by the total attempt count,
   then releases the claim. Guarded on claim holder + expiry. A
   MIRROR-COMMENT pin ties its constants (k, L, d, w_soft) to
-  samskara_apply_evaluation's, with a Deno test asserting the
-  parity (the SAMSKARA_POPULATION_CAP precedent); the alternative
-  - generalizing the live RPC to take a weight - would drop/
-  recreate load-bearing prod SQL and was rejected.
+  samskara_apply_evaluation's, with a parity TEST asserting it: a
+  vitest in tests/ that reads supabase/schema.sql and extracts the
+  k/L/d/w_soft literals from BOTH RPC bodies (the schema-grants
+  test's file-reading precedent, tests/schema-grants.test.ts:38).
+  The plan's earlier "Deno test (the SAMSKARA_POPULATION_CAP
+  precedent)" was a misattribution: that precedent pins only a
+  TS-side constant's value and asserts nothing about schema.sql.
+  The alternative - generalizing the live RPC to take a weight -
+  would drop/recreate load-bearing prod SQL and was rejected.
 - Activation write path: the gate check (M3 step 6) runs while the
   worker still holds the claim, and the activation itself is a
   direct service-role `update samskaras set activated_at = now()
@@ -371,11 +402,24 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   standing rule) - they gain the activation filter with the tiers.
   The probation-due column mirrors the reaper, which is unchanged,
   and correctly counts quarantined tally-0 rows (they ARE due).
+- Compound-summary and intent-agent reads (agents/samskara.ts:1634;
+  agents/intent.ts:393,513; schema.sql:9808): the activation filter
+  is added to each - the always-on paragraph and the intent-employment
+  prompt are priming surfaces (decision 1's guarantee is "no
+  priming from a quarantined claim", not just "no fire rows"), and
+  a quarantined row's default health 1.0 would rank it at the top
+  of the health-ordered summary sample.
 - Control-draw exclusion: the evaluation sweep's control sample is
   drawn in TypeScript (`sampleControlClaims`,
   samskara_evaluation.ts:351-367), not SQL - the activation filter
   is added to that query (M3's agent work; listed here because it
   is part of the same correctness surface).
+- Browser RPC return shapes: the browse/detail UI also renders rows
+  from `samskara_search_by_prediction`, `samskara_cluster_corpus`,
+  and `samskara_verdict_counts` (src/lib/supabase/samskara.ts:401,
+  448,559) - all three gain `activated_at` in their RETURNS TABLE
+  (drop-if-exists + recreate), so the releaseStatus derivation
+  renders QUARANTINED on every path a claim can arrive by.
 
 ## M2 - EMBEDDER WIRING
 
