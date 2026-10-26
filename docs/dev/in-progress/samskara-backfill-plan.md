@@ -1,22 +1,26 @@
 # Samskara evidence backfill: the warmup pool (plan)
 
-Status: DRAFT rev 1, 2026-10-26. Drafted from the owner's design
-after the 150-cap conversation. Owner's framing: when a person
-adopts a new predictive pattern, they re-read past experience in
-light of it. The system should do the same: a newly minted claim
-is judged against the conversations that would have tested it,
-before it is allowed to fire live.
+Status: DRAFT rev 2, 2026-10-26. Revised from the round-1
+deep-mode fan-out (seven lenses): the candidate floor, centering
+mean, death paths, cap interaction, grandfather mechanism, and
+cron minute were all re-derived; the state matrix was harmonized.
+Owner's framing: when a person adopts a new predictive pattern,
+they re-read past experience in light of it. The system should do
+the same: a newly minted claim is judged against the conversations
+that would have tested it, before it is allowed to fire live.
 
 ## SYNOPSIS
 
 New claims are minted into a QUARANTINE pool: they do not fire in
-live conversations. A hourly backfill worker retrieves the
-historical exchanges that would have fired each claim (same
-centered-cosine predicate as the live fire path), judges the claim
-against each exchange in its own completion, and folds the
-verdicts into health at reduced weight. When the attempt budget is
-spent, the claim activates (or, if history never engaged it, stays
-quarantined as evidenced junk). This gives every claim a evidence
+live conversations. An hourly backfill worker retrieves the
+historical exchanges that would have fired each claim (centered
+cosine over a new per-round query-embedding index, top-k by rank
+rather than a high bar), judges the claim against each exchange in
+its own completion, and folds the verdicts into health at reduced
+weight. When the attempt budget is spent and history genuinely
+engaged the claim, the claim activates. History that never engaged
+it leaves the claim quarantined, where the existing 45-day
+probation reaper collects it. This gives every claim an evidence
 baseline at mint time instead of waiting weeks for organic tests,
 and it removes the "corpus must stay tested" job the 150-cap was
 quietly doing.
@@ -27,89 +31,105 @@ Two measured problems meet at the same design point:
 
 - A minted claim carries no evidence until the live judge happens
   to test it. Age cannot distinguish "dormant" from "dead": the
-  median untested row has only 2 judged fires (schema comment at
-  samskara_evict_for_mint), and p90 time-to-first-genuine-test is
-  ~13 days. Until then the claim is either a dangerous firer (an
-  untested claim can prime the model from a plausible-sounding
+  median untested row has only 2 judged fires (schema.sql:9578)
+  and p90 time-to-first-genuine-test is ~13 days (schema.sql:
+  9581-9582). Until tested, the claim is either a dangerous firer
+  (an untested claim can prime the model from a plausible-sounding
   hypothesis) or invisible.
-- The 150-cap conversation (samskara-lifecycle-plan.md decision 6)
-  established the cap's real job is metering formation against the
-  judge's capacity to test. Backfill decouples that: test supply
-  becomes a worker rate the owner controls, not a function of what
-  conversations organically fire.
+- The 150-cap conversation (samskara-lifecycle-plan.md decision 6,
+  :167-169) established the cap's real job is metering formation
+  against the judge's capacity to test. Backfill decouples that:
+  test supply becomes a worker rate the owner controls, not a
+  function of what conversations organically fire.
 
 Out of scope: the cap value itself, the mint gates, the eviction
-tiers, the association backlog. This plan changes what the cap is
-FOR (its "keep the corpus tested" rationale dissolves) but not its
-value; the cap revisit reads this plan's M5 data.
+tier definitions, the association backlog. This plan changes what
+the cap is FOR (its "keep the corpus tested" rationale dissolves)
+but not its value; the cap revisit reads this plan's M5 data.
 
 ## DECISIONS
 
 1. Quarantine is real, not advisory: a quarantined claim is
    invisible to the fire RPC (no priming, no fire rows, no cohort
-   membership) until activation. Owner decision, 2026-10-26.
-2. One completion per (claim, conversation) pair. Each historical
-   conversation is judged on its own, never batched with others,
-   and never with multiple claims. Owner instruction: separate
-   completions minimize cross-conversation pollution. This differs
-   from the live judge (which batches a thread's fired predictions
-   into one completion, agents/samskara_evaluation.ts
-   buildVerdictRequest); the backfill prompt is single-prediction
-   and reuses the two-step verdict shape.
-3. Backfill evidence is a distinct evidence class, folded at
-   reduced weight and separately recorded. The health posterior
-   stays a single number; the per-verdict audit trail distinguishes
-   virgin backfill from live fires. Owner instruction.
+   membership) until activation. Owner decision, 2026-10-26. This
+   deliberately reverses the release posture of commit 22d79a38
+   ("Release never-tested samskaras"), which lets untested rows
+   fire so the judge can test them; quarantine trades that for a
+   warmed-up corpus.
+2. One completion per (claim, exchange) pair. Each historical
+   exchange is judged on its own, never batched with other
+   exchanges, and never with multiple claims. Owner instruction:
+   separate completions minimize cross-conversation pollution.
+   This differs from the live judge (which batches a thread's
+   fired predictions into one completion); the backfill prompt is
+   single-prediction and reuses the two-step verdict shape.
+3. Backfill evidence is folded at reduced weight and separately
+   recorded. The health posterior stays a single number; the
+   per-verdict audit ledger distinguishes virgin backfill evidence
+   from live-fire evidence. Owner instruction. The reduced weight
+   is what carries the class distinction into the math; the p0
+   prior still sees all evidence (documented, watched in M5).
 4. The claim's own birthplace is excluded from its backfill
    candidates: provenance-resolvable threads never judge the claim
    they minted (the mint sources would confirm with near
    certainty). Owner design, 2026-10-26.
 5. Existing corpus is grandfathered: every row alive at deploy gets
-   activated_at = now(). Backfill applies to the quarantine pool
-   going forward; no retroactive backfill of the 157 live rows.
+   activated_at = now() via a one-shot marker. Backfill applies to
+   the quarantine pool going forward; no retroactive backfill of
+   the ~157 live rows (owner datum, point-in-time).
 6. The judge is not told the claim is new, quarantined, or
    backfilled. The prompt presents a prediction and a transcript;
    provenance disclosure risks a leniency or harshness anchor.
+7. No new death machinery. The existing 45-day probation reaper
+   (samskara_reap_untested, schema.sql:9429-9443) is the quarantine
+   death path for never-engaged claims; no 14-day adjacency reaper
+   is built. The alternative was rejected as machinery the evidence
+   does not need yet; the backfill ledger keeps the not-engaged
+   record either way.
 
 ## STATE AND TRANSITION MATRIX
 
 A claim's activation state. Existing machinery (health posterior,
-eviction, reap) is unchanged; the matrix covers what this plan adds.
-Precedence rule: the worker's own claim columns arbitrate every
-transition - a row whose claim is held by a live worker cannot die,
-fold, or activate concurrently.
+eviction, reap) is otherwise unchanged. Precedence rule: the
+worker's claim columns arbitrate every transition - no actor other
+than the claim holder may transition a row whose claim is held;
+the holder's own guarded saves are the arbitration mechanism.
 
 | State | Meaning | Entered by |
 | --- | --- | --- |
-| QUARANTINED | `activated_at` null. Invisible to the fire RPC; no fires, no cohorts, no priming. | Mint insert (column default). Grandfather block (one-time, deploy). |
+| QUARANTINED | `activated_at` null. Invisible to the fire RPC; no fires, no cohorts, no priming. | Mint insert (column default). One-shot grandfather block. |
 | ACTIVE | `activated_at` set. Fires normally; identical to today's semantics. | Transitions 1-3 below. |
-| DEAD | Row deleted. | Existing machinery only (see below). |
+| DEAD | Row deleted. | Transitions 4-6 below. |
 
-Transitions QUARANTINED -> ACTIVE:
+Transitions QUARANTINED -> ACTIVE (one rule, one exception):
 
 | # | Trigger | Condition |
 | --- | --- | --- |
-| 1 | Grandfather block | One-shot at the column-adding deploy; every row alive that day activates. Never re-runs (M1's flag). |
-| 2 | Worker gate check | `backfill_attempts >= ATTEMPT_BUDGET` AND genuine engaged tests >= 1. |
-| 3 | Zero-candidate exception | Candidate query returns 0 rows because the account has no (or too-short) history - activate immediately; an empty corpus cannot warm a claim up. |
-| 4 | Short-history gate pass | Candidates existed but fewer than the budget; spent, then transition 2's condition evaluated on the smaller total. |
+| 1 | Worker gate check | The candidate pool for this claim is exhausted (attempts spent OR no eligible candidates remain) AND the claim has >= 1 genuine engaged backfill test (held + contradicted + not-borne-out). |
+| 2 | Empty-corpus exception | The user has zero embedded substrate rounds outside the claim's birthplace (with a live user message). Nothing exists to judge against; quarantine would be indefinite starvation. Activate immediately. |
+| 3 | Grandfather block | One-shot at the deploying merge; every row alive that day activates. |
 
 Transitions QUARANTINED -> DEAD:
 
 | # | Trigger | Condition |
 | --- | --- | --- |
-| 5 | Adjacency-junk reap | attempts >= ATTEMPT_BUDGET, all attempts not-engaged, age >= 14 days. The backfill ledger is the evidence standard's new source. |
-| 6 | Stale-tier reap (existing) | 90 days quiet, tally <= 1.0 - a never-activated row qualifies (tally 0). |
+| 4 | Probation reaper (existing) | 45 days, evidence tallies still zero. A fully not-engaged backfill leaves tallies zero, so history-disproved-adjacent claims die here. Genuinely tested claims are immune (tallies > 0). |
+| 5 | Merge (existing) | A dedup or overflow merge deletes the loser; backfill ledger rows cascade with it (historical-only). |
 
 ACTIVE -> DEAD: existing machinery only (probation reaper, reap_dead,
 cap-pressure eviction tiers). Backfill never touches an ACTIVE row.
+Cap-pressure eviction is INVISIBLE to quarantined rows: they hold no
+live-corpus slots (M1), so evicting one frees nothing; every victim
+tier gains the activation filter. The reaper and the reaper alone
+closes out never-engaged quarantine.
 
 Readers of the state: fire RPC (exclusion filter), health panel and
 browse list (badge), apply_backfill (gate arithmetic). Explicit
-non-readers: dedup-reinforce (geometry ignores activation; reinforcing
-a quarantined claim is allowed), collapse_by_cofiring (quarantined
-claims have no fires, so they cannot enter a cohort), eviction tiers
-(no tallies mid-quarantine; the 14-day floors cover the gap).
+non-readers: dedup-reinforce at mint time (geometry ignores
+activation; reinforcing a quarantined claim is allowed and honest),
+the population-cap count, the collapse RPC, and the eviction tiers
+(all three see ACTIVE rows only - see M1; quarantined rows are
+warming inventory, not live corpus).
 
 ## DELTAS-FROM-TEMPLATE LEDGER
 
@@ -120,33 +140,55 @@ these deltas. Each row verified against the source this drafting.
 | Aspect | Live judge | Backfill judge |
 | --- | --- | --- |
 | Completion unit | One completion per judged THREAD, predictions batched (p1..pn tags, buildVerdictRequest). | One completion per (claim, exchange) pair; single prediction, single tag. |
-| Trigger | Fires recorded in a thread; day-gated thread claim; */10 cron. | Quarantine pool; hourly claim-based sweep (:33); claim-RPC pattern. |
+| Trigger | Fires recorded in a thread; day-gated thread claim; */10 cron. | Quarantine pool; hourly claim-based sweep (:21); claim-RPC pattern. |
 | Conversation framing | "predictions that were live during the conversation above" | Prediction + transcript only; no live/quarantine/backfill disclosure (decision 6). |
 | Transcript input | Whole thread transcript. | Exchange slice: target round's user message + assistant reply, +-1 adjacent exchange. |
 | Verdict kinds | held / contradicted / not-borne-out / not-engaged, two-step prompt, skeptical bias. | Same four kinds, same two-step shape, same semantics - prompt adapted for tense only. |
 | Evidence weights | held -> confirm += 1; contradicted -> disconfirm += 1; not-borne-out -> disconfirm += w_soft (0.25); not-engaged -> nothing. | Same mapping scaled by w_backfill (0.5): held 0.5, contradicted 0.5, not-borne-out 0.125. not-engaged counts toward attempts, never toward tallies. |
 | Record of verdicts | `verdict` column on the existing samskara_fires row. | New samskara_backfill_verdicts row per attempt. NO fire row is ever written. |
-| Control arm | Yes - samskara_control_verdicts draws unfired controls per thread. | None. The selection question does not arise (the worker chooses its own candidates); noted, out of scope. |
-| Model | EVALUATION_MODEL = BIG_WINDOW_MODEL (agent-models.ts:71, samskara_evaluation.ts:38,559). | Same model constant; single-prediction completions are smaller, not cheaper-per-token. |
-| Parse defense | JSON parse; malformed/missing/out-of-enum entries dropped silently. | Reused verbatim (single-entry map). |
-| Discount | Evidence aged by d per genuine test, inside apply_evaluation. | Same discount math inside apply_backfill; discount applies per genuine backfill test at scaled weight. |
+| Control arm | Yes - samskara_control_verdicts draws unfired controls per thread; the standing selection instrument. | None. The live control instrument stays clean for its own question (selection); the backfill's validity instrument is M5's agreement readout. Excluding quarantined claims from the control draw (M1) keeps the live instrument unpolluted. |
+| Model | EVALUATION_MODEL = BIG_WINDOW_MODEL (agent-models.ts:71, samskara_evaluation.ts:38,559). | Same model constant. |
+| Parse defense | JSON parse; malformed/missing/out-of-enum entries dropped silently (parseVerdicts). | Reused - the symbols are exported from the same module (M3). |
+| Discount | Evidence aged by d per genuine test, inside apply_evaluation. | Same discount math inside apply_backfill; a claim's backfill attempts fold in one batch (one discount event per tick), vs the live judge's once-per-thread. Comment in the fold RPC. |
+| Reuse mechanics | parseVerdicts / buildVerdictRequest / VerdictKind are module-private. | Exported from samskara_evaluation.ts for the backfill agent to import (live consumers exist, so the export is not speculative API). |
 
 ## VERIFIED MECHANICS THIS PLAN BUILDS ON
 
 - The fire predicate is reproducible math. Live fire embeds the
-  query text (user message + doubt note) with the local embedder
-  and calls samskara_fire_top_k (priming/samskara.ts:118-175).
-  Score = centered-cosine ramp (cosine 0.30 saturates to full
-  score) x sqrt(health x confidence) x evidence bonus
-  (schema.sql:8495-8543). A historical exchange embedded the same
-  way yields an exact "would have fired" test.
+  round's user-message text (extractUserText; priming.ts:815-832,
+  fireSamskaras at priming/samskara.ts:225-245) and calls
+  samskara_fire_top_k (priming/samskara.ts:171). Score = centered-
+  cosine ramp x sqrt(health x confidence) x evidence bonus
+  (schema.sql:8495-8543). The doubt-note splice belongs to the
+  read-only refinement probe (priming.ts:547-549), which records
+  no fires - so "user message embedded the same way" IS the exact
+  composition of every judged fire. A historical exchange's user
+  message, embedded identically, gives an exact would-have-fired
+  test against the judged-fire population.
+- The centering register for message-vs-claim comparison is the
+  SUBSTRATE mean, `_samskara_centering_mean` (schema.sql:8323-
+  8338, used by the fire RPC at :8510). The schema warns that
+  swapping registers invalidates a tuned bar (:8266-8271). The
+  claim mean (`_samskara_claim_centering_mean`, :8354) is for
+  claim-vs-claim work only. The candidates RPC MUST use the
+  substrate mean.
+- The measured register: message-vs-claim centered cosine tops out
+  at 0.299 over an 800-message prod sample, with rank 11 near 0.08
+  (register note, schema.sql:8453-8462). THEREFORE candidate
+  selection is TOP-K BY RANK above a LOW floor (0.05 initial), not
+  a 0.30-style bar - the fire ramp's 0.30 knee is a score-saturation
+  point, not an admission floor, and a 0.30 floor here would return
+  zero candidates for nearly every claim, silently disabling
+  quarantine via transition 2. The floor gets its own labeled
+  probe set (message-vs-claim pairs; the existing probe set is
+  claim-pairs under claim-mean centering - a different register
+  that cannot calibrate this number).
 - All embeddings share one space: claims, substrate situations, and
   fire queries are embedded by the local edge-runtime embedder
   (gte-small, 384-dim, zero-extended to the vector(2048) columns;
   _shared/local-embed.ts:1-30) and registered through the
   embeddings worker's EMBED_SOURCES table (samskara-substrate and
-  samskara-predictions at _shared/embed-input.ts:213,219). Centering
-  uses the shared claim mean (_samskara_centering_mean). The
+  samskara-predictions at _shared/embed-input.ts:213,219). The
   substrate column's inline comment still says "bge-m3's 1024" -
   stale; the model rotated to gte-small and everything was
   re-embedded (docs/dev/embeddings.md). M4 sweeps that comment.
@@ -156,24 +198,44 @@ these deltas. Each row verified against the source this drafting.
   w_soft at :9314). The two-step prompt (engagement gate, then
   outcome) and the skeptical bias exist because prod data killed
   their absence (92.5% held-rate incident; agents/
-  samskara_evaluation.ts:127-157).
+  samskara_evaluation.ts:141-161).
 - Mint provenance resolves to threads: samskara_provenance kinds
   ('substrate', 'association') carry ref_id into
   samskara_substrate rows, which carry thread_id
-  (schema.sql:7354-7380, 7945-7950).
+  (schema.sql:7354-7380, 7945-7950). Substrate pointers are SOFT -
+  they survive message deletion (schema.sql:7358-7363), so
+  candidate retrieval must join to messages for existence.
 - The claim-RPC pattern is the house mutual-exclusion primitive
-  (per-row claim columns + claim RPC + guarded save). The embedder
-  already runs two phases per substrate row off independent claims.
-- Hourly cron minute :33 is free (taken: every-minute embed backfill
-  and stream janitor; :03 bias; :07 wiki; :13 reap; :17 wiki-records
-  and rem; :23 samskara sweep; :27 reflection; :37 wiki-librarian;
-  :43 samskara decay; :47 deep-sleep; :57 curation; evaluation
-  every 10 min).
+  (per-row claim columns + claim RPC + guarded save). The substrate
+  table already carries TWO independent claim pairs for its two
+  phases (schema.sql:7383-7391); the embedder's save RPC clears the
+  claim on save (schema.sql:9188-9189), so one claim cannot carry
+  two saves. A third claim pair is the house-shaped answer for
+  query_embedding.
+- Prior related measurement, recorded in commit 22d79a38 (2026-07-
+  13): embedding-recurrence matching was measured and REJECTED as
+  an eviction signal - at 0.6/0.7 floors a mint-cluster centroid
+  matched 30-70% of the archive. This plan reuses retrieval for a
+  different job (candidate retrieval for per-pair LLM judging, at a
+  much lower floor, with half-weight verdicts and an M5 agreement
+  gate) - not as a direct evidence-free eviction signal. The
+  distinction is load-bearing and cited here deliberately.
+- Hourly cron minute :21 is free. Map re-derived from the schema's
+  actual cron.schedule calls on 2026-10-26: every-minute embed
+  backfill and stream janitor; :03 bias; :07 wiki; :13 reap;
+  :17 wiki-records and rem; :23 samskara sweep; :27 reflection;
+  :33 intent-employment; :37 wiki-librarian; :47 deep-sleep;
+  :53 conversation-digest; :57 curation; */10 evaluation; :43
+  fork-gc; daily/6-hourly jobs at 4:00-5:49. (The architecture
+  doc's ladder is stale: it still lists samskara decay at :43 and
+  omits :33/:53.)
 
 ## M1 - SCHEMA
 
 All idempotent, per the house rules (add column if not exists,
-drop-if-exists + recreate for RPCs, grants block at file end).
+drop-if-exists + recreate for RPCs; the new table is created ABOVE
+the grants block at file end - tests/schema-grants.test.ts fails
+loudly otherwise, and its floor >= 52 accommodates one more table).
 
 - `samskaras` gains:
   - `activated_at timestamptz` - NULL = quarantined. Default NULL
@@ -182,143 +244,203 @@ drop-if-exists + recreate for RPCs, grants block at file end).
     timestamptz` - the claim-RPC pair for the worker.
   - `backfill_attempts int not null default 0` - spent attempt
     budget.
-  - One-shot grandfather block: `update samskaras set activated_at
-    = now() where activated_at is null` guarded on a marker (the
-    column add itself is the marker; the block runs once on the
-    deploy that adds the column - subsequent re-applies see no
-    NULL... EXCEPT new mints, which must NOT be grandfathered by
-    a re-apply. So the grandfather must be a one-shot: guard on a
-    distinct sentinel, e.g. `where id in (select id from
-    samskaras where activated_at is null) and to_regclass(...)
-    marker table absent`. Concrete mechanism: a tiny
-    `samskara_backfill_grandfathered boolean` row in app_config or
-    a guarded do-block checking whether the column was JUST added
-    (information_schema + a side-table flag). Implementation must
-    resolve this to a provably one-shot form; premise flagged for
-    refinement.)
+  - One-shot grandfather block: a guarded do-block that runs the
+    `update samskaras set activated_at = now() where activated_at
+    is null` ONLY if the marker row
+    `app_config.key = 'samskara_backfill_grandfathered'` is
+    absent, then inserts the marker. app_config is the project's
+    existing one-row-class config table; the marker makes the
+    block provably one-shot across re-applies (the plain
+    null-check form would re-run on every deploy and activate
+    every new quarantined mint - the deploy-blocking bug this
+    mechanism exists to prevent).
 - New table `samskara_backfill_verdicts`: one row per judged
   (claim, exchange) attempt. Columns: id, user_id, samskara_id,
   thread_id, user_message_id, verdict text, cosine real, judged_at,
-  model text. Never touched by health directly (the fold RPC is the
-  writer of tallies); this table is the audit ledger and the
-  activation gate's input. RLS: owner-selectable, service-role
-  writes.
-- `samskara_substrate` gains `query_embedding vector(2048)` - the
-  RAW user-message text of the round, embedded by the existing
-  embeddings worker (same claim pair as situation_embedding or a
-  third claim column; implementation picks, keeping the two-phase
-  claim independence). This is the retrieval index for candidate
-  exchanges. Historical rows backfill via the worker's normal
-  pending-embed poll (embedding_model stamps the source).
+  model text. ON DELETE CASCADE on samskara_id (house pattern,
+  mirrors fires): the ledger is historical-only, a merged or dead
+  claim's rows go with it, and M5 readouts accept the attrition.
+  RLS: owner-selectable, service-role writes. This table is the
+  audit ledger (decision 3) and the candidate-exclusion and
+  gate-check input.
+- `samskara_substrate` gains `query_embedding vector(2048)` plus a
+  THIRD claim pair `query_claim_holder text` + `query_claim_expires
+  timestamptz` (the two existing pairs cover assimilate + situation
+  embedding; one claim cannot carry two saves).
 - RPC `samskara_backfill_candidates(p_samskara_id, p_k, p_user_id)`:
   returns the top-p_k substrate rounds by CENTERED cosine between
   the claim's prediction_embedding and substrate.query_embedding,
-  where centered cosine >= p_floor (initial 0.30, the fire ramp's
-  saturation point; calibrated on the labeled probe set before
-  deploy), EXCLUDING every thread reachable from the claim's
-  samskara_provenance rows, and only rounds with query_embedding
-  not null. Invoker-safe (auth.uid()), service-role passes user id
-  explicitly (b-strict overload pattern).
-- RPC `samskara_claim_quarantined_samskara(p_user_id)`: oldest
-  quarantined row with backfill_attempts < p_max and claim columns
-  free, `for update skip locked`, stamps the claim pair. The save
-  path (fold RPC) only commits if the claim still belongs to the
-  caller - the canonical pattern.
+  centered by `_samskara_centering_mean` (the substrate mean - the
+  fire path's register), ordered cosine desc, where centered
+  cosine >= p_floor (0.05 initial; re-derived on a labeled
+  message-vs-claim probe set before deploy), EXCLUDING: rounds in
+  threads reachable from the claim's samskara_provenance rows
+  (decision 4), rounds whose user_message_id no longer resolves to
+  a real message row (soft pointers survive deletion; the slice
+  could not be judged), (claim, round) pairs already present in
+  samskara_backfill_verdicts (crash-retry exclusion, M3), and
+  rounds from threads with fewer than 2 user messages (the
+  recorded single-round junk-data gate, docs/dev/samskara.md
+  "The >=2-user-message gate"). Candidate age >= 48 hours
+  (conversations settled before judging - the recorded next-day
+  rationale). Invoker-safe with explicit p_user_id (b-strict
+  overload pattern).
+- RPC `samskara_claim_quarantined_samskara(p_user_id, p_holder,
+  p_ttl)`: oldest quarantined row with backfill_attempts < budget
+  and claim columns free, `for update skip locked`, stamps the
+  claim pair, returns the claim's prediction text + embedding.
+  The save path (fold RPC) only commits if the claim still belongs
+  to the caller - the canonical guarded save.
 - RPC `samskara_apply_backfill(p_user_id, p_samskara_id, p_held
-  uuid[], p_contradicted uuid[], p_not_borne_out uuid[], p_weight
-  real, p_claim_holder text)`: folds verdicts into the SAME tallies
-  via the same discount math as samskara_apply_evaluation, scaled
-  by p_weight (w_backfill, initial 0.5): held -> confirm += w_bf;
-  contradicted -> disconfirm += w_bf; not-borne-out -> disconfirm
-  += w_soft x w_bf; not-engaged never passed. Advances
-  backfill_attempts by the total attempt count INCLUDING
-  not-engaged, then releases or re-stamps the claim. Guarded on
-  claim holder + expiry (stale worker cannot double-fold).
+  uuid[], p_contradicted uuid[], p_not_borne_out uuid[],
+  p_not_engaged_count int, p_claim_holder text)`: folds genuine
+  verdicts into the SAME tallies via the same discount math as
+  samskara_apply_evaluation scaled by w_backfill (0.5): held ->
+  confirm += 0.5; contradicted -> disconfirm += 0.5; not-borne-out
+  -> disconfirm += w_soft x 0.5; not-engaged counts only toward
+  attempts. Advances backfill_attempts by the total attempt count,
+  then releases the claim. Guarded on claim holder + expiry. A
+  MIRROR-COMMENT pin ties its constants (k, L, d, w_soft) to
+  samskara_apply_evaluation's, with a Deno test asserting the
+  parity (the SAMSKARA_POPULATION_CAP precedent); the alternative
+  - generalizing the live RPC to take a weight - would drop/
+  recreate load-bearing prod SQL and was rejected.
 - Fire RPC filter: samskara_fire_top_k gains
   `and s.activated_at is not null`. Quarantined claims cannot fire,
   join cohorts, inflate fire_count, or enter the co-fire graph.
-  Also exclude them from samskara_control_verdicts' control draw
-  (control arm mirrors the fired pool).
+  Placement note: the recorded house pattern is "no health filter
+  in the RPC, trim in the application layer" (schema.sql:7848-7852,
+  priming/samskara.ts:187-192). Activation is a LIFECYCLE state,
+  not a quality signal - the co-fire rationale does not apply -
+  and the RPC is the single chokepoint every fire consumer shares;
+  application-layer filtering would let any future caller leak
+  quarantined rows into cohorts, which is the exact bug quarantine
+  exists to prevent. Deliberate divergence, documented here.
+- Cap, collapse, and eviction see ACTIVE rows only:
+  `corpusAtCap` (venice/agents/samskara.ts:1177-1191) counts rows
+  with activated_at not null (the plan's own purpose statement is
+  why: quarantined rows are not competing for live-corpus slots).
+  The quarantine pool is bounded by mint rate, the worker's drain
+  rate, and the 45-day reaper. samskara_collapse_by_cofiring's
+  candidate predicates gain the same filter in BOTH passes: the
+  overflow pass is evidence-free cosine merging and must never
+  merge a quarantined claim (it could absorb an active row and
+  stay non-firing, or inherit merged tallies with no ledger
+  linkage). Every samskara_evict_for_mint victim tier gains the
+  filter too: eviction frees a live-corpus slot for a mint, and a
+  quarantined row holds no such slot - evicting one would burn
+  earned evidence for nothing.
+- Control-draw exclusion: the evaluation sweep's control sample
+  draws from fire-eligible claims; add the activation filter there
+  so the live selection instrument stays clean.
 
 ## M2 - EMBEDDER WIRING
 
-Extend the embeddings worker's samskara_substrate source to also
-fill query_embedding (embed the round's raw user message text).
-One extra local-embed call per round; no network cost; the existing
-pending-embed claim pattern carries it. Historical substrate rows
-drain through the same poll (bounded by the worker's per-tick cap).
+Register `query_embedding` as a NEW EMBED_SOURCES entry
+`samskara-substrate-query` (_shared/embed-input.ts): the source
+contract is one buildInput -> one string -> one vector -> one save
+column, so a second output column on the existing source cannot
+work (the BackfillDeps.save contract and the claim/save RPC pair
+are single-vector). Components:
 
-The 2026-08 retrieval-outage lesson is binding here: a new
-embeddable column must be registered in EMBED_SOURCES
-(_shared/embed-input.ts) with its buildInput, or the backfill sweep
-will never fill it and the column stays NULL while everything looks
-fine - the failure was silent cross-space noise with no error, and
-three ranking-quality theories were chased before anyone checked
-vector comparability (project memory; docs/dev/embeddings.md).
-query_embedding joins as part of the existing samskara-substrate
-source (same buildInput variant, second output column), not as a
-new source, so registration is one variant branch - but the
-registration IS the load-bearing step.
+- Third claim pair on samskara_substrate (M1).
+- Claim RPC variant keyed on `query_embedding is null AND the
+  round's user message still exists` (soft pointers can point at
+  deleted messages; such rounds are permanently un-embeddable and
+  must not be re-claimed forever). The claim RPC returns the user
+  message TEXT via a join to messages (the text is not stored on
+  substrate - only user_message_id).
+- Save RPC writing query_embedding only, guarded on the query
+  claim pair.
+- embed-input.test.ts pins the full EMBED_SOURCES name list with
+  assertEquals - the new name is added to that pin in the same
+  change (the 2026-08 outage's guardrail).
+
+Historical substrate rows drain through the normal backfill poll
+(bounded by the worker's per-tick cap). The 2026-08 retrieval-
+outage lesson is the reason registration is load-bearing: a missing
+EMBED_SOURCES entry fails silently as cross-space cosine noise
+(docs/dev/embeddings.md; the outage cost three weeks of dark
+corpus).
 
 ## M3 - THE BACKFILL WORKER
 
 New agent `supabase/functions/venice/agents/samskara_backfill.ts`,
-route `/samskara-backfill-sweep`, cron `33 * * * *` (pg_net POST,
-house dispatch shape). One claim per tick, work registered under
-EdgeRuntime.waitUntil.
+route `/samskara-backfill-sweep`, cron `21 * * * *` (pg_net POST,
+house dispatch shape). CLAIMS_PER_TICK = 2 (the hub-probe
+precedent: enough to drain ahead of a ~20/day mint rate, capped
+spend). Work registered under EdgeRuntime.waitUntil.
 
-Per-tick flow:
+Per-claim flow:
 
 1. Claim one quarantined claim (oldest mint first).
 2. Retrieve candidates: samskara_backfill_candidates with
-   p_k = ATTEMPT_BUDGET (8) - p_backfill_attempts.
-3. For each candidate, in order (highest cosine first):
+   p_k = ATTEMPT_BUDGET (8) - backfill_attempts.
+3. If the candidate list is EMPTY and the user has zero eligible
+   rounds outside the birthplace: activate immediately
+   (transition 2), release the claim, done.
+4. For each candidate, in order (highest cosine first):
    - Fetch the exchange slice: the round's user message + its
      assistant reply, plus the adjacent exchange on each side for
      context (the judge's "pointable moment" standard needs a
-     quotable transcript, not a whole thread; whole threads would
-     multiply tokens for marginal evidence).
+     quotable transcript; whole threads would multiply tokens for
+     marginal evidence).
    - ONE completion: system prompt = the live judge's two-step
      framing adapted to single-prediction, past-tense, with no
      provenance disclosure; user turn = the prediction + the
      transcript slice + the verdict request (single tag, JSON
-     reply; reuse the live judge's parse-and-drop-malformed
-     defense).
-   - Record the verdict row (including not-engaged - every spent
-     attempt is ledgered) and fold via the backfill RPC.
-4. Gate check: attempts >= ATTEMPT_BUDGET ->
-   - genuine engaged tests (held + contradicted + not-borne-out)
-     >= 1: activate (set activated_at = now()).
-   - zero engaged tests: stay quarantined. Its ledger is the
-     adjacency-junk evidence standard's new input (below).
-5. Release the claim.
+     reply). Reuse parseVerdicts / buildVerdictRequest /
+     VerdictKind exported from samskara_evaluation.ts, and
+     completeJsonObjectWithMeta for the completion (response
+     format, retry, finishReason guard).
+   - Insert the ledger row FIRST (including not-engaged - every
+     spent attempt is ledgered; the candidate exclusion keys on
+     ledger rows, so a crash between ledger insert and fold never
+     re-judges the same exchange).
+5. Fold once per claim per tick via samskara_apply_backfill with
+   the batch's verdict arrays (guarded save; the no-claim no-ops
+   are the crash-recovery path - the next tick re-claims and the
+   ledger exclusion skips judged exchanges).
+6. Gate check (transition 1): attempts spent OR pool exhausted,
+   AND genuine engaged tests >= 1 -> set activated_at = now().
+   Pool exhausted with zero genuine tests -> release the claim;
+   the 45-day reaper is the death path (transition 4).
 
-Constants (initial values, probe-set calibrated before deploy):
-ATTEMPT_BUDGET = 8, candidate floor = 0.30 centered cosine,
-w_backfill = 0.5, exchange context = +-1 adjacent exchange.
-
-The adjacency-junk standard: reap_untested (or a sibling) gains a
-backfill source - a quarantined claim with ATTEMPT_BUDGET spent
-attempts, all not-engaged, and age >= 14 days is evidenced junk
-under the same logic as the live tier-1 eviction standard (10+
-judged not-engaged, zero engagements). This is the death path for
-claims whose neighborhood never actually engages them.
+Constants (initial values; the floor gets a labeled probe set
+before deploy): ATTEMPT_BUDGET = 8, candidate floor = 0.05
+centered cosine (substrate-mean register), w_backfill = 0.5,
+exchange context = +-1 adjacent exchange, candidate age >= 48h,
+CLAIMS_PER_TICK = 2.
 
 ## M4 - SURFACES
 
-- Health panel + browse list: quarantined claims get a status badge
-  ("warming up", n of m conversations judged). No editing of
-  quarantined claims beyond what exists today.
-- docs/dev/samskara.md: the lifecycle section gains the quarantine
-  stage and the backfill worker; Interactions ledgers updated
-  (embeddings, evaluation sweep, eviction, fire path).
+- Health panel + browse list: quarantined claims get a status in
+  the EXISTING releaseStatus axis (src/lib/ui/samskara-browse.ts -
+  extending it, not a new badge mechanism), plus a per-claim
+  "n of m exchanges judged" line from the ledger. The browse
+  select list (src/lib/supabase/samskara.ts:366,428) gains
+  activated_at + backfill_attempts.
+- samskara_health_snapshot gains a quarantined count and a stuck-
+  backfill-claim metric (claim held past its expiry - the house
+  leak detector pattern, schema.sql:10692-10699).
+- docs/dev/samskara.md: the "Health: the verdict posterior" and
+  evaluation sections gain the quarantine stage and the backfill
+  worker; the stale "bge-m3" comment on situation_embedding is
+  swept (local-embed.ts:14-21 is the authority); Interactions
+  ledgers updated (embeddings, evaluation sweep, eviction, fire
+  path).
 - docs/user/: the observable behavior - new claims do not
   influence replies immediately; they warm up against history
-  first; the badge.
-- New QA use case: docs/qa/use-cases/samskara-backfill.md (forge a
-  quarantined claim, seed/forge substrate embeddings, run the
-  sweep route with the service-role JWT, assert verdict rows, fold
-  weights, activation gate both branches, birthplace exclusion).
+  first; the warming-up status line.
+- New QA use case: docs/qa/use-cases/samskara-backfill.md. It is
+  the LOAD-BEARING guard, not a nice-to-have: schema RPCs have no
+  automated test net in this repo (no SQL test harness exists -
+  verified), so the use case must cover: forge a quarantined
+  claim, seed substrate query embeddings, run the sweep route with
+  the service-role JWT, assert ledger rows and fold weights,
+  activation gate both branches, birthplace exclusion, zero-
+  candidate exception, and the grandfather marker firing exactly
+  once across two re-applies.
 
 ## M5 - READOUTS
 
@@ -328,53 +450,71 @@ claims whose neighborhood never actually engages them.
   predict live verdicts better than chance, the mechanism measures
   the judge's mood, not the claim, and gets retired.
 - Throughput: activation rate per week, quarantine pool depth,
-  attempts per claim, not-engaged share.
+  attempts per claim, not-engaged share, p0 drift (backfill
+  evidence moves the population prior - decision 3's reduced
+  weight is the only moderator; watch it).
 - Precision side-effect: live fire not-engaged share for
   backfill-activated claims vs grandfathered claims (does an
   evidence-backed claim fire more precisely?).
-- Cap inputs: population now decomposes into quarantined /
-  activated / evidenced - the data the cap revisit consumes.
+- Cap inputs: population now decomposes into quarantined / active
+  (the matrix's two living states), with genuine-test counts from
+  the ledger - the data the cap revisit consumes.
 
 ## GOTCHAS AND PREMISE LEDGER
 
-- The grandfather block must be provably one-shot (see M1 flag).
-  A re-apply that re-runs `set activated_at = now() where null`
-  would activate every NEW quarantined mint - silently disabling
-  the whole feature. This is the deploy-blocking premise.
-- Substrate rows with NULL situation (assimilation lag) still get
-  query_embedding (embedding needs only the raw user text). The
-  two waits are independent.
-- A claim with fewer candidates than the budget (short history,
-  aggressive floor): spend what exists, then gate. A brand-new
-  account with no history: zero candidates - activate immediately
-  (quarantine against an empty corpus is indefinite starvation;
-  the live judge is the only signal there anyway).
+- The grandfather marker (app_config row) is the deploy-blocking
+  premise. The plain `where activated_at is null` form re-runs on
+  every schema re-apply and would activate every new quarantined
+  mint - silently disabling the whole feature. The marker form is
+  provably one-shot.
+- The 0.30 fire-ramp knee is NOT a candidate floor (message-vs-
+  claim centered cosine tops out at 0.299; a 0.30 floor returns
+  zero candidates and transition 2 then activates everything,
+  silently disabling quarantine). Candidate selection is top-k by
+  rank above a low floor. The existing probe set cannot calibrate
+  it (claim-pair register); a new message-vs-claim labeled set is
+  required before deploy.
+- The candidates RPC uses `_samskara_centering_mean` (substrate
+  mean) - the same register as the fire path. Using the claim mean
+  would invalidate the floor and misstate "would have fired."
+- A fully not-engaged backfill leaves tallies zero: the claim can
+  never activate and dies at the 45-day probation reaper. That is
+  the intended death; the ledger records the not-engaged history
+  for debugging. No new reaper is built (decision 7).
 - Fires are NEVER written for backfill attempts: fire_count stays
   "live fires", the co-fire graph stays behavioral, collapse is
   untouched. The backfill ledger table is the only record.
-- The mint probes' dedup-reinforce may hit a quarantined claim
+- Dedup-reinforce at mint time may hit a quarantined claim
   (geometry ignores activation). Reinforcing a quarantined claim's
-  tallies is harmless and honest; it does not activate.
-- Eviction tiers read tallies; quarantined claims have none, so
-  tier-1/tier-3 cannot pick them mid-backfill (also protected by
-  the 14-day floors). The 90-day stale tier can reap a never-
-  activated claim - correct death.
-- The evaluation sweep's day-gate and the backfill worker are
-  independent claim spaces; no contention (different tables).
-- Centered cosine uses the LIVE claim mean, which drifts as the
-  corpus changes: "would have fired" is evaluated against today's
-  centering, not the historical day's. Accepted (the alternative -
-  freezing per-round means - is machinery the evidence does not
-  need); noted for the readout.
-- The stale "bge-m3" comment on samskara_substrate.situation_embedding
-  is swept in M4; local-embed.ts:14-21 is the authority (gte-small,
-  384-dim).
+  tallies is harmless and honest; it does not activate, and it
+  does not affect the candidate/gate arithmetic.
+- The mint probes' dedup-reinforce and the backfill worker both
+  write tallies; both go through guarded saves (mint path via the
+  existing reinforce path, worker via apply_backfill). The tallies
+  are additive; no lost-update window beyond the house pattern's.
+- Backfill evidence shifts p0 (samskara_population_p0 sums all
+  tallies, schema.sql:9230-9239). Accepted: reduced weight is the
+  class distinction's carrier; M5 watches the drift. Excluding
+  quarantined rows from p0 was rejected - it would split the
+  posterior's calibration surface by lifecycle state.
+- Centered cosine uses the LIVE substrate mean, which drifts as
+  the corpus changes: "would have fired" is evaluated against
+  today's centering, not the historical day's. Accepted; noted for
+  the readout.
+- Crash window between a ledger insert and the batch fold: the
+  verdict is ledgered but unfolded, and the candidate exclusion
+  means the retry never re-judges it - one verdict's worth of
+  tallies can be lost per crash. Accepted (single-user stakes,
+  rare event, the ledger keeps the record); the alternative -
+  fold-per-exchange - multiplies the guarded-save round trips 8x.
+- "157 live rows" in decision 5 is an owner datum from the
+  2026-10-25 deployment census, not a repo-verifiable number.
 
 ## WHAT THIS PLAN REPLACES
 
 - The "backfill" sketches in the 2026-10-26 cap conversation
   (this document is their resolution).
-- Nothing else: the cap, mint gates, eviction tiers, and the
-  lifecycle plan's milestones M1/M2/M4 are untouched. The
+- Nothing else: the cap, mint gates, eviction tier definitions,
+  and the lifecycle plan's milestones M1/M2/M4 are untouched. The
   lifecycle plan's decision 6 (cap parked) now reads THIS plan's
   M5 as additional input.
