@@ -82,6 +82,8 @@ describe('samskara_apply_backfill / apply_evaluation constant parity', () => {
     expect(Number(claim![1])).toBe(budget);
     expect(schema.match(/v_attempts >= (\d+)/)![1]).toBe(String(budget));
     expect(schema.match(/set backfill_attempts = (\d+)/)![1]).toBe(String(budget));
+    // The cron fast-exit skips pinned rows with the same budget.
+    expect(schema.match(/and s\.backfill_attempts < (\d+)/)![1]).toBe(String(budget));
     // The UI's mirror constant (the detail pane's "n of 8" copy).
     const browse = readFileSync(
       join(process.cwd(), 'src', 'lib', 'ui', 'samskara-browse.ts'),

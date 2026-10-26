@@ -590,8 +590,10 @@ a concurrent tick cannot claim a row mid-batch).
   probation copy and predicts a reaper release the tallies immunize
   against (the drift samskara-browse.ts's own lockstep warning at
   :202-214 names). Rendered as "warming up" (decision 8) with a
-  progress line: "judging: n of 8 exchanges" in flight, "judged
-  against n historical exchanges" when complete. Backfill evidence
+  progress line rendered as one fused string,
+  "warming up - n of 8 exchanges judged" (the denominator is
+  ATTEMPT_BUDGET; the never-engaged pin's copy is decision 8's
+  second string). Backfill evidence
   is deliberately NOT rendered as per-verdict rows in the verdict
   list (that list stays fires-only) - the progress line is the
   user surface, the ledger is the audit surface (decision 3). The

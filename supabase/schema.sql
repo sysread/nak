@@ -9640,10 +9640,11 @@ grant execute on function public.samskara_backfill_candidates(uuid, int, uuid, r
 --   rounds_embedded > 0 with an
 --   empty candidate fetch       -> true exhaustion (everything judged
 --                                  or below the floor): gate.
--- Both counts share the candidates RPC's birthplace exclusion, live-
--- message requirement, and >=2-user-message junk gate; neither is
--- age-gated (an unembedded round younger than 48h still signals lag -
--- it ages into candidacy later).
+-- rounds_total drops ONLY the age gate from the candidate predicates:
+-- a round younger than 48h still means judgeable history is coming, so
+-- it must signal "wait" (via embedded = 0), never "empty corpus".
+-- rounds_embedded KEEPS the age gate, matching the candidates RPC -
+-- "embedded count" means candidate-ready count.
 drop function if exists public.samskara_backfill_pool_state(uuid, uuid);
 create or replace function public.samskara_backfill_pool_state(
   p_samskara_id uuid,
@@ -9673,8 +9674,7 @@ language sql stable security invoker as $$
              and length(btrim(msg.content)) > 0
         )
         and (select count(*) from public.messages m2
-              where m2.thread_id = sub.thread_id and m2.role = 'user') >= 2
-        and sub.created_at < now() - interval '48 hours')::int,
+              where m2.thread_id = sub.thread_id and m2.role = 'user') >= 2)::int,
     (select count(*) from public.samskara_substrate sub
       where sub.user_id = coalesce(p_user_id, auth.uid())
         and sub.thread_id not in (select thread_id from birthplaces)

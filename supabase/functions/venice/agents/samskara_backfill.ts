@@ -195,7 +195,15 @@ async function tickOneClaim(
       // Embedding lag: rounds exist but the embed poll has not drained
       // them yet. The pool re-opens as they drain - WAIT this tick
       // (release without gating); pinning here would strand claims
-      // minted into a still-draining corpus.
+      // minted into a still-draining corpus. Release the claim pair
+      // explicitly: a stamp left to age out reads as a stuck worker in
+      // the leak detector for the rest of the hour.
+      const { error: waitErr } = await admin
+        .from('samskaras')
+        .update({ backfill_claim_holder: null, backfill_claim_expires: null })
+        .eq('id', row.id)
+        .eq('backfill_claim_holder', holderId);
+      if (waitErr) throw new Error(`wait release failed: ${waitErr.message}`);
       log.debug(`backfill: claim ${row.id} waits on embedding drain`);
       return true;
     }
