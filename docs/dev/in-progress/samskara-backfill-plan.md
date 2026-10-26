@@ -168,9 +168,10 @@ these deltas. Each row verified against the source this drafting.
 | --- | --- | --- |
 | Completion unit | One completion per judged THREAD, predictions batched (p1..pn tags, buildVerdictRequest). | One completion per (claim, exchange) pair; single prediction, single tag. |
 | Trigger | Fires recorded in a thread; day-gated thread claim; */10 cron. | Quarantine pool; hourly claim-based sweep (:21); claim-RPC pattern. |
-| Conversation framing | "predictions that were live during the conversation above" | Prediction + transcript only; no live/quarantine/backfill disclosure (decision 6). |
+| Conversation framing | "predictions that were live during the conversation above" | Prediction + transcript only; framing sentence replaced wholesale, no live/quarantine/backfill disclosure (decision 6). |
+| Message layout | Thread transcript as native role turns, then the verdict-request user turn. | Same layout: slice as native role turns, then the verdict-request user turn. |
 | Transcript input | Whole thread transcript. | Exchange slice: target round's user message + assistant reply, +-1 adjacent exchange. |
-| Verdict kinds | held / contradicted / not-borne-out / not-engaged, two-step prompt, skeptical bias. | Same four kinds, same two-step shape, same semantics - prompt adapted for tense only. |
+| Verdict kinds | held / contradicted / not-borne-out / not-engaged, two-step prompt, skeptical bias. | Same four kinds, same two-step shape, same semantics; the framing sentence and the batch contract change, everything else transfers. |
 | Evidence weights | held -> confirm += 1; contradicted -> disconfirm += 1; not-borne-out -> disconfirm += w_soft (0.25); not-engaged -> nothing. | Same mapping scaled by w_backfill (0.5): held 0.5, contradicted 0.5, not-borne-out 0.125. not-engaged counts toward attempts, never toward tallies. |
 | Record of verdicts | `verdict` column on the existing samskara_fires row. | New samskara_backfill_verdicts row per attempt. NO fire row is ever written. |
 | Control arm | Yes - samskara_control_verdicts draws unfired controls per thread; the standing selection instrument. | None. The live control instrument stays clean for its own question (selection); the backfill's validity instrument is M5's agreement readout. Excluding quarantined claims from the control draw (M1) keeps the live instrument unpolluted. |
@@ -411,6 +412,14 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   priming from a quarantined claim", not just "no fire rows"), and
   a quarantined row's default health 1.0 would rank it at the top
   of the health-ordered summary sample.
+- samskara_health_snapshot's total_samskaras (schema.sql:10606)
+  gains the same filter: the Health panel feeds that total into the
+  compound-regen backlog delta, and quarantine depth would
+  otherwise light the panel's warn/alarm headline on a healthy
+  pipeline (SamskaraHealthPanel.svelte:105; the module's stated
+  purpose is preventing false alarms). The never_fired column's
+  reading shifts (normal quarantine mints now count there) - a doc
+  note, not a filter.
 - Control-draw exclusion: the evaluation sweep's control sample is
   drawn in TypeScript (`sampleControlClaims`,
   samskara_evaluation.ts:351-367), not SQL - the activation filter
@@ -420,8 +429,11 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   from `samskara_search_by_prediction`, `samskara_cluster_corpus`,
   and `samskara_verdict_counts` (src/lib/supabase/samskara.ts:401,
   448,559) - all three gain `activated_at` in their RETURNS TABLE
-  (drop-if-exists + recreate), so the releaseStatus derivation
-  renders QUARANTINED on every path a claim can arrive by.
+  (drop-if-exists + recreate), and the search RPC also gains
+  `backfill_attempts` (the detail pane renders from `selected`
+  whether the claim arrived by list or by search, Samskaras.svelte:
+  231), so the releaseStatus derivation and the progress line
+  render on every arrival path.
 
 ## M2 - EMBEDDER WIRING
 
@@ -494,14 +506,20 @@ Per-claim flow:
      context (the judge's "pointable moment" standard needs a
      quotable transcript; whole threads would multiply tokens for
      marginal evidence).
-   - ONE completion: system prompt = the live judge's two-step
-     framing adapted to single-prediction, past-tense, with no
-     provenance disclosure; user turn = the prediction + the
-     transcript slice + the verdict request (single tag, JSON
-     reply). Reuse parseVerdicts / buildVerdictRequest /
-     VerdictKind exported from samskara_evaluation.ts, and
-     completeJsonObjectWithMeta for the completion (response
-     format, retry, finishReason guard).
+   - ONE completion: the message layout mirrors the live judge -
+     the exchange slice rides as native role turns (same transcript
+     rendering the evaluation sweep uses for thread messages), then
+     a FINAL user turn carrying the prediction + the verdict
+     request (single tag, JSON reply). The framing sentence
+     replaces "predictions that were live during the conversation
+     above" with a no-provenance equivalent ("Below is a standing
+     prediction about the user. Judge how the conversation above
+     bears on it, using only evidence visible in the transcript.")
+     - the skeptical two-step structure, worked examples, and
+     parse defense are unchanged. Reuse parseVerdicts /
+     buildVerdictRequest / VerdictKind exported from
+     samskara_evaluation.ts, and completeJsonObjectWithMeta for the
+     completion (response format, retry, finishReason guard).
    - A Venice error on one candidate SKIPS that exchange (not
      ledgered, not folded; it is eligible again next tick) and
      continues with the rest.
@@ -548,34 +566,58 @@ a concurrent tick cannot claim a row mid-batch).
 
 ## M4 - SURFACES
 
-- Health panel + browse list: quarantined claims get a status in
-  the EXISTING releaseStatus axis (src/lib/ui/samskara-browse.ts -
-  extending it, not a new badge mechanism), rendered to the user
-  as "warming up" (decision 8's copy rule), plus a per-claim
-  "n of m exchanges judged" line from the ledger. The browse
-  select list (src/lib/supabase/samskara.ts:366,428) gains
+- Health panel + detail pane: a quarantined claim renders in the
+  EXISTING releaseStatus axis (the detail-pane status line at
+  Samskaras.svelte:231 - NOT a new list-row badge mechanism), with
+  a PRECEDENCE RULE: the QUARANTINED check comes FIRST, ahead of
+  the existing genuine > 0 / probation branches - backfill tallies
+  sit in the same columns the probation branch reads, and
+  samskara_verdict_counts reads fires only (schema.sql:10545), so
+  without the precedence a mid-flight row falls through to the
+  probation copy and predicts a reaper release the tallies immunize
+  against (the drift samskara-browse.ts's own lockstep warning at
+  :202-214 names). Rendered as "warming up" (decision 8) with a
+  progress line: "judging: n of 8 exchanges" in flight, "judged
+  against n historical exchanges" when complete. Backfill evidence
+  is deliberately NOT rendered as per-verdict rows in the verdict
+  list (that list stays fires-only) - the progress line is the
+  user surface, the ledger is the audit surface (decision 3). The
+  browse select list (src/lib/supabase/samskara.ts:366,428) gains
   activated_at + backfill_attempts.
 - samskara_health_snapshot gains a quarantined count and a stuck-
   backfill-claim metric (claim held past its expiry - the house
-  leak detector pattern, schema.sql:10692-10699).
+  leak detector pattern, schema.sql:10692-10699). Thresholds: the
+  stuck metric mirrors the existing stuckClaims bands; the
+  quarantined count is informational, never thresholded.
 - docs/dev/samskara.md: the "Health: the verdict posterior" and
-  evaluation sections gain the quarantine stage and the backfill
-  worker; the stale "bge-m3" comment on situation_embedding is
-  swept (local-embed.ts:14-21 is the authority); Interactions
-  ledgers updated (embeddings, evaluation sweep, eviction, fire
-  path).
-- docs/user/: the observable behavior - new claims do not
-  influence replies immediately; they warm up against history
-  first; the warming-up status line.
+  formation-side sections gain the quarantine stage and the
+  backfill worker, plus four prompt-lens notes: the not-borne-out
+  asymmetry (a slice gives one chance per exchange vs a thread's
+  many, so backfill soft misses are weaker evidence than live ones
+  - w_backfill scales uniformly and M5's agreement readout is the
+  guard), the truncation-bias direction (a pointable moment just
+  outside the slice biases toward not-borne-out/not-engaged), the
+  raised situation-arose base rate from similarity retrieval (STEP
+  1's skeptical default becomes the main precision control), and
+  the never_fired snapshot reading. The stale "bge-m3" comment on
+  situation_embedding is swept (local-embed.ts:14-21 is the
+  authority); Interactions ledgers updated (embeddings, evaluation
+  sweep, eviction, fire path).
+- docs/user/samskara.md: the observable behavior - new claims do
+  not influence replies immediately; they warm up against history
+  first; the detail-pane status line.
 - New QA use case: docs/qa/use-cases/samskara-backfill.md. It is
   the LOAD-BEARING guard, not a nice-to-have: schema RPCs have no
   automated test net in this repo (no SQL test harness exists -
   verified), so the use case must cover: forge a quarantined
   claim, seed substrate query embeddings, run the sweep route with
   the service-role JWT, assert ledger rows and fold weights,
-  activation gate both branches, birthplace exclusion, zero-
-  candidate exception, and the grandfather marker firing exactly
-  once across two re-applies.
+  activation gate both branches, birthplace exclusion (both
+  provenance paths), zero-candidate exception, stuck-row pinning
+  (pool exhausted, zero genuine), the grandfather marker firing
+  exactly once across two re-applies, AND the UI states (detail-
+  pane warming-up status with the precedence rule, progress line,
+  health panel quarantined count and regen delta).
 
 ## M5 - READOUTS
 
