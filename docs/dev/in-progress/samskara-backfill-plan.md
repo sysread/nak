@@ -86,6 +86,9 @@ but not its value; the cap revisit reads this plan's M5 data.
    is built. The alternative was rejected as machinery the evidence
    does not need yet; the backfill ledger keeps the not-engaged
    record either way.
+8. "Warming up" is the user-facing badge copy for the QUARANTINED
+   state (M4); the state's name everywhere mechanical is
+   QUARANTINED.
 
 ## STATE AND TRANSITION MATRIX
 
@@ -106,7 +109,7 @@ Transitions QUARANTINED -> ACTIVE (one rule, one exception):
 | # | Trigger | Condition |
 | --- | --- | --- |
 | 1 | Worker gate check | The candidate pool for this claim is exhausted (attempts spent OR no eligible candidates remain) AND the claim has >= 1 genuine engaged backfill test (held + contradicted + not-borne-out). |
-| 2 | Empty-corpus exception | The user has zero embedded substrate rounds outside the claim's birthplace (with a live user message). Nothing exists to judge against; quarantine would be indefinite starvation. Activate immediately. |
+| 2 | Empty-corpus exception | The user has no substrate rounds outside the claim's birthplace AT ALL (checked by round existence with a live user message, NOT by embedding state - the embedding poll lags the deploy and would otherwise mass-activate early mints). Nothing exists to judge against; quarantine would be indefinite starvation. Activate immediately. |
 | 3 | Grandfather block | One-shot at the deploying merge; every row alive that day activates. |
 
 Transitions QUARANTINED -> DEAD:
@@ -150,7 +153,7 @@ these deltas. Each row verified against the source this drafting.
 | Model | EVALUATION_MODEL = BIG_WINDOW_MODEL (agent-models.ts:71, samskara_evaluation.ts:38,559). | Same model constant. |
 | Parse defense | JSON parse; malformed/missing/out-of-enum entries dropped silently (parseVerdicts). | Reused - the symbols are exported from the same module (M3). |
 | Discount | Evidence aged by d per genuine test, inside apply_evaluation. | Same discount math inside apply_backfill; a claim's backfill attempts fold in one batch (one discount event per tick), vs the live judge's once-per-thread. Comment in the fold RPC. |
-| Reuse mechanics | parseVerdicts / buildVerdictRequest / VerdictKind are module-private. | Exported from samskara_evaluation.ts for the backfill agent to import (live consumers exist, so the export is not speculative API). |
+| Reuse mechanics | parseVerdicts / buildVerdictRequest / VerdictKind are module-private. | Exported from samskara_evaluation.ts; the backfill agent is the export's first (and currently only) external consumer. |
 
 ## VERIFIED MECHANICS THIS PLAN BUILDS ON
 
@@ -214,12 +217,13 @@ these deltas. Each row verified against the source this drafting.
   query_embedding.
 - Prior related measurement, recorded in commit 22d79a38 (2026-07-
   13): embedding-recurrence matching was measured and REJECTED as
-  an eviction signal - at 0.6/0.7 floors a mint-cluster centroid
-  matched 30-70% of the archive. This plan reuses retrieval for a
-  different job (candidate retrieval for per-pair LLM judging, at a
-  much lower floor, with half-weight verdicts and an M5 agreement
-  gate) - not as a direct evidence-free eviction signal. The
-  distinction is load-bearing and cited here deliberately.
+  an eviction signal - at a 0.6 floor a mint-cluster centroid
+  matched 30-70% of the archive, and at 0.7 known one-off junk
+  still spanned 12 distinct weeks. This plan reuses retrieval for
+  a different job (candidate retrieval for per-pair LLM judging,
+  at a much lower floor, with half-weight verdicts and an M5
+  agreement gate) - not as a direct evidence-free eviction signal.
+  The distinction is load-bearing and cited here deliberately.
 - Hourly cron minute :21 is free. Map re-derived from the schema's
   actual cron.schedule calls on 2026-10-26: every-minute embed
   backfill and stream janitor; :03 bias; :07 wiki; :13 reap;
@@ -244,15 +248,19 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
     timestamptz` - the claim-RPC pair for the worker.
   - `backfill_attempts int not null default 0` - spent attempt
     budget.
-  - One-shot grandfather block: a guarded do-block that runs the
+  - One-shot grandfather block: `app_config` is a SINGLETON row
+    (`id boolean primary key default true` + a singleton check,
+    schema.sql:198-203) - there is no key column, so the marker is
+    a new BOOLEAN COLUMN on the singleton (the columns-over-
+    migrations pattern the model price caps use, schema.sql:216-
+    233): `samskara_backfill_grandfathered boolean not null default
+    false`. The guarded do-block: ensure the singleton row exists
+    (insert on conflict do nothing); if the flag is false, run
     `update samskaras set activated_at = now() where activated_at
-    is null` ONLY if the marker row
-    `app_config.key = 'samskara_backfill_grandfathered'` is
-    absent, then inserts the marker. app_config is the project's
-    existing one-row-class config table; the marker makes the
-    block provably one-shot across re-applies (the plain
-    null-check form would re-run on every deploy and activate
-    every new quarantined mint - the deploy-blocking bug this
+    is null` and set the flag true. Re-applies see the flag and
+    skip - provably one-shot, so post-grandfather mints stay
+    quarantined (the plain null-check form would re-run on every
+    deploy and activate them - the deploy-blocking bug this
     mechanism exists to prevent).
 - New table `samskara_backfill_verdicts`: one row per judged
   (claim, exchange) attempt. Columns: id, user_id, samskara_id,
@@ -330,9 +338,16 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   filter too: eviction frees a live-corpus slot for a mint, and a
   quarantined row holds no such slot - evicting one would burn
   earned evidence for nothing.
-- Control-draw exclusion: the evaluation sweep's control sample
-  draws from fire-eligible claims; add the activation filter there
-  so the live selection instrument stays clean.
+- samskara_health_snapshot's evictable-pool columns deliberately
+  mirror the eviction predicates ("keep them in lockstep" is the
+  standing rule) - they gain the activation filter with the tiers.
+  The probation-due column mirrors the reaper, which is unchanged,
+  and correctly counts quarantined tally-0 rows (they ARE due).
+- Control-draw exclusion: the evaluation sweep's control sample is
+  drawn in TypeScript (`sampleControlClaims`,
+  samskara_evaluation.ts:351-367), not SQL - the activation filter
+  is added to that query (M3's agent work; listed here because it
+  is part of the same correctness surface).
 
 ## M2 - EMBEDDER WIRING
 
@@ -360,8 +375,9 @@ Historical substrate rows drain through the normal backfill poll
 (bounded by the worker's per-tick cap). The 2026-08 retrieval-
 outage lesson is the reason registration is load-bearing: a missing
 EMBED_SOURCES entry fails silently as cross-space cosine noise
-(docs/dev/embeddings.md; the outage cost three weeks of dark
-corpus).
+(docs/dev/embeddings.md covers the rotation and the registry; the
+outage's full causal story - three weeks of dark corpus, held-rate
+78% -> 34% - is in docs/dev/samskara.md).
 
 ## M3 - THE BACKFILL WORKER
 
@@ -376,9 +392,13 @@ Per-claim flow:
 1. Claim one quarantined claim (oldest mint first).
 2. Retrieve candidates: samskara_backfill_candidates with
    p_k = ATTEMPT_BUDGET (8) - backfill_attempts.
-3. If the candidate list is EMPTY and the user has zero eligible
-   rounds outside the birthplace: activate immediately
-   (transition 2), release the claim, done.
+3. If the candidate list is EMPTY and the user has no substrate
+   rounds outside the birthplace at all (an existence check on
+   rounds joined to live messages - NOT embedding state, which
+   lags the deploy): activate immediately (transition 2), release
+   the claim, done. If rounds exist but embeddings have not
+   drained yet, do nothing this tick - the pool re-opens as the
+   embedding poll catches up.
 4. For each candidate, in order (highest cosine first):
    - Fetch the exchange slice: the round's user message + its
      assistant reply, plus the adjacent exchange on each side for
@@ -410,13 +430,17 @@ Constants (initial values; the floor gets a labeled probe set
 before deploy): ATTEMPT_BUDGET = 8, candidate floor = 0.05
 centered cosine (substrate-mean register), w_backfill = 0.5,
 exchange context = +-1 adjacent exchange, candidate age >= 48h,
-CLAIMS_PER_TICK = 2.
+CLAIMS_PER_TICK = 2 (drains 48 slots/day against a measured
+~7/day mint rate - 49 mints/week, docs/dev/samskara.md:1610; the
+2026-10 vetting saw 9 mints in a 48-hour burst, so headroom covers
+bursts).
 
 ## M4 - SURFACES
 
 - Health panel + browse list: quarantined claims get a status in
   the EXISTING releaseStatus axis (src/lib/ui/samskara-browse.ts -
-  extending it, not a new badge mechanism), plus a per-claim
+  extending it, not a new badge mechanism), rendered to the user
+  as "warming up" (decision 8's copy rule), plus a per-claim
   "n of m exchanges judged" line from the ledger. The browse
   select list (src/lib/supabase/samskara.ts:366,428) gains
   activated_at + backfill_attempts.
@@ -452,7 +476,10 @@ CLAIMS_PER_TICK = 2.
 - Throughput: activation rate per week, quarantine pool depth,
   attempts per claim, not-engaged share, p0 drift (backfill
   evidence moves the population prior - decision 3's reduced
-  weight is the only moderator; watch it).
+  weight is the only moderator; and because a batch of 8 folds in
+  ONE discount event where the live path discounts per judged
+  thread, backfill evidence ages more slowly per verdict - watch
+  both in the drift readout).
 - Precision side-effect: live fire not-engaged share for
   backfill-activated claims vs grandfathered claims (does an
   evidence-backed claim fire more precisely?).
@@ -485,13 +512,16 @@ CLAIMS_PER_TICK = 2.
   "live fires", the co-fire graph stays behavioral, collapse is
   untouched. The backfill ledger table is the only record.
 - Dedup-reinforce at mint time may hit a quarantined claim
-  (geometry ignores activation). Reinforcing a quarantined claim's
-  tallies is harmless and honest; it does not activate, and it
-  does not affect the candidate/gate arithmetic.
-- The mint probes' dedup-reinforce and the backfill worker both
-  write tallies; both go through guarded saves (mint path via the
-  existing reinforce path, worker via apply_backfill). The tallies
-  are additive; no lost-update window beyond the house pattern's.
+  (geometry ignores activation). samskara_reinforce_existing bumps
+  health only - it writes no tallies and is not a claim-guarded
+  save (schema.sql:10020-10023) - so a health bump on a non-firing
+  row is invisible and harmless; it does not activate, does not
+  affect the gate arithmetic, and cannot immunize the row against
+  the 45-day reaper (tallies stay zero). The only tally writers
+  are apply_evaluation (ACTIVE rows - only fired claims are
+  judged) and apply_backfill (QUARANTINED rows): disjoint row
+  sets, so no concurrent-tally-writer window exists beyond the
+  house pattern's.
 - Backfill evidence shifts p0 (samskara_population_p0 sums all
   tallies, schema.sql:9230-9239). Accepted: reduced weight is the
   class distinction's carrier; M5 watches the drift. Excluding
