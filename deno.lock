@@ -1,0 +1,57 @@
+{
+  "version": "5",
+  "specifiers": {
+    "jsr:@std/assert@*": "1.0.19",
+    "jsr:@std/internal@^1.0.12": "1.0.14"
+  },
+  "jsr": {
+    "@std/assert@1.0.19": {
+      "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
+    },
+    "@std/internal@1.0.14": {
+      "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
+    }
+  },
+  "workspace": {
+    "packageJson": {
+      "dependencies": [
+        "npm:@playwright/test@^1.47.0",
+        "npm:@supabase/supabase-js@^2.45.0",
+        "npm:@sveltejs/vite-plugin-svelte@4",
+        "npm:@testing-library/jest-dom@^6.9.1",
+        "npm:@testing-library/svelte@^5.3.1",
+        "npm:@tsconfig/svelte@^5.0.4",
+        "npm:@types/node@^22.5.0",
+        "npm:@typescript-eslint/eslint-plugin@^8.4.0",
+        "npm:@typescript-eslint/parser@^8.4.0",
+        "npm:dompurify@^3.4.0",
+        "npm:eslint-plugin-svelte@^2.44.0",
+        "npm:eslint@^9.10.0",
+        "npm:fake-indexeddb@^6.2.5",
+        "npm:fflate@~0.8.3",
+        "npm:highlight.js@^11.11.1",
+        "npm:jsdom@25",
+        "npm:katex@~0.16.45",
+        "npm:knip@5",
+        "npm:markdownlint-cli2@0.14",
+        "npm:marked-katex-extension@^5.1.8",
+        "npm:marked@^18.0.1",
+        "npm:pdfjs-dist@^6.1.200",
+        "npm:postcss@^8.5.10",
+        "npm:rollup-plugin-visualizer@^7.0.1",
+        "npm:svelte-check@4",
+        "npm:svelte-eslint-parser@0.41",
+        "npm:svelte@5",
+        "npm:typescript@^5.6.0",
+        "npm:vite-plugin-pwa@~0.20.5",
+        "npm:vite@^5.4.0",
+        "npm:vitest@^2.1.0",
+        "npm:workbox-precaching@^7.4.0",
+        "npm:workbox-window@^7.4.0"
+      ]
+    }
+  }
+}

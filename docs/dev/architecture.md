@@ -340,9 +340,12 @@ venice edge function on two kinds of trigger:
   function route, as the catch-up and maintenance drivers.
   The minute ladder: embed backfill `* * * * *` (every minute, up
   from `*/5` for the gte-small migration drain), bias `:03`, wiki
-  `:07`, samskara decay `:13`/`:43`, rem + attachment expiry
-  `:17`, samskara sweep `:23`, reflection `:27`, librarian +
-  recipe-image GC `:37`, deep-sleep `:47`, curation `:57`.
+  `:07`, samskara reap `:13`, rem + wiki-records `:17`, samskara
+  sweep `:23`, reflection `:27`, backfill `:21`, intent-employment
+  `:33`, librarian + recipe-image GC `:37`, fork-gc `:43`,
+  deep-sleep `:47`, conversation digest `:53`, curation `:57`;
+  the evaluation sweep polls `*/10`. The authoritative list is the
+  schema's `cron.schedule` calls, not this ladder.
 
 Mutual exclusion between a tail and the sweep that backs it up
 is the per-row claim columns ("Claim-RPC pattern" above) - no

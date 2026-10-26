@@ -247,5 +247,66 @@ describe('releaseStatus', () => {
     expect(s).not.toMatch(/evictable/);
     expect(s).toMatch(/40d/);
   });
+
+  describe('warmup precedence (evidence backfill)', () => {
+    const quarantined = { activatedAt: null, backfillAttempts: 3 };
+
+    it('a mid-flight quarantined row reports warming up, ahead of every release branch', () => {
+      // Backfill tallies sit in the same columns the established /
+      // probation branches read, and verdict_counts sees fires only -
+      // without the precedence a judged-once row would read
+      // "established" and an unjudged one "probation countdown".
+      const s = releaseStatus(
+        daysAgo(100),
+        { ...none, held: 1, lastGenuineAt: daysAgo(10) },
+        1.0,
+        now,
+        quarantined
+      );
+      expect(s).toMatch(/warming up - 3 of 8 exchanges judged/);
+      expect(s).not.toMatch(/established|probation/);
+    });
+
+    it('an unjudged quarantined row does not read as a probation countdown', () => {
+      const s = releaseStatus(daysAgo(46), none, 0, now, quarantined);
+      expect(s).toMatch(/warming up - 3 of 8/);
+      expect(s).not.toMatch(/past probation|released by probation/);
+    });
+
+    it('the budget-spent pin reports a never-engaged release path', () => {
+      const s = releaseStatus(
+        daysAgo(20),
+        none,
+        0,
+        now,
+        { activatedAt: null, backfillAttempts: 8 }
+      );
+      expect(s).toMatch(/warmed up - history never engaged this claim/);
+      expect(s).toMatch(/probation in 25d/);
+    });
+
+    it('the pinned row past probation reads as releasing at the next sweep', () => {
+      const s = releaseStatus(
+        daysAgo(50),
+        none,
+        0,
+        now,
+        { activatedAt: null, backfillAttempts: 8 }
+      );
+      expect(s).toMatch(/releases at the next hourly sweep/);
+    });
+
+    it('an activated row falls through to the existing branches', () => {
+      const s = releaseStatus(
+        daysAgo(100),
+        { ...none, held: 1, lastGenuineAt: daysAgo(10) },
+        1.0,
+        now,
+        { activatedAt: daysAgo(5), backfillAttempts: 8 }
+      );
+      expect(s).toMatch(/established/);
+      expect(s).not.toMatch(/warming/);
+    });
+  });
 });
 

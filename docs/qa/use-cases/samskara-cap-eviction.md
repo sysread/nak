@@ -39,6 +39,9 @@ unhealthy)" readout - lockstep is load-bearing.
 - Dev user id: `select id from auth.users where email = 'dev@nak.local';`
   (hosted: the account under test).
 - Know the user's prior: `select public.samskara_population_p0('<user>');`
+- Quarantined rows (evidence backfill, `activated_at` null) hold no
+  live-corpus slots and are invisible to every victim tier - forge
+  victims on ACTIVE rows only, or the tiers will read empty.
 
 ## Steps
 

@@ -103,7 +103,11 @@ observable contract - claims, writes, toasts - is the same.
    `minted samskara` (a genuinely new claim - the mood pill toast
    must appear), `dedup-reinforced existing` (near-duplicate of an
    existing samskara - no toast), or `agent declined` / `no
-   coherent cluster` (trace).
+   coherent cluster` (trace). A minted claim now lands QUARANTINED
+   (evidence backfill: `activated_at` null) - it appears in the
+   corpus as "warming up" and must NOT appear in fire results until
+   the hourly backfill sweep activates it (that path has its own
+   use case, samskara-backfill).
 5. Watch one dedup pass: `dedup: nothing to collapse` (trace) or
    `dedup: collapsed samskaras` (debug). Both are valid; record
    the count.

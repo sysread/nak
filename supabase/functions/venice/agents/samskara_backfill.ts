@@ -65,7 +65,7 @@ const MAX_TOKENS = 2048;
 // the conversation above": no live/quarantine/backfill disclosure - a
 // provenance hint risks a leniency or harshness anchor, and the claim
 // being formulated after the fact is context the judge does not need.
-const BACKFILL_FRAMING =
+export const BACKFILL_FRAMING =
   'Below is a standing prediction about the user. Judge how the conversation above bears on it, using only evidence visible in the transcript.';
 
 // The live judge's skeptical frame, re-worded for a historical
@@ -327,6 +327,19 @@ async function loadExchangeSlice(
     .select('id, thread_id, role, content, tool_calls, tool_call_id, name');
   if (error) throw new Error(`thread transcript read failed: ${error.message}`);
   const msgs = (data ?? []) as StoredMessage[];
+  const bounds = exchangeSliceBounds(msgs, userMessageId);
+  if (!bounds) return null;
+  return msgs.slice(bounds.start, bounds.end);
+}
+
+// The [start, end) transcript bounds of the target exchange plus at
+// most one adjacent exchange on each side. Pure so the Deno suite can
+// pin the boundary math without a database. Null when the target user
+// message is absent (deleted between retrieval and fetch).
+export function exchangeSliceBounds(
+  msgs: StoredMessage[],
+  userMessageId: string
+): { start: number; end: number } | null {
   const tIdx = msgs.findIndex((m) => m.id === userMessageId && m.role === 'user');
   if (tIdx < 0) return null;
   const userIdxs = msgs.map((m, i) => (m.role === 'user' ? i : -1)).filter((i) => i >= 0);
@@ -335,7 +348,7 @@ async function loadExchangeSlice(
   // target exchange plus at most one exchange on each side.
   const start = ui > 0 ? userIdxs[ui - 1] : 0;
   const end = ui + 2 < userIdxs.length ? userIdxs[ui + 2] : msgs.length;
-  return msgs.slice(start, end);
+  return { start, end };
 }
 
 // One structured completion over the slice. Returns null on transport
@@ -376,3 +389,9 @@ async function judgeExchange(
     return null;
   }
 }
+
+// Test-only surface: the prompt contract (no provenance disclosure) is
+// pinned in supabase/functions/tests/samskara-backfill.test.ts without
+// a database. exchangeSliceBounds and BACKFILL_FRAMING are exported
+// directly (pure, no secrets).
+export const __test = { JUDGE_SYSTEM_PROMPT };
