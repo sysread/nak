@@ -73,6 +73,7 @@ import { runSamskaraSweepTick } from './agents/samskara.ts';
 import { runIntentMintSweep } from './agents/intent.ts';
 import { runIntentEmploymentSweepTick } from './agents/intent_employment.ts';
 import { runSamskaraEvaluationSweepTick } from './agents/samskara_evaluation.ts';
+import { runSamskaraBackfillSweepTick } from './agents/samskara_backfill.ts';
 import {
   runWikiLibrarianManual,
   runWikiLibrarianSweepTick,
@@ -900,6 +901,11 @@ const handleIntentEmploymentSweep = sweepHandler(runIntentEmploymentSweepTick);
 // + logs would-be health deltas, changes no health. See
 // agents/samskara_evaluation.ts.
 const handleSamskaraEvaluationSweep = sweepHandler(runSamskaraEvaluationSweepTick);
+// Evidence-backfill sweep: the warmup-pool worker that judges each
+// quarantined claim against the historical exchanges that would have
+// fired it (see agents/samskara_backfill.ts and
+// docs/dev/in-progress/samskara-backfill-plan.md).
+const handleSamskaraBackfillSweep = sweepHandler(runSamskaraBackfillSweepTick);
 // Hourly conversation-digest sweep: claims (user, local-day) pairs
 // past the owner's midnight and writes one daily recap row per day.
 // See agents/digest.ts.
@@ -1250,6 +1256,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'intent-employment-sweep' && req.method === 'POST') return handleIntentEmploymentSweep(req);
   if (route === 'samskara-evaluation-sweep' && req.method === 'POST') {
     return handleSamskaraEvaluationSweep(req);
+  }
+  if (route === 'samskara-backfill-sweep' && req.method === 'POST') {
+    return handleSamskaraBackfillSweep(req);
   }
   if (route === 'digest-sweep' && req.method === 'POST') return handleDigestSweep(req);
   if (route === 'mcp-catalog-refresh' && req.method === 'POST') return handleMcpCatalogRefresh(req);

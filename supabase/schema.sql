@@ -7389,6 +7389,17 @@ create table if not exists public.samskara_substrate (
   -- contention.
   assimilate_claim_holder text,
   assimilate_claim_expires timestamptz,
+  -- Evidence-backfill retrieval index (see
+  -- docs/dev/in-progress/samskara-backfill-plan.md): the round's RAW
+  -- user-message text, embedded so a new claim's "would have fired"
+  -- candidates can be found by centered cosine. The live fire path
+  -- embeds exactly this text (the round's user message), so vectors
+  -- are comparable. Filled by the embeddings worker via the
+  -- samskara-substrate-query source; a THIRD claim pair because a
+  -- claim cannot carry two saves.
+  query_embedding vector(2048),
+  query_claim_holder text,
+  query_claim_expires timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -7404,6 +7415,14 @@ create index if not exists samskara_substrate_pending_assimilate_idx
 create index if not exists samskara_substrate_pending_embed_idx
   on public.samskara_substrate (user_id, created_at)
   where situation_embedding is null and situation is not null;
+
+-- Pending poll for the query_embedding source; partial like its
+-- siblings. Rounds whose user message was deleted (soft pointers
+-- survive) are excluded at the claim RPC by a messages-exists join,
+-- so they never cycle here.
+create index if not exists samskara_substrate_pending_query_embed_idx
+  on public.samskara_substrate (user_id, created_at)
+  where query_embedding is null;
 
 create index if not exists samskara_substrate_user_created_idx
   on public.samskara_substrate (user_id, created_at desc);
@@ -7907,6 +7926,41 @@ begin
   end if;
 end $$;
 
+-- Evidence backfill (the warmup pool): newly minted claims land
+-- QUARANTINED (activated_at null - the fire RPC excludes them) until a
+-- claim has been judged against the historical exchanges that would
+-- have fired it. See docs/dev/in-progress/samskara-backfill-plan.md.
+-- backfill_claim_* is the claim-RPC pair for the hourly worker;
+-- backfill_attempts counts judged exchanges (including not-engaged).
+alter table public.samskaras
+  add column if not exists activated_at timestamptz;
+alter table public.samskaras
+  add column if not exists backfill_claim_holder text;
+alter table public.samskaras
+  add column if not exists backfill_claim_expires timestamptz;
+alter table public.samskaras
+  add column if not exists backfill_attempts int not null default 0;
+
+-- One-shot grandfather: every claim alive at the deploying merge
+-- activates, so backfill applies only to the quarantine pool going
+-- forward. The flag is a column on the app_config singleton (a marker
+-- ROW is uninsertable there - singleton constraint) and is what makes
+-- this provably one-shot: a plain `where activated_at is null` would
+-- re-run on every schema re-apply and silently activate every new
+-- quarantined mint, disabling the whole feature.
+alter table public.app_config
+  add column if not exists samskara_backfill_grandfathered boolean not null default false;
+
+do $grandfather$
+begin
+  insert into public.app_config (id) values (true) on conflict (id) do nothing;
+  if not (select samskara_backfill_grandfathered from public.app_config) then
+    update public.samskaras set activated_at = now() where activated_at is null;
+    update public.app_config set samskara_backfill_grandfathered = true;
+  end if;
+end
+$grandfather$;
+
 alter table public.samskaras enable row level security;
 
 drop policy if exists "samskaras self-selectable" on public.samskaras;
@@ -8155,6 +8209,42 @@ drop policy if exists "samskara control verdicts self-selectable"
   on public.samskara_control_verdicts;
 create policy "samskara control verdicts self-selectable"
   on public.samskara_control_verdicts
+  for select using (auth.uid() = user_id);
+
+-- Evidence-backfill ledger: one row per judged (claim, exchange)
+-- attempt. This is the audit surface that distinguishes virgin
+-- backfill evidence from live-fire evidence (live verdicts live on
+-- samskara_fires rows) and the activation gate's input. Deliberately
+-- NOT a fire row: fire_count stays "live fires", the co-fire graph
+-- stays behavioural, and collapse is untouched. Insert-only from the
+-- sweep's service-role client; cascade on both parents (a merged or
+-- deleted claim's ledger goes with it - historical-only, M5 readouts
+-- accept the attrition). The unique pair doubles as the worker's
+-- crash-retry exclusion and the double-judge guard.
+create table if not exists public.samskara_backfill_verdicts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  samskara_id uuid not null references public.samskaras(id) on delete cascade,
+  thread_id uuid not null references public.threads(id) on delete cascade,
+  user_message_id uuid not null,
+  verdict text not null check (verdict in ('held', 'contradicted', 'not-borne-out', 'not-engaged')),
+  cosine real,
+  judged_at timestamptz not null default now(),
+  model text
+);
+
+create unique index if not exists samskara_backfill_verdicts_claim_exchange_idx
+  on public.samskara_backfill_verdicts (samskara_id, user_message_id);
+
+create index if not exists samskara_backfill_verdicts_user_idx
+  on public.samskara_backfill_verdicts (user_id, judged_at desc);
+
+alter table public.samskara_backfill_verdicts enable row level security;
+
+drop policy if exists "samskara backfill verdicts self-selectable"
+  on public.samskara_backfill_verdicts;
+create policy "samskara backfill verdicts self-selectable"
+  on public.samskara_backfill_verdicts
   for select using (auth.uid() = user_id);
 
 -- One-shot cleanup of (user_id, cohort_id, samskara_id) duplicates
@@ -8528,8 +8618,14 @@ language sql stable security invoker as $$
      -- client has no auth.uid(); the orchestrator passes the JWT user id
      -- explicitly. Authenticated callers omit it and fall back to
      -- auth.uid() (the b-strict overload pattern, as on the bias RPCs).
+     -- activated_at: quarantined claims (the evidence-backfill warmup
+     -- pool, docs/dev/in-progress/samskara-backfill-plan.md) never fire.
+     -- Deliberately in-RPC despite the no-health-filter house pattern
+     -- below: activation is a lifecycle state, not a quality signal, and
+     -- this RPC is the single chokepoint every fire consumer shares.
      where s.user_id = coalesce(p_user_id, auth.uid())
        and s.prediction_embedding is not null
+       and s.activated_at is not null
   )
   select sc.id,
          sc.prediction,
@@ -9038,6 +9134,76 @@ revoke all on function public.samskara_save_substrate_embedding_if_claimed(uuid,
 grant execute on function public.samskara_claim_next_substrate_embed(text, int) to service_role;
 grant execute on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
+-- Evidence-backfill retrieval index (the query_embedding source). Same
+-- single-vector-per-source contract as the sibling pair: the claim RPC
+-- returns the round's RAW user-message text (the exact text the live
+-- fire path embeds), fetched by join because substrate carries only a
+-- soft pointer to the message. Predicate guards:
+--   - the message must still exist (soft pointers survive deletion;
+--     a dead pointer is permanently un-embeddable and must not be
+--     re-claimed forever), and
+--   - non-empty text (mirrors the situation gate - empty text would
+--     waste an embed call and cycle claim -> fail -> re-claim).
+drop function if exists public.samskara_claim_next_substrate_query_embed(text, int);
+create or replace function public.samskara_claim_next_substrate_query_embed(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, user_id uuid, query_text text)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select s.id, s.user_id, m.content as query_text
+      from public.samskara_substrate s
+      join public.messages m on m.id = s.user_message_id
+     where s.query_embedding is null
+       and length(btrim(m.content)) > 0
+       and (s.query_claim_expires is null
+            or s.query_claim_expires < now())
+     order by s.created_at asc
+     limit 1
+     -- Lock only the substrate row; the joined messages row must not
+     -- take a lock (chat-loop writes contend there).
+     for update of s skip locked
+  )
+  update public.samskara_substrate s
+     set query_claim_holder = p_holder_id,
+         query_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where s.id = c.id
+  returning s.id, s.user_id, c.query_text;
+$$;
+
+drop function if exists public.samskara_save_substrate_query_embedding_if_claimed(
+  uuid, text, vector, text
+);
+create or replace function public.samskara_save_substrate_query_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare
+  updated int;
+begin
+  update public.samskara_substrate
+     set query_embedding = p_embedding,
+         query_claim_holder = null,
+         query_claim_expires = null
+   where id = p_id
+     and query_claim_holder = p_holder_id
+     and query_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Service-role only - see the note on the memory pair.
+revoke all on function public.samskara_claim_next_substrate_query_embed(text, int) from public, anon, authenticated;
+revoke all on function public.samskara_save_substrate_query_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
+grant execute on function public.samskara_claim_next_substrate_query_embed(text, int) to service_role;
+grant execute on function public.samskara_save_substrate_query_embedding_if_claimed(uuid, text, vector, text) to service_role;
+
 -- ---------------------------------------------------------------------------
 -- Prediction embeddings: provenance, repair, and backfill participation.
 --
@@ -9351,6 +9517,278 @@ revoke all on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uu
 grant execute on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[])
   to service_role;
 
+-- ===========================================================================
+-- Evidence backfill (the warmup pool). See
+-- docs/dev/in-progress/samskara-backfill-plan.md. Three RPCs: candidate
+-- retrieval, the worker's claim pair, and the reduced-weight verdict fold.
+-- ===========================================================================
+
+-- Historical exchanges that would have fired a quarantined claim.
+-- Top-p_k substrate rounds by CENTERED cosine between the claim's
+-- prediction_embedding and the round's query_embedding, centered by
+-- _samskara_centering_mean - the SUBSTRATE mean, the same register the
+-- fire RPC uses for message-vs-claim comparison (the claim mean is for
+-- claim-vs-claim work; swapping registers invalidates a tuned bar).
+-- Selection is TOP-K BY RANK above a LOW floor, not a 0.30-style bar:
+-- the fire ramp's 0.30 knee is a score-saturation point, and the
+-- measured message-vs-claim register tops out at 0.299 (register note
+-- on the fire RPC), so a 0.30 floor here would return zero candidates
+-- and the empty-corpus exception would silently activate everything.
+--
+-- Exclusions, each load-bearing:
+--   - birthplace: threads reachable from the claim's provenance, BOTH
+--     paths - 'substrate' provenance ref_id is a substrate id (one
+--     hop), 'association' ref_id is an association id whose a_id/b_id
+--     point into substrate (two hops). A one-hop join silently
+--     excludes nothing for association-minted claims, which are
+--     exactly the claims carrying association provenance.
+--   - soft-pointer deaths: substrate survives message deletion, so a
+--     round whose user message is gone can never be sliced.
+--   - already-judged pairs: the ledger is the crash-retry exclusion
+--     (ledger-first insert; the retry never re-judges).
+--   - junk-data gate: threads with a single user message, mirroring
+--     the evaluation sweep's >=2-user-message gate.
+--   - unsettled conversations: rounds younger than 48h (the recorded
+--     next-day rationale - judging an unsettled exchange produces
+--     noise, not evidence).
+drop function if exists public.samskara_backfill_candidates(uuid, int, uuid, real);
+drop function if exists public.samskara_backfill_candidates(uuid, int);
+create or replace function public.samskara_backfill_candidates(
+  p_samskara_id uuid,
+  p_k int,
+  p_user_id uuid default null,
+  p_floor real default 0.05
+)
+returns table (thread_id uuid, user_message_id uuid, assistant_message_id uuid, cosine real)
+language sql stable security invoker as $$
+  with v_mean as (
+    select public._samskara_centering_mean(coalesce(p_user_id, auth.uid())) as v
+  ),
+  birthplaces as (
+    select ss.thread_id
+      from public.samskara_provenance p
+      join public.samskara_substrate ss on ss.id = p.ref_id
+     where p.samskara_id = p_samskara_id and p.kind = 'substrate'
+    union
+    select ss.thread_id
+      from public.samskara_provenance p
+      join public.samskara_associations a on a.id = p.ref_id
+      join public.samskara_substrate ss on ss.id = a.a_id
+     where p.samskara_id = p_samskara_id and p.kind = 'association'
+    union
+    select ss.thread_id
+      from public.samskara_provenance p
+      join public.samskara_associations a on a.id = p.ref_id
+      join public.samskara_substrate ss on ss.id = a.b_id
+     where p.samskara_id = p_samskara_id and p.kind = 'association'
+  )
+  select sub.thread_id,
+         sub.user_message_id,
+         sub.assistant_message_id,
+         (1 - ((sub.query_embedding - m.v) <=> (s.prediction_embedding - m.v)))::real as cosine
+    from public.samskaras s
+    cross join v_mean m
+    join public.samskara_substrate sub
+      on sub.user_id = s.user_id
+     and sub.query_embedding is not null
+   where s.id = p_samskara_id
+     and s.user_id = coalesce(p_user_id, auth.uid())
+     and (1 - ((sub.query_embedding - m.v) <=> (s.prediction_embedding - m.v)))::real >= p_floor
+     and sub.thread_id not in (select thread_id from birthplaces)
+     and exists (
+       select 1 from public.messages msg
+        where msg.id = sub.user_message_id
+          and length(btrim(msg.content)) > 0
+     )
+     and (select count(*) from public.messages m2
+           where m2.thread_id = sub.thread_id and m2.role = 'user') >= 2
+     and sub.created_at < now() - interval '48 hours'
+     and not exists (
+       select 1 from public.samskara_backfill_verdicts bv
+        where bv.samskara_id = p_samskara_id
+          and bv.user_message_id = sub.user_message_id
+     )
+   order by cosine desc
+   limit p_k
+$$;
+revoke all on function public.samskara_backfill_candidates(uuid, int, uuid, real)
+  from public, anon, authenticated;
+grant execute on function public.samskara_backfill_candidates(uuid, int, uuid, real)
+  to service_role;
+
+-- Worker claim pair: pick the oldest quarantined claim with budget
+-- left and lock it for one tick. House claim-RPC shape (holder id +
+-- TTL, for update skip locked, guarded save downstream). Returns
+-- prediction TEXT, never the embedding (vectors read back as strings;
+-- the candidates RPC re-reads it by id).
+drop function if exists public.samskara_claim_quarantined_samskara(text, int, int);
+create or replace function public.samskara_claim_quarantined_samskara(
+  p_holder_id text,
+  p_ttl_seconds int,
+  p_budget int default 8
+)
+returns table (id uuid, user_id uuid, prediction text)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select s.id
+      from public.samskaras s
+     where s.activated_at is null
+       and s.backfill_attempts < p_budget
+       and (s.backfill_claim_expires is null
+            or s.backfill_claim_expires < now())
+     order by s.created_at asc
+     limit 1
+     for update skip locked
+  )
+  update public.samskaras s
+     set backfill_claim_holder = p_holder_id,
+         backfill_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where s.id = c.id
+  returning s.id, s.user_id, s.prediction;
+$$;
+revoke all on function public.samskara_claim_quarantined_samskara(text, int, int)
+  from public, anon, authenticated;
+grant execute on function public.samskara_claim_quarantined_samskara(text, int, int)
+  to service_role;
+
+-- Reduced-weight fold for one worker tick, with the activation gate
+-- evaluated ATOMICALLY inside the claim guard. Same discount/posterior
+-- math as samskara_apply_evaluation above, scaled by the backfill
+-- weight: held -> confirm += 0.5, contradicted -> disconfirm += 0.5,
+-- not-borne-out -> disconfirm += w_soft * 0.5. MIRROR PIN: k, l_halflife,
+-- d, and w_soft below MUST stay identical to samskara_apply_evaluation's
+-- constants (schema.sql, this block) - pinned by
+-- tests/samskara-backfill-parity.test.ts, which reads both function
+-- bodies out of this file. Guarded on the claim pair: a stale or
+-- dead worker's fold no-ops (the canonical claim-RPC save). Attempt
+-- accounting advances by EVERY judged exchange including not-engaged
+-- ones; not-engaged exchanges pass no evidence arrays at all.
+--
+-- The gate (plan transition 1) runs here rather than as a separate
+-- worker write so no window exists between claim release and
+-- activation: p_pool_exhausted is the worker's "candidates returned
+-- fewer than requested" signal. On exhaustion or a spent budget, a
+-- claim with >= 1 genuine ledger verdict activates (activated_at set);
+-- one with none is PINNED (attempts forced to the budget) so it
+-- leaves the claim queue permanently and the 45-day reaper collects
+-- it - without the pin a never-engaging row is re-claimed every tick
+-- and starves the queue. The gate's genuine test reads the LEDGER,
+-- not the tallies: ledger rows are written before the fold commits,
+-- so a crash in that window loses tallies but never activation.
+drop function if exists public.samskara_apply_backfill(
+  uuid, uuid, uuid[], uuid[], uuid[], int, text, real, boolean
+);
+create or replace function public.samskara_apply_backfill(
+  p_user_id uuid,
+  p_samskara_id uuid,
+  p_held uuid[],
+  p_contradicted uuid[],
+  p_not_borne_out uuid[],
+  p_not_engaged_count int,
+  p_claim_holder text,
+  p_weight real default 0.5,
+  p_pool_exhausted boolean default false
+) returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  k constant real := 5.0;
+  l_halflife constant real := 10.0;
+  d constant real := 0.5 ^ (1.0 / l_halflife);
+  w_soft constant real := 0.25;
+  v_p0 real;
+  affected int;
+  v_attempts int;
+  v_exhausted boolean;
+  v_held int;
+  v_contradicted int;
+  v_not_borne_out int;
+begin
+  -- Claim-guarded bookkeeping: advance attempts, release the claim.
+  update public.samskaras s
+     set backfill_claim_holder = null,
+         backfill_claim_expires = null,
+         backfill_attempts = s.backfill_attempts
+           + coalesce(array_length(p_held, 1), 0)
+           + coalesce(array_length(p_contradicted, 1), 0)
+           + coalesce(array_length(p_not_borne_out, 1), 0)
+           + coalesce(p_not_engaged_count, 0)
+   where s.id = p_samskara_id
+     and s.user_id = p_user_id
+     and s.backfill_claim_holder = p_claim_holder
+     and s.backfill_claim_expires > now()
+   returning s.backfill_attempts into v_attempts;
+  get diagnostics affected = row_count;
+  if affected = 0 then
+    return 0;
+  end if;
+
+  v_exhausted := p_pool_exhausted or v_attempts >= 8;
+  -- The 8 above and in the pin below is ATTEMPT_BUDGET; the worker's
+  -- ATTEMPT_BUDGET constant (agents/samskara_backfill.ts) and the
+  -- claim RPC's p_budget default MUST stay identical to it.
+
+  -- Evidence fold: this RPC always handles exactly ONE claim (the
+  -- arrays carry that claim's ledger row ids, bucketed by verdict), so
+  -- the fold is per-row arithmetic, not the per-claim join the live
+  -- judge's apply_evaluation does over its batch. Backfill weights:
+  -- held -> +w_weight confirm, contradicted -> +w_weight disconfirm,
+  -- not-borne-out -> +w_soft * w_weight disconfirm. An empty genuine
+  -- set (all not-engaged) correctly applies no discount either.
+  v_held := coalesce(array_length(p_held, 1), 0);
+  v_contradicted := coalesce(array_length(p_contradicted, 1), 0);
+  v_not_borne_out := coalesce(array_length(p_not_borne_out, 1), 0);
+
+  if v_held + v_contradicted + v_not_borne_out > 0 then
+    v_p0 := public.samskara_population_p0(p_user_id);
+
+    update public.samskaras s
+       set confirm_count    = s.confirm_count * d + v_held * p_weight,
+           disconfirm_count = s.disconfirm_count * d
+             + v_contradicted * p_weight
+             + v_not_borne_out * w_soft * p_weight,
+           health     = (s.confirm_count * d + v_held * p_weight + k * v_p0)
+                        / (s.confirm_count * d + v_held * p_weight
+                           + s.disconfirm_count * d + v_contradicted * p_weight
+                           + v_not_borne_out * w_soft * p_weight + k),
+           confidence = (s.confirm_count * d + v_held * p_weight + k * v_p0)
+                        / (s.confirm_count * d + v_held * p_weight
+                           + s.disconfirm_count * d + v_contradicted * p_weight
+                           + v_not_borne_out * w_soft * p_weight + k),
+           updated_at = now()
+     where s.id = p_samskara_id
+       and s.user_id = p_user_id;
+  end if;
+
+  -- Activation gate (transition 1) / never-engaged pin. Genuine is
+  -- read from the LEDGER: rows are inserted before the fold commits,
+  -- so ledger state is authoritative even after a crash.
+  if v_exhausted then
+    if exists (
+      select 1 from public.samskara_backfill_verdicts bv
+       where bv.samskara_id = p_samskara_id
+         and bv.verdict <> 'not-engaged'
+    ) then
+      update public.samskaras s
+         set activated_at = now()
+       where s.id = p_samskara_id and s.activated_at is null;
+    else
+      update public.samskaras s
+         set backfill_attempts = 8
+       where s.id = p_samskara_id and s.activated_at is null;
+    end if;
+  end if;
+
+  return affected;
+end $$;
+revoke all on function public.samskara_apply_backfill(
+  uuid, uuid, uuid[], uuid[], uuid[], int, text, real, boolean)
+  from public, anon, authenticated;
+grant execute on function public.samskara_apply_backfill(
+  uuid, uuid, uuid[], uuid[], uuid[], int, text, real, boolean)
+  to service_role;
+
 -- Reaper: delete repeatedly-contradicted, long-quiet samskaras. Under
 -- derived health a never-tested prediction sits at p0 (the baseline), so a
 -- LOW health now means real accumulated misses, not mere staleness. Only
@@ -9634,6 +10072,7 @@ begin
   select s.id into victim
     from public.samskaras s
    where s.user_id = p_user_id
+     and s.activated_at is not null
      and s.confirm_count = 0
      and s.disconfirm_count = 0
      and s.created_at < now() - interval '14 days'
@@ -9657,6 +10096,7 @@ begin
     select s.id into victim
       from public.samskaras s
      where s.user_id = p_user_id
+       and s.activated_at is not null
        and s.confirm_count + s.disconfirm_count > 0
        and s.confirm_count + s.disconfirm_count <= 1.0
        and not exists (
@@ -9679,9 +10119,12 @@ begin
   if victim is null then
     -- Underperformer tier: demonstrated failure well below the user's
     -- own baseline. No pending-fire guard - see header comment.
+    -- activated_at: quarantined rows hold no live-corpus slots, so
+    -- evicting one would free nothing for the waiting mint.
     select s.id into victim
       from public.samskaras s
      where s.user_id = p_user_id
+       and s.activated_at is not null
        and s.health < 0.85 * public.samskara_population_p0(p_user_id)
      order by s.health asc,
        s.confirm_count + s.disconfirm_count desc,
@@ -9810,7 +10253,12 @@ declare
 begin
   select count(*) into v_count
     from public.samskaras s
-   where s.user_id = v_uid;
+   where s.user_id = v_uid
+     -- The regen trigger meters the LIVE corpus: the summary paragraph
+     -- samples only activated rows (see its top-for-summary read), so
+     -- counting quarantine churn here would trip regen on mints that
+     -- cannot fire.
+     and s.activated_at is not null;
 
   -- Table alias required: `last_regen_at` is also the name of one
   -- of this function's RETURNS TABLE output columns, and PL/pgSQL
@@ -10278,6 +10726,12 @@ begin
       where sa.user_id = v_uid
         and sa.prediction_embedding is not null
         and sb.prediction_embedding is not null
+        -- activated_at: the overflow pass is evidence-free cosine
+        -- merging; it must never touch a quarantined claim (it could
+        -- absorb an active row and stay non-firing, or inherit merged
+        -- tallies with no ledger linkage).
+        and sa.activated_at is not null
+        and sb.activated_at is not null
         and (1 - ((sa.prediction_embedding - v_mean) <=> (sb.prediction_embedding - v_mean)))::real >= p_cap_cosine_floor
       order by (sa.prediction_embedding - v_mean) <=> (sb.prediction_embedding - v_mean) asc
     loop
@@ -10354,6 +10808,8 @@ create or replace function public.samskara_search_by_prediction(
   disconfirm_count real,
   last_fired_at timestamptz,
   created_at timestamptz,
+  activated_at timestamptz,
+  backfill_attempts int,
   cosine real
 )
 language sql stable security invoker as $$
@@ -10363,6 +10819,7 @@ language sql stable security invoker as $$
   select s.id, s.prediction, s.inner_voice, s.valence,
          s.confidence, s.health, s.fire_count, s.confirm_count,
          s.disconfirm_count, s.last_fired_at, s.created_at,
+         s.activated_at, s.backfill_attempts,
          (1 - ((s.prediction_embedding - m.v) <=> (p_query_embedding - m.v)))::real as cosine
     from public.samskaras s cross join v_mean m
    where s.user_id = auth.uid()
@@ -10599,12 +11056,18 @@ returns table (
   fires_awaiting_judgment int,
   orphan_fires int,
   stuck_assimilate_claims int,
-  stuck_embed_claims int
+  stuck_embed_claims int,
+  quarantined int,
+  stuck_backfill_claims int
 )
 language sql stable security invoker as $$
   select
+    -- The panel's corpus total meters the LIVE corpus (the compound-
+    -- regen delta reads it); quarantine depth is its own column below,
+    -- so warming-up mints cannot light the regen-delta alarm.
     (select count(*) from public.samskaras s
-      where s.user_id = auth.uid())::int,
+      where s.user_id = auth.uid()
+        and s.activated_at is not null)::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid() and s.health < 0.2)::int,
     (select count(*) from public.samskaras s
@@ -10696,7 +11159,18 @@ language sql stable security invoker as $$
     (select count(*) from public.samskara_substrate sub
       where sub.user_id = auth.uid()
         and sub.embedding_claim_holder is not null
-        and sub.embedding_claim_expires < now())::int
+        and sub.embedding_claim_expires < now())::int,
+    -- Evidence-backfill pool depth (warming-up claims) and its leak
+    -- detector: a claim held past its TTL means the worker died
+    -- mid-tick. The quarantined count is informational, never
+    -- thresholded; the stuck metric mirrors the stuckClaims bands.
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid()
+        and s.activated_at is null)::int,
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid()
+        and s.backfill_claim_holder is not null
+        and s.backfill_claim_expires < now())::int
 $$;
 
 -- Windowed activity rates for the Health panel. Computed from existing
@@ -15001,6 +15475,94 @@ begin
   end if;
 exception when others then
   raise notice 'samskara evaluation sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Evidence-backfill sweep (pg_cron -> pg_net -> venice/samskara-backfill-sweep)
+--
+-- Hourly drain of the quarantine pool: each tick judges warming-up
+-- claims against the historical exchanges that would have fired them
+-- (see docs/dev/in-progress/samskara-backfill-plan.md). Same Vault
+-- secrets and dispatch shape as the evaluation sweep above.
+-- ---------------------------------------------------------------------------
+
+-- Fast-exit gate for the hourly cron: one cheap SQL EXISTS, no edge
+-- POST when the quarantine pool is empty.
+drop function if exists public.samskara_backfillable_exists();
+create or replace function public.samskara_backfillable_exists()
+returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.samskaras s
+     where s.activated_at is null
+       and (s.backfill_claim_expires is null
+            or s.backfill_claim_expires < now())
+  )
+$$;
+revoke all on function public.samskara_backfillable_exists() from public, anon, authenticated;
+grant execute on function public.samskara_backfillable_exists() to service_role;
+
+create or replace function public.nak_trigger_samskara_backfill_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  if not public.samskara_backfillable_exists() then
+    return;
+  end if;
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/samskara-backfill-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_samskara_backfill_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_samskara_backfill_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-samskara-backfill-sweep') then
+      perform cron.unschedule('nak-samskara-backfill-sweep');
+    end if;
+    -- Minute :21 - free at plan time (re-verified against the schema's
+    -- cron.schedule calls; the architecture doc's minute ladder is
+    -- stale: :33 is intent-employment, :53 is conversation-digest).
+    perform cron.schedule(
+      'nak-samskara-backfill-sweep',
+      '21 * * * *',
+      $job$ select public.nak_trigger_samskara_backfill_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'samskara backfill sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
 

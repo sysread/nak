@@ -229,6 +229,19 @@ export const EMBED_SOURCES: EmbedSource[] = [
     buildInput: (row) => str(row.prediction),
   },
   {
+    name: 'samskara-substrate-query',
+    claimRpc: 'samskara_claim_next_substrate_query_embed', // returns (id, user_id, query_text)
+    saveRpc: 'samskara_save_substrate_query_embedding_if_claimed',
+    // Verbatim, like samskara-predictions: the claim RPC already returns
+    // the round's raw user-message text - the exact text the live fire
+    // path embeds - so any composition here would put the retrieval
+    // index in a different space from the fire query and silently break
+    // "would have fired" candidate matching. This is the backfill plan's
+    // retrieval index; a row missing from THIS registry is the 2026-08
+    // outage's failure shape (silent cross-space noise, no error).
+    buildInput: (row) => str(row.query_text),
+  },
+  {
     name: 'followups',
     claimRpc: 'claim_next_pending_followup', // returns (id, question, context, user_id)
     saveRpc: 'save_followup_embedding_if_claimed',

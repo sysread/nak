@@ -105,7 +105,7 @@ const SHADOW_MODE = false;
 // situation never really came up (a loose topical fire - no fair test, no
 // evidence either way). Collapsing those two is what left health unable to
 // discriminate; firing is recall, this verdict is precision.
-type VerdictKind = 'held' | 'contradicted' | 'not-borne-out' | 'not-engaged';
+export type VerdictKind = 'held' | 'contradicted' | 'not-borne-out' | 'not-engaged';
 
 const VERDICT_KINDS: readonly VerdictKind[] = [
   'held',
@@ -173,11 +173,21 @@ const JUDGE_SYSTEM_PROMPT = [
  * for a JSON verdict map. Stable short ids (p1, p2, ...) keep the JSON
  * keys clean and map back to samskara ids on the caller side; the model
  * never needs to echo a uuid.
+ *
+ * `framing` replaces the opening sentence. The default is the live
+ * judge's ("predictions that were live during the conversation above");
+ * the evidence-backfill worker passes its own no-provenance framing
+ * (see agents/samskara_backfill.ts) while reusing everything else -
+ * the two-step structure, the skeptical bias, and the worked examples
+ * are calibrated machinery that must not drift between the two judges.
  */
-function buildVerdictRequest(predictions: { tag: string; text: string }[]): string {
+export function buildVerdictRequest(
+  predictions: { tag: string; text: string }[],
+  framing: string = 'Below are predictions that were live during the conversation above.'
+): string {
   const lines = predictions.map((p) => `${p.tag}: ${p.text}`);
   return [
-    'Below are predictions that were live during the conversation above.',
+    framing,
     'Judge EACH one in two steps.',
     '',
     'STEP 1 - engagement: did the SITUATION the prediction is about (its',
@@ -242,7 +252,7 @@ function buildVerdictRequest(predictions: { tag: string; text: string }[]): stri
  * (it gets no verdict and no delta this cycle) rather than throwing -
  * the sweep is best-effort and a bad completion must not abort the run.
  */
-function parseVerdicts(raw: string): Map<string, VerdictKind> {
+export function parseVerdicts(raw: string): Map<string, VerdictKind> {
   const out = new Map<string, VerdictKind>();
   let parsed: unknown;
   try {
