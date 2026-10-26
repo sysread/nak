@@ -138,6 +138,7 @@ async function tickOneClaim(
     id: string;
     user_id: string;
     prediction: string;
+    backfill_attempts: number;
   } | null;
   if (!row) return false;
   const log = createEdgeLogger(row.user_id, 'samskara-backfill');
@@ -146,9 +147,10 @@ async function tickOneClaim(
   const apiKey = await readVeniceKey(admin);
   if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
 
+  const requested = ATTEMPT_BUDGET - row.backfill_attempts;
   const { data: candData, error: candErr } = await admin.rpc('samskara_backfill_candidates', {
     p_samskara_id: row.id,
-    p_k: ATTEMPT_BUDGET,
+    p_k: requested,
     p_user_id: row.user_id,
     p_floor: CANDIDATE_FLOOR,
   });
@@ -156,29 +158,50 @@ async function tickOneClaim(
   const candidates = (candData ?? []) as {
     thread_id: string;
     user_message_id: string;
-    assistant_message_id: string | null;
+    assistant_message_id: string;
     cosine: number;
   }[];
 
-  const poolExhausted = candidates.length === 0 || candidates.length < ATTEMPT_BUDGET;
-
-  // Empty-corpus exception (transition 2): no substrate rounds exist
-  // outside the birthplace AT ALL - checked by round existence with a
-  // live user message, NOT by embedding state (the embedding poll lags
-  // the deploy, and keying on embeddings would mass-activate early
-  // mints). Quarantine against a corpus that has nothing to judge
-  // against is indefinite starvation; the live judge is the only
-  // signal there anyway. A non-empty pool that happens to return few
-  // candidates is exhaustion, not emptiness - that path goes through
-  // the gate below.
-  if (candidates.length === 0 && !(await hasEligibleRounds(admin, row))) {
-    await admin
-      .from('samskaras')
-      .update({ activated_at: new Date().toISOString() })
-      .eq('id', row.id)
-      .eq('activated_at', 'null');
-    log.debug(`backfill: claim ${row.id} activated on empty corpus`);
-    return true;
+  // Empty fetch: three different states the candidates RPC cannot
+  // distinguish, so ask the pool-state RPC (plan M3 step 3).
+  if (candidates.length === 0) {
+    const { data: poolData, error: poolErr } = await admin.rpc('samskara_backfill_pool_state', {
+      p_samskara_id: row.id,
+      p_user_id: row.user_id,
+    });
+    if (poolErr) throw new Error(`pool state rpc failed: ${poolErr.message}`);
+    const pool = (Array.isArray(poolData) ? poolData[0] : poolData) as {
+      rounds_total: number;
+      rounds_embedded: number;
+    };
+    if ((pool?.rounds_total ?? 0) === 0) {
+      // Empty-corpus exception (transition 2): nothing to judge against
+      // exists at all. Activate immediately, releasing the claim - the
+      // stuck-claim leak detector must not accumulate this row.
+      const { error: actErr } = await admin
+        .from('samskaras')
+        .update({
+          activated_at: new Date().toISOString(),
+          backfill_claim_holder: null,
+          backfill_claim_expires: null,
+        })
+        .eq('id', row.id)
+        .is('activated_at', null);
+      if (actErr) throw new Error(`empty-corpus activation failed: ${actErr.message}`);
+      log.debug(`backfill: claim ${row.id} activated on empty corpus`);
+      return true;
+    }
+    if ((pool?.rounds_embedded ?? 0) === 0) {
+      // Embedding lag: rounds exist but the embed poll has not drained
+      // them yet. The pool re-opens as they drain - WAIT this tick
+      // (release without gating); pinning here would strand claims
+      // minted into a still-draining corpus.
+      log.debug(`backfill: claim ${row.id} waits on embedding drain`);
+      return true;
+    }
+    // Rounds are embedded but none qualified (all ledgered, or all
+    // below the floor): true exhaustion. Fall through to the fold +
+    // gate, which activates on ledger evidence or pins.
   }
 
   // Judge each candidate in its own completion. Ledger row FIRST
@@ -199,7 +222,7 @@ async function tickOneClaim(
     if (!slice) continue; // message deleted since retrieval; skip
     const verdict = await judgeExchange(apiKey, row.prediction, slice);
     if (!verdict) continue;
-    const inserted = await admin
+    const { data: insertedRows, error: ledgerErr } = await admin
       .from('samskara_backfill_verdicts')
       .upsert(
         {
@@ -214,9 +237,10 @@ async function tickOneClaim(
         { onConflict: 'samskara_id,user_message_id', ignoreDuplicates: true },
       )
       .select('id');
+    if (ledgerErr) throw new Error(`ledger write failed: ${ledgerErr.message}`);
     // ignoreDuplicates returns nothing for an already-ledgered pair -
     // count only NEW rows so attempts never double-advance.
-    for (const r of inserted.data ?? []) {
+    for (const r of insertedRows ?? []) {
       ledgerIds[verdict].push(r.id as string);
       judged++;
     }
@@ -237,75 +261,10 @@ async function tickOneClaim(
     p_not_engaged_count: ledgerIds['not-engaged'].length,
     p_claim_holder: holderId,
     p_weight: 0.5,
-    p_pool_exhausted: poolExhausted,
+    p_pool_exhausted: candidates.length < requested,
   });
   if (foldErr) throw new Error(`fold rpc failed: ${foldErr.message}`);
   return true;
-}
-
-// Does the user have ANY substrate round outside the claim's birthplace
-// whose user message still exists? The birthplace set resolves BOTH
-// provenance paths ('substrate' ref_id is a substrate id; 'association'
-// ref_id is an association id whose a_id/b_id point into substrate).
-async function hasEligibleRounds(
-  admin: SupabaseClient,
-  claim: { id: string; user_id: string },
-): Promise<boolean> {
-  const { data: prov, error } = await admin
-    .from('samskara_provenance')
-    .select('kind, ref_id')
-    .eq('samskara_id', claim.id);
-  if (error) throw new Error(`provenance read failed: ${error.message}`);
-  const substrateIds: string[] = [];
-  const assocIds: string[] = [];
-  for (const p of prov ?? []) {
-    (p.kind === 'substrate' ? substrateIds : assocIds).push(p.ref_id as string);
-  }
-  const birthThreads = new Set<string>();
-  if (substrateIds.length > 0) {
-    const { data } = await admin
-      .from('samskara_substrate')
-      .select('thread_id')
-      .in('id', substrateIds);
-    for (const r of data ?? []) birthThreads.add(r.thread_id as string);
-  }
-  if (assocIds.length > 0) {
-    const { data } = await admin
-      .from('samskara_associations')
-      .select('a_id, b_id')
-      .in('id', assocIds);
-    const subIds = (data ?? []).flatMap((a) => [a.a_id as string, a.b_id as string]);
-    if (subIds.length > 0) {
-      const { data: rows } = await admin
-        .from('samskara_substrate')
-        .select('thread_id')
-        .in('id', subIds);
-      for (const r of rows ?? []) birthThreads.add(r.thread_id as string);
-    }
-  }
-
-  let q = admin
-    .from('samskara_substrate')
-    .select('user_message_id')
-    .eq('user_id', claim.user_id)
-    .limit(20);
-  if (birthThreads.size > 0) q = q.not('thread_id', 'in', [...birthThreads]);
-  const { data: rounds, error: rErr } = await q;
-  if (rErr) throw new Error(`substrate read failed: ${rErr.message}`);
-  if (!rounds || rounds.length === 0) return false;
-  // A round only counts if its user message still exists (soft
-  // pointers survive deletion; the candidate retrieval would exclude
-  // it anyway, so a round with a dead pointer is not "history").
-  const { data: live, error: mErr } = await admin
-    .from('messages')
-    .select('id')
-    .in(
-      'id',
-      rounds.map((r) => r.user_message_id as string),
-    )
-    .limit(1);
-  if (mErr) throw new Error(`message read failed: ${mErr.message}`);
-  return (live?.length ?? 0) > 0;
 }
 
 // The exchange slice: the target round's user message + assistant reply,

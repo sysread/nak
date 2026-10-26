@@ -70,7 +70,7 @@ function mapSamskaraCorpusRow(r: SamskaraCorpusRpcRow): SamskaraCorpusRow {
     disconfirmCount: r.disconfirm_count,
     lastFiredAt: r.last_fired_at,
     createdAt: r.created_at,
-    activatedAt: r.activated_at,
+    activatedAt: r.activated_at ?? null,
     backfillAttempts: r.backfill_attempts ?? 0,
     ...(typeof r.cosine === 'number' ? { cosine: r.cosine } : {}),
   };

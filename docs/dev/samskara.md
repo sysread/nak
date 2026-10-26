@@ -194,7 +194,7 @@ toast is just a glance cue that the bias model is forming.
   harness.
 - `supabase/functions/_shared/embed-input.ts` - the
   `samskara-substrate` entry in `EMBED_SOURCES` registers substrate
-  as one of seven sources the server-side embeddings backfill
+  as one of ten sources the server-side embeddings backfill
   drains. The cron-driven backfill claims
   `samskara_substrate where situation_embedding is null and situation
   is not null` (via `samskara_claim_next_substrate_embed`), embeds via
@@ -1192,6 +1192,14 @@ past experience in light of a new pattern:
   backfill verdict) for claims with both. If backfill verdicts do
   not predict live verdicts better than chance, the mechanism
   measures the judge's mood, not the claim, and gets retired.
+- **Reading the snapshot numbers with quarantine on:** the
+  `never_fired` column counts warming-up rows too (normal mints,
+  not the "minted that never match anything" pathology it was
+  built for), and the corpus total deliberately does not. Similarity
+  retrieval also raises the situation-arose base rate versus live
+  firing, so the verdict request's STEP 1 skeptical default is the
+  main precision control - the M5 agreement readout is what tells
+  us whether that held.
   Constants (budget 8, floor 0.05, weight 0.5) carry the plan's
   labeled-probe-set discipline - the floor needs a NEW labeled
   message-vs-claim probe set (the existing probe set is claim-pairs

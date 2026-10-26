@@ -252,7 +252,9 @@
       </div>
       {#if snap.quarantined > 0}
         <!-- Informational, never thresholded: warming-up depth is normal
-             between backfill ticks (see the evidence-backfill plan). -->
+             between backfill ticks. Hidden at zero (unlike the sibling
+             rows, which rest nonzero) because the pool drains
+             permanently once the backfill worker catches up. -->
         <div class="health-row">
           <span class="health-label">Warming up</span>
           <span class="health-value">{snap.quarantined}</span>

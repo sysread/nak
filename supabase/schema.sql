@@ -7338,11 +7338,12 @@ $$;
 --   - All tables RLS-scoped to `auth.uid() = user_id`.
 --   - All idempotent: `create table if not exists`, `add column if not
 --     exists`, drop-then-create policies and RPCs.
---   - Vectors are `vector(2048)` to match memories/threads. Venice's
---     bge-m3 model emits 1024 dims; writers pad with zeros via
---     `padEmbeddingForStorage` (browser src/lib/models, edge
+--   - Vectors are `vector(2048)` to match memories/threads. The local
+--     embedder emits 384-dim (gte-small) vectors; writers zero-extend
+--     via `padEmbeddingForStorage` (browser src/lib/models, edge
 --     _shared/backfill.ts). Cosine similarity is invariant to that
---     padding.
+--     padding. (Model history: bge-m3 1024-dim preceded gte-small;
+--     see _shared/local-embed.ts.)
 --
 -- The formation pipeline runs server-side in the venice function
 -- (supabase/functions/venice/agents/samskara.ts), driven by the
@@ -9625,6 +9626,73 @@ revoke all on function public.samskara_backfill_candidates(uuid, int, uuid, real
 grant execute on function public.samskara_backfill_candidates(uuid, int, uuid, real)
   to service_role;
 
+-- Pool-state discriminator for the worker's gate. Returns the counts
+-- that distinguish three empty-fetch states the candidates RPC cannot
+-- express on its own:
+--   rounds_total = 0            -> the empty-corpus exception (plan
+--                                  transition 2: nothing to judge
+--                                  against, activate immediately).
+--   rounds_total > 0 and
+--   rounds_embedded = 0         -> embedding lag: rounds exist but the
+--                                  embed poll has not drained them yet.
+--                                  The pool re-opens as they drain; the
+--                                  worker must WAIT, never pin.
+--   rounds_embedded > 0 with an
+--   empty candidate fetch       -> true exhaustion (everything judged
+--                                  or below the floor): gate.
+-- Both counts share the candidates RPC's birthplace exclusion, live-
+-- message requirement, and >=2-user-message junk gate; neither is
+-- age-gated (an unembedded round younger than 48h still signals lag -
+-- it ages into candidacy later).
+drop function if exists public.samskara_backfill_pool_state(uuid, uuid);
+create or replace function public.samskara_backfill_pool_state(
+  p_samskara_id uuid,
+  p_user_id uuid default null
+)
+returns table (rounds_total int, rounds_embedded int)
+language sql stable security invoker as $$
+  with birthplaces as (
+    select ss.thread_id
+      from public.samskara_provenance p
+      join public.samskara_substrate ss on ss.id = p.ref_id
+     where p.samskara_id = p_samskara_id and p.kind = 'substrate'
+    union
+    select ss.thread_id
+      from public.samskara_provenance p
+      join public.samskara_associations a on a.id = p.ref_id
+      join public.samskara_substrate ss on ss.id in (a.a_id, a.b_id)
+     where p.samskara_id = p_samskara_id and p.kind = 'association'
+  )
+  select
+    (select count(*) from public.samskara_substrate sub
+      where sub.user_id = coalesce(p_user_id, auth.uid())
+        and sub.thread_id not in (select thread_id from birthplaces)
+        and exists (
+          select 1 from public.messages msg
+           where msg.id = sub.user_message_id
+             and length(btrim(msg.content)) > 0
+        )
+        and (select count(*) from public.messages m2
+              where m2.thread_id = sub.thread_id and m2.role = 'user') >= 2
+        and sub.created_at < now() - interval '48 hours')::int,
+    (select count(*) from public.samskara_substrate sub
+      where sub.user_id = coalesce(p_user_id, auth.uid())
+        and sub.thread_id not in (select thread_id from birthplaces)
+        and sub.query_embedding is not null
+        and exists (
+          select 1 from public.messages msg
+           where msg.id = sub.user_message_id
+             and length(btrim(msg.content)) > 0
+        )
+        and (select count(*) from public.messages m2
+              where m2.thread_id = sub.thread_id and m2.role = 'user') >= 2
+        and sub.created_at < now() - interval '48 hours')::int
+$$;
+revoke all on function public.samskara_backfill_pool_state(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.samskara_backfill_pool_state(uuid, uuid)
+  to service_role;
+
 -- Worker claim pair: pick the oldest quarantined claim with budget
 -- left and lock it for one tick. House claim-RPC shape (holder id +
 -- TTL, for update skip locked, guarded save downstream). Returns
@@ -9636,7 +9704,7 @@ create or replace function public.samskara_claim_quarantined_samskara(
   p_ttl_seconds int,
   p_budget int default 8
 )
-returns table (id uuid, user_id uuid, prediction text)
+returns table (id uuid, user_id uuid, prediction text, backfill_attempts int)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -9655,7 +9723,7 @@ set search_path = public as $$
          backfill_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where s.id = c.id
-  returning s.id, s.user_id, s.prediction;
+  returning s.id, s.user_id, s.prediction, s.backfill_attempts;
 $$;
 revoke all on function public.samskara_claim_quarantined_samskara(text, int, int)
   from public, anon, authenticated;
@@ -9742,8 +9810,8 @@ begin
   -- arrays carry that claim's ledger row ids, bucketed by verdict), so
   -- the fold is per-row arithmetic, not the per-claim join the live
   -- judge's apply_evaluation does over its batch. Backfill weights:
-  -- held -> +w_weight confirm, contradicted -> +w_weight disconfirm,
-  -- not-borne-out -> +w_soft * w_weight disconfirm. An empty genuine
+  -- held -> +p_weight confirm, contradicted -> +p_weight disconfirm,
+  -- not-borne-out -> +w_soft * p_weight disconfirm. An empty genuine
   -- set (all not-engaged) correctly applies no discount either.
   v_held := coalesce(array_length(p_held, 1), 0);
   v_contradicted := coalesce(array_length(p_contradicted, 1), 0);
@@ -10687,6 +10755,10 @@ begin
       and sb.user_id = v_uid
       and sa.prediction_embedding is not null
       and sb.prediction_embedding is not null
+      -- Explicit despite the transitive fires-join protection: the plan
+      -- assigns the activation filter to BOTH passes.
+      and sa.activated_at is not null
+      and sb.activated_at is not null
       and (pc.cofires::real / greatest(least(sa.fire_count, sb.fire_count), 1)::real) >= p_min_cofire_ratio
       and (1 - ((sa.prediction_embedding - v_mean) <=> (sb.prediction_embedding - v_mean)))::real >= p_cosine_floor
     order by ratio desc, cosine desc
@@ -10718,7 +10790,10 @@ begin
   -- the pool is still over target.
   select count(*) into v_current_count
     from public.samskaras
-   where user_id = v_uid;
+   where user_id = v_uid
+     -- Quarantined rows are not live-corpus slots; counting them would
+     -- drive the evidence-free overflow merge against a phantom pool.
+     and activated_at is not null;
 
   if v_current_count > p_target_count then
     for v_pair in
@@ -11094,6 +11169,7 @@ language sql stable security invoker as $$
         ))::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid()
+        and s.activated_at is not null
         and s.confirm_count = 0 and s.disconfirm_count = 0
         and s.created_at < now() - interval '14 days'
         and not exists (
@@ -11104,6 +11180,7 @@ language sql stable security invoker as $$
               where f.samskara_id = s.id and f.verdict is not null) >= 10)::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid()
+        and s.activated_at is not null
         and s.confirm_count + s.disconfirm_count > 0
         and s.confirm_count + s.disconfirm_count <= 1.0
         and not exists (
@@ -11116,6 +11193,7 @@ language sql stable security invoker as $$
             < now() - interval '90 days')::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid()
+        and s.activated_at is not null
         -- samskara_population_p0 inlined and scoped to auth.uid(): the
         -- standalone function is service-role only (its p_user_id param
         -- would let any signed-in caller probe another user's prior),
@@ -15505,6 +15583,9 @@ language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from public.samskaras s
      where s.activated_at is null
+       -- Pinned rows (budget spent, never engaged) are out of the claim
+       -- queue; they must not keep the hourly POST alive either.
+       and s.backfill_attempts < 8
        and (s.backfill_claim_expires is null
             or s.backfill_claim_expires < now())
   )
@@ -15561,9 +15642,9 @@ begin
     if exists (select 1 from cron.job where jobname = 'nak-samskara-backfill-sweep') then
       perform cron.unschedule('nak-samskara-backfill-sweep');
     end if;
-    -- Minute :21 - free at plan time (re-verified against the schema's
-    -- cron.schedule calls; the architecture doc's minute ladder is
-    -- stale: :33 is intent-employment, :53 is conversation-digest).
+    -- Minute :21, verified free against the schema's cron.schedule
+    -- calls (:33 intent-employment and :53 conversation-digest are
+    -- taken; docs/dev/architecture.md's ladder now matches).
     perform cron.schedule(
       'nak-samskara-backfill-sweep',
       '21 * * * *',

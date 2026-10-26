@@ -270,7 +270,10 @@ export function engagementSummary(counts: {
  * `activation` carries the evidence-backfill warmup state (the claim's
  * activated_at + backfill_attempts). When present and activatedAt is
  * null, the warming-up status takes precedence over every release
- * branch; omit it for callers that predate the warmup pool.
+ * branch. The param is optional so the activated-row tests don't
+ * restate warmup fields on every case; production callers always pass
+ * it - omitting it in production would let a quarantined row fall
+ * through to the release branches below.
  */
 const BACKFILL_ATTEMPT_BUDGET = 8; // MIRROR: ATTEMPT_BUDGET in agents/samskara_backfill.ts.
 

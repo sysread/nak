@@ -60,10 +60,12 @@ deploy-blocking if wrong.
 5. **Ledger + fold weights.** Judge the claim's candidates by running
    the sweep route. Assert in `samskara_backfill_verdicts`: one row per
    judged exchange, `verdict` in the four kinds, and
-   `backfill_attempts` advanced by the total. Fold arithmetic: a
-   `held` verdict must raise `confirm_count` by exactly 0.5 (minus the
-   discount), a `not-borne-out` must raise `disconfirm_count` by 0.125,
-   a `not-engaged` must raise nothing.
+   `backfill_attempts` advanced by the total. Fold arithmetic: the fold
+   adds `held * 0.5` to `confirm_count` and discounts the PRE-EXISTING
+   tally by d (so on a row with prior evidence the net raise is less
+   than 0.5; on a virgin row it is exactly 0.5), a `not-borne-out`
+   must raise `disconfirm_count` by 0.125 (same discount caveat), a
+   `not-engaged` must raise nothing.
 6. **Activation gate, both branches.** (a) Pool exhausted with >= 1
    genuine verdict -> `activated_at` set. (b) Pool exhausted with all
    `not-engaged` -> `activated_at` still null AND `backfill_attempts`
@@ -79,7 +81,9 @@ deploy-blocking if wrong.
    ARE its birthplace: activate immediately (transition 2), even
    though the embedding poll has drained nothing.
 9. **UI states.** Open the Samskara screen: a quarantined claim's
-   detail pane reads "warming up - n of 8 exchanges judged" (the
+   detail pane reads "warming up - n of 8 exchanges judged" (a
+   budget-spent never-engaged row instead reads "warmed up - history
+   never engaged this claim"), (the
    warming-up status takes precedence over the probation copy), the
    Health panel shows a "Warming up" count, and the total-samskaras
    figure EXCLUDES quarantined rows (the regen delta must not false-
