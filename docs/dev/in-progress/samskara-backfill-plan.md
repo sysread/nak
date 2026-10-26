@@ -295,8 +295,10 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   (claim, exchange) attempt. Columns: id, user_id, samskara_id,
   thread_id, user_message_id, verdict text, cosine real, judged_at,
   model text. ON DELETE CASCADE on samskara_id (house pattern,
-  mirrors fires): the ledger is historical-only, a merged or dead
-  claim's rows go with it, and M5 readouts accept the attrition.
+  mirrors fires) and on user_id (auth.users - account deletion
+  cascades transitively): the ledger is historical-only, a merged
+  or dead claim's rows go with it, and M5 readouts accept the
+  attrition.
   UNIQUE (samskara_id, user_message_id) - the candidate-exclusion
   key, doubled as the double-judge guard (the fires unique-
   constraint precedent, schema.sql:8183-8189). Index on (user_id,
@@ -459,8 +461,19 @@ outage's full causal story - three weeks of dark corpus, held-rate
 
 New agent `supabase/functions/venice/agents/samskara_backfill.ts`,
 route `/samskara-backfill-sweep`, cron `21 * * * *` (pg_net POST,
-house dispatch shape). CLAIMS_PER_TICK = 2 (enough to drain well
-ahead of the mint rate, capped spend; headroom math in the
+house dispatch shape). The cron schedule lands in schema.sql's
+cron block (M1's schema changes and the schedule apply together);
+the Deploy workflow syncs the schema BEFORE deploying the function
+(deploy.yml:51-83, sequential steps in one job), so the first
+scheduled POST may 404 harmlessly in the minutes before the
+function is live - mints landing in that window are quarantined by
+the column default, which is inherently safe. A schema re-apply
+during an in-flight tick can transiently fail an in-flight RPC;
+TTL expiry plus next-tick re-claim recovers, and the ledger
+exclusion prevents re-judging. The frontend (Pages) deploys last
+and all RPC return-shape changes are additive, so the cached-PWA
+mixed-version window is safe. CLAIMS_PER_TICK = 2 (enough to drain
+well ahead of the mint rate, capped spend; headroom math in the
 constants block below). Work registered under EdgeRuntime.waitUntil.
 
 Per-claim flow:
@@ -489,18 +502,38 @@ Per-claim flow:
      VerdictKind exported from samskara_evaluation.ts, and
      completeJsonObjectWithMeta for the completion (response
      format, retry, finishReason guard).
+   - A Venice error on one candidate SKIPS that exchange (not
+     ledgered, not folded; it is eligible again next tick) and
+     continues with the rest.
    - Insert the ledger row FIRST (including not-engaged - every
-     spent attempt is ledgered; the candidate exclusion keys on
+     judged attempt is ledgered; the candidate exclusion keys on
      ledger rows, so a crash between ledger insert and fold never
-     re-judges the same exchange).
-5. Fold once per claim per tick via samskara_apply_backfill with
-   the batch's verdict arrays (guarded save; the no-claim no-ops
-   are the crash-recovery path - the next tick re-claims and the
-   ledger exclusion skips judged exchanges).
-6. Gate check (transition 1): attempts spent OR pool exhausted,
-   AND genuine engaged tests >= 1 -> set activated_at = now().
-   Pool exhausted with zero genuine tests -> release the claim;
-   the 45-day reaper is the death path (transition 4).
+     re-judges the same exchange; on-conflict-do-nothing against
+     the unique pair, never a throw).
+5. Fold the batch via samskara_apply_backfill with the verdict
+   arrays (guarded save; the no-claim no-ops are the crash-recovery
+   path - the next tick re-claims and the ledger exclusion skips
+   judged exchanges).
+6. GATE CHECK - every tick, while still holding the claim, using
+   row state (tallies > 0 means >= 1 genuine backfill test):
+   - Candidates returned fewer than requested (pool exhausted this
+     tick) OR attempts now >= ATTEMPT_BUDGET:
+     - genuine >= 1 (tallies > 0) -> set activated_at = now()
+       (transition 1), release, done.
+     - genuine = 0 -> PIN backfill_attempts = ATTEMPT_BUDGET and
+       release. The row leaves the claim queue permanently (the
+       claim RPC's attempts < budget predicate drops it) and the
+       45-day reaper collects it (transition 4). Without the pin,
+       a never-engaging row is re-claimed every tick and starves
+       the queue's 2 slots for up to 45 days.
+   - Candidates remain and budget unspent -> release normally; the
+     row is re-claimed next tick.
+
+The gate-from-row-state design also makes every crash recoverable:
+a crash between fold (step 5) and gate (step 6) leaves the row
+claimable with all candidates ledgered; the next tick's empty fetch
+reads as exhaustion, and the tallies the fold already wrote decide
+activation. No path loops forever, and no path re-judges.
 
 Constants (initial values; the floor gets a labeled probe set
 before deploy): ATTEMPT_BUDGET = 8, candidate floor = 0.05
@@ -509,7 +542,9 @@ exchange context = +-1 adjacent exchange, candidate age >= 48h,
 CLAIMS_PER_TICK = 2 (drains 48 slots/day against a measured
 ~7/day mint rate - 49 mints/week, docs/dev/samskara.md:1610; the
 2026-10 vetting observed 9 mints in a 48-hour burst (owner
-datum), so headroom covers bursts).
+datum), so headroom covers bursts), claim TTL = 900s (worst tick
+is 2 claims x 8 BIG_WINDOW completions; the TTL must outlive it so
+a concurrent tick cannot claim a row mid-batch).
 
 ## M4 - SURFACES
 
@@ -607,11 +642,14 @@ datum), so headroom covers bursts).
   the corpus changes: "would have fired" is evaluated against
   today's centering, not the historical day's. Accepted; noted for
   the readout.
-- Crash window between a ledger insert and the batch fold: the
-  verdict is ledgered but unfolded, and the candidate exclusion
-  means the retry never re-judges it - one verdict's worth of
-  tallies can be lost per crash. Accepted (single-user stakes,
-  rare event, the ledger keeps the record); the alternative -
+- Crash window between the batch fold (step 5) and the gate (step
+  6): the ledger rows exist but the fold did not commit - up to
+  ONE BATCH (8 verdicts) of tallies can be lost per crash, not one
+  verdict; attempts can also lag the true ledger count, so total
+  completions may exceed ATTEMPT_BUDGET. Accepted (single-user
+  stakes, rare event, the ledger keeps the record; tallies decide
+  the gate from row state, so the next tick still activates
+  correctly when history genuinely engaged). The alternative -
   fold-per-exchange - multiplies the guarded-save round trips 8x.
 - "157 live rows" in decision 5 is an owner datum from the
   2026-10-25 deployment census, not a repo-verifiable number.
