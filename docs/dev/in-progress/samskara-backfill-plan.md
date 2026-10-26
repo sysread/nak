@@ -71,6 +71,66 @@ value; the cap revisit reads this plan's M5 data.
    backfilled. The prompt presents a prediction and a transcript;
    provenance disclosure risks a leniency or harshness anchor.
 
+## STATE AND TRANSITION MATRIX
+
+A claim's activation state. Existing machinery (health posterior,
+eviction, reap) is unchanged; the matrix covers what this plan adds.
+Precedence rule: the worker's own claim columns arbitrate every
+transition - a row whose claim is held by a live worker cannot die,
+fold, or activate concurrently.
+
+| State | Meaning | Entered by |
+| --- | --- | --- |
+| QUARANTINED | `activated_at` null. Invisible to the fire RPC; no fires, no cohorts, no priming. | Mint insert (column default). Grandfather block (one-time, deploy). |
+| ACTIVE | `activated_at` set. Fires normally; identical to today's semantics. | Transitions 1-3 below. |
+| DEAD | Row deleted. | Existing machinery only (see below). |
+
+Transitions QUARANTINED -> ACTIVE:
+
+| # | Trigger | Condition |
+| --- | --- | --- |
+| 1 | Grandfather block | One-shot at the column-adding deploy; every row alive that day activates. Never re-runs (M1's flag). |
+| 2 | Worker gate check | `backfill_attempts >= ATTEMPT_BUDGET` AND genuine engaged tests >= 1. |
+| 3 | Zero-candidate exception | Candidate query returns 0 rows because the account has no (or too-short) history - activate immediately; an empty corpus cannot warm a claim up. |
+| 4 | Short-history gate pass | Candidates existed but fewer than the budget; spent, then transition 2's condition evaluated on the smaller total. |
+
+Transitions QUARANTINED -> DEAD:
+
+| # | Trigger | Condition |
+| --- | --- | --- |
+| 5 | Adjacency-junk reap | attempts >= ATTEMPT_BUDGET, all attempts not-engaged, age >= 14 days. The backfill ledger is the evidence standard's new source. |
+| 6 | Stale-tier reap (existing) | 90 days quiet, tally <= 1.0 - a never-activated row qualifies (tally 0). |
+
+ACTIVE -> DEAD: existing machinery only (probation reaper, reap_dead,
+cap-pressure eviction tiers). Backfill never touches an ACTIVE row.
+
+Readers of the state: fire RPC (exclusion filter), health panel and
+browse list (badge), apply_backfill (gate arithmetic). Explicit
+non-readers: dedup-reinforce (geometry ignores activation; reinforcing
+a quarantined claim is allowed), collapse_by_cofiring (quarantined
+claims have no fires, so they cannot enter a cohort), eviction tiers
+(no tallies mid-quarantine; the 14-day floors cover the gap).
+
+## DELTAS-FROM-TEMPLATE LEDGER
+
+Template: the live judge, `agents/samskara_evaluation.ts` (the
+next-day evaluation sweep). The backfill judge is its clone with
+these deltas. Each row verified against the source this drafting.
+
+| Aspect | Live judge | Backfill judge |
+| --- | --- | --- |
+| Completion unit | One completion per judged THREAD, predictions batched (p1..pn tags, buildVerdictRequest). | One completion per (claim, exchange) pair; single prediction, single tag. |
+| Trigger | Fires recorded in a thread; day-gated thread claim; */10 cron. | Quarantine pool; hourly claim-based sweep (:33); claim-RPC pattern. |
+| Conversation framing | "predictions that were live during the conversation above" | Prediction + transcript only; no live/quarantine/backfill disclosure (decision 6). |
+| Transcript input | Whole thread transcript. | Exchange slice: target round's user message + assistant reply, +-1 adjacent exchange. |
+| Verdict kinds | held / contradicted / not-borne-out / not-engaged, two-step prompt, skeptical bias. | Same four kinds, same two-step shape, same semantics - prompt adapted for tense only. |
+| Evidence weights | held -> confirm += 1; contradicted -> disconfirm += 1; not-borne-out -> disconfirm += w_soft (0.25); not-engaged -> nothing. | Same mapping scaled by w_backfill (0.5): held 0.5, contradicted 0.5, not-borne-out 0.125. not-engaged counts toward attempts, never toward tallies. |
+| Record of verdicts | `verdict` column on the existing samskara_fires row. | New samskara_backfill_verdicts row per attempt. NO fire row is ever written. |
+| Control arm | Yes - samskara_control_verdicts draws unfired controls per thread. | None. The selection question does not arise (the worker chooses its own candidates); noted, out of scope. |
+| Model | EVALUATION_MODEL = BIG_WINDOW_MODEL (agent-models.ts:71, samskara_evaluation.ts:38,559). | Same model constant; single-prediction completions are smaller, not cheaper-per-token. |
+| Parse defense | JSON parse; malformed/missing/out-of-enum entries dropped silently. | Reused verbatim (single-entry map). |
+| Discount | Evidence aged by d per genuine test, inside apply_evaluation. | Same discount math inside apply_backfill; discount applies per genuine backfill test at scaled weight. |
+
 ## VERIFIED MECHANICS THIS PLAN BUILDS ON
 
 - The fire predicate is reproducible math. Live fire embeds the
