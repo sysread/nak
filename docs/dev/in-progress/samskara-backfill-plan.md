@@ -1,8 +1,9 @@
 # Samskara evidence backfill: the warmup pool (plan)
 
-Status: DRAFT rev 5, 2026-10-26. Revised through four fresh-context
+Status: DRAFT rev 8, 2026-10-26. Revised through seven fresh-context
 review rounds (deep-mode seven-lens fan-out, then general,
-schema-and-data-model, and cross-module-contracts lenses). Owner's
+schema-and-data-model, cross-module-contracts, lifecycle, and
+prompt/UI lenses, then a general convergence round). Owner's
 framing: when a person adopts a new predictive pattern, they
 re-read past experience in light of it. The system should do the
 same: a newly minted claim is judged against the conversations
@@ -115,8 +116,8 @@ Transitions QUARANTINED -> DEAD:
 
 | # | Trigger | Condition |
 | --- | --- | --- |
-| 4 | Probation reaper (existing) | 45 days, evidence tallies still zero. A fully not-engaged backfill leaves tallies zero, so history-disproved-adjacent claims die here. Genuinely tested claims are immune (tallies > 0). |
-| 5 | Merge (existing) | A dedup or overflow merge deletes the loser; backfill ledger rows cascade with it (historical-only). |
+| 4 | Probation reaper (existing) | 45 days, evidence tallies still zero. A fully not-engaged backfill leaves tallies zero, so history-disproved-adjacent claims die here. Genuinely tested claims are immune (tallies > 0). A mid-backfill row is protected by its youth (45 days) and, post-fold, by the same tallies. |
+| 5 | Merge (existing, ACTIVE only) | The collapse RPC merges ACTIVE pairs only (M1's filter), so a quarantined row cannot currently be merge-deleted; this transition exists for the day the collapse filter changes. The ledger cascade note (M1) documents the data path either way. |
 
 ACTIVE -> DEAD: existing machinery only (probation reaper, reap_dead,
 cap-pressure eviction tiers). Backfill never touches an ACTIVE row.
@@ -157,6 +158,9 @@ path:
 | reap_dead | schema.sql:9384-9386 - requires last_fired_at; quarantined rows never fire (verified). |
 | reap_untested (45d) | schema.sql:9436 - THE death path (transition 4); deliberately unfiltered. |
 | nearest_by_prediction, reinforce, merge_pair | schema.sql:9968,10013,10103 - geometry/evidence mechanics; activation-agnostic by the dedup non-reader stance. |
+| Cluster-thread-fires seed read | schema.sql:8753 - reads claim embeddings by seed id; fires only exist for ACTIVE rows. |
+| Search + cluster RPCs | schema.sql:10363,10426+ - DELIBERATE unfiltered reads: the browse surface must show quarantined rows (that is M4's badge). |
+| Intent-mint user enumeration | schema.sql:15867 - user-existence read, no claim data. |
 
 ## DELTAS-FROM-TEMPLATE LEDGER
 
@@ -352,7 +356,9 @@ loudly otherwise, and its floor >= 52 accommodates one more table).
   authenticated caller pass another user's id.
 - RPC `samskara_apply_backfill(p_user_id, p_samskara_id, p_held
   uuid[], p_contradicted uuid[], p_not_borne_out uuid[],
-  p_not_engaged_count int, p_claim_holder text)`: folds genuine
+  p_not_engaged_count int, p_claim_holder text)`: the uuid arrays
+  carry LEDGER ROW ids (derivable to user_message_ids via the
+  unique pair). Folds genuine
   verdicts into the SAME tallies via the same discount math as
   samskara_apply_evaluation scaled by w_backfill (0.5): held ->
   confirm += 0.5; contradicted -> disconfirm += 0.5; not-borne-out
@@ -522,7 +528,9 @@ Per-claim flow:
      completion (response format, retry, finishReason guard).
    - A Venice error on one candidate SKIPS that exchange (not
      ledgered, not folded; it is eligible again next tick) and
-     continues with the rest.
+     continues with the rest. A message deleted between candidate
+     retrieval and the slice fetch yields an empty slice - same
+     skip path.
    - Insert the ledger row FIRST (including not-engaged - every
      judged attempt is ledgered; the candidate exclusion keys on
      ledger rows, so a crash between ledger insert and fold never
@@ -533,11 +541,13 @@ Per-claim flow:
    path - the next tick re-claims and the ledger exclusion skips
    judged exchanges).
 6. GATE CHECK - every tick, while still holding the claim, using
-   row state (tallies > 0 means >= 1 genuine backfill test):
+   LEDGER state for the genuine count (an indexed exists: any
+   ledger row for this claim with verdict <> 'not-engaged') and
+   attempt state for the budget:
    - Candidates returned fewer than requested (pool exhausted this
      tick) OR attempts now >= ATTEMPT_BUDGET:
-     - genuine >= 1 (tallies > 0) -> set activated_at = now()
-       (transition 1), release, done.
+     - genuine >= 1 -> set activated_at = now() (transition 1),
+       release, done.
      - genuine = 0 -> PIN backfill_attempts = ATTEMPT_BUDGET and
        release. The row leaves the claim queue permanently (the
        claim RPC's attempts < budget predicate drops it) and the
@@ -547,11 +557,12 @@ Per-claim flow:
    - Candidates remain and budget unspent -> release normally; the
      row is re-claimed next tick.
 
-The gate-from-row-state design also makes every crash recoverable:
-a crash between fold (step 5) and gate (step 6) leaves the row
-claimable with all candidates ledgered; the next tick's empty fetch
-reads as exhaustion, and the tallies the fold already wrote decide
-activation. No path loops forever, and no path re-judges.
+The ledger (not the tallies) is the gate's evidence source because
+the ledger is written first: a crash in the insert-to-fold window
+loses tallies but not ledger rows, so the gate still sees genuine
+engagement and activates correctly. Reading tallies instead would
+let a genuinely-engaged claim pin out of the queue and die at the
+reaper on its ledger-proven evidence.
 
 Constants (initial values; the floor gets a labeled probe set
 before deploy): ATTEMPT_BUDGET = 8, candidate floor = 0.05
@@ -606,6 +617,9 @@ a concurrent tick cannot claim a row mid-batch).
 - docs/user/samskara.md: the observable behavior - new claims do
   not influence replies immediately; they warm up against history
   first; the detail-pane status line.
+- src/lib/supabase/types/samskara.ts: the row types gain
+  activated_at, backfill_attempts, and the claim columns - M4's
+  browser work consumes them.
 - New QA use case: docs/qa/use-cases/samskara-backfill.md. It is
   the LOAD-BEARING guard, not a nice-to-have: schema RPCs have no
   automated test net in this repo (no SQL test harness exists -
@@ -684,15 +698,15 @@ a concurrent tick cannot claim a row mid-batch).
   the corpus changes: "would have fired" is evaluated against
   today's centering, not the historical day's. Accepted; noted for
   the readout.
-- Crash window between the batch fold (step 5) and the gate (step
-  6): the ledger rows exist but the fold did not commit - up to
-  ONE BATCH (8 verdicts) of tallies can be lost per crash, not one
-  verdict; attempts can also lag the true ledger count, so total
-  completions may exceed ATTEMPT_BUDGET. Accepted (single-user
-  stakes, rare event, the ledger keeps the record; tallies decide
-  the gate from row state, so the next tick still activates
-  correctly when history genuinely engaged). The alternative -
-  fold-per-exchange - multiplies the guarded-save round trips 8x.
+- Crash window between the ledger inserts (step 4) and the batch
+  fold (step 5): the ledger rows exist but the fold did not commit
+  - up to ONE BATCH (8 verdicts) of tallies can be lost per crash,
+  not one verdict; attempts can also lag the true ledger count, so
+  total completions may exceed ATTEMPT_BUDGET. Accepted: the gate
+  reads the ledger, so activation is unaffected by the tally loss;
+  the ledger keeps the record; single-user stakes make the rare
+  event cheap. The alternative - fold-per-exchange - multiplies
+  the guarded-save round trips 8x.
 - "157 live rows" in decision 5 is an owner datum from the
   2026-10-25 deployment census, not a repo-verifiable number.
 
