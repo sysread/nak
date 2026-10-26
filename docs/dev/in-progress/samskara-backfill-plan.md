@@ -141,10 +141,15 @@ these deltas. Each row verified against the source this drafting.
   (schema.sql:8495-8543). A historical exchange embedded the same
   way yields an exact "would have fired" test.
 - All embeddings share one space: claims, substrate situations, and
-  fire queries are bge-m3 1024-dim zero-padded to 2048
-  (schema.sql samskara_substrate situation_embedding comment;
-  _shared/local-embed.ts). Centering uses the shared claim mean
-  (_samskara_centering_mean).
+  fire queries are embedded by the local edge-runtime embedder
+  (gte-small, 384-dim, zero-extended to the vector(2048) columns;
+  _shared/local-embed.ts:1-30) and registered through the
+  embeddings worker's EMBED_SOURCES table (samskara-substrate and
+  samskara-predictions at _shared/embed-input.ts:213,219). Centering
+  uses the shared claim mean (_samskara_centering_mean). The
+  substrate column's inline comment still says "bge-m3's 1024" -
+  stale; the model rotated to gte-small and everything was
+  re-embedded (docs/dev/embeddings.md). M4 sweeps that comment.
 - The judge's verdict scale: held -> confirm += 1; contradicted ->
   disconfirm += 1; not-borne-out -> disconfirm += w_soft (0.25);
   not-engaged -> no evidence, no discount (schema.sql:9288-9330,
@@ -239,9 +244,21 @@ drop-if-exists + recreate for RPCs, grants block at file end).
 
 Extend the embeddings worker's samskara_substrate source to also
 fill query_embedding (embed the round's raw user message text).
-One extra local-embed call per round; no Venice cost; the existing
+One extra local-embed call per round; no network cost; the existing
 pending-embed claim pattern carries it. Historical substrate rows
 drain through the same poll (bounded by the worker's per-tick cap).
+
+The 2026-08 retrieval-outage lesson is binding here: a new
+embeddable column must be registered in EMBED_SOURCES
+(_shared/embed-input.ts) with its buildInput, or the backfill sweep
+will never fill it and the column stays NULL while everything looks
+fine - the failure was silent cross-space noise with no error, and
+three ranking-quality theories were chased before anyone checked
+vector comparability (project memory; docs/dev/embeddings.md).
+query_embedding joins as part of the existing samskara-substrate
+source (same buildInput variant, second output column), not as a
+new source, so registration is one variant branch - but the
+registration IS the load-bearing step.
 
 ## M3 - THE BACKFILL WORKER
 
@@ -349,6 +366,9 @@ claims whose neighborhood never actually engages them.
   centering, not the historical day's. Accepted (the alternative -
   freezing per-round means - is machinery the evidence does not
   need); noted for the readout.
+- The stale "bge-m3" comment on samskara_substrate.situation_embedding
+  is swept in M4; local-embed.ts:14-21 is the authority (gte-small,
+  384-dim).
 
 ## WHAT THIS PLAN REPLACES
 
