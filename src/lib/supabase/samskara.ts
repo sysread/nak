@@ -524,6 +524,7 @@ export async function samskaraHealthSnapshot(
     stuckEmbedClaims: r?.stuck_embed_claims ?? 0,
     quarantined: r?.quarantined ?? 0,
     stuckBackfillClaims: r?.stuck_backfill_claims ?? 0,
+    dormant: r?.dormant ?? 0,
   };
 }
 
@@ -576,6 +577,8 @@ export async function samskaraVerdictCounts(
     notEngaged: (r?.not_engaged as number) ?? 0,
     pending: (r?.pending as number) ?? 0,
     lastGenuineAt: (r?.last_genuine_at as string | null) ?? null,
+    recentNotEngagedStreak: (r?.recent_not_engaged_streak as number) ?? 0,
+    recentNotEngagedThreads: (r?.recent_not_engaged_threads as number) ?? 0,
   };
 }
 

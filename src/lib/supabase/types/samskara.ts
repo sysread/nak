@@ -82,6 +82,11 @@ export interface SamskaraHealthSnapshot {
   /** Backfill claims held past their TTL - the worker died mid-tick;
    *  mirrors the stuckClaims leak detector bands. */
   stuckBackfillClaims: number;
+  /** Claims meeting the dormancy reaper's full predicate (15-verdict
+   *  all-not-engaged run across >= 5 threads, no pending fire,
+   *  activated) - the pool the hourly reaper drains. Informational,
+   *  never thresholded. */
+  dormant: number;
 }
 
 /** Windowed activity rates for the Health panel. */
@@ -110,6 +115,13 @@ export interface SamskaraVerdictCounts {
    *  not-borne-out); null when never genuinely tested. The stale
    *  eviction tier keys on this timestamp. */
   lastGenuineAt: string | null;
+  /** The claim's current all-not-engaged run over verdicted fires (the
+   *  dormancy reaper's leading indicator): 0 when the most recent judged
+   *  fire is genuine. See docs/dev/in-progress/samskara-dormancy-plan.md. */
+  recentNotEngagedStreak: number;
+  /** Distinct conversations the streak's fires span - the dormancy
+   *  reaper also requires >= 5 before it collects. */
+  recentNotEngagedThreads: number;
 }
 
 /**

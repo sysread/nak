@@ -250,6 +250,15 @@
         <span class="health-label">Samskaras</span>
         <span class="health-value">{snap.totalSamskaras}</span>
       </div>
+      {#if snap.dormant > 0}
+        <!-- Informational, never thresholded: the dormancy pool drains
+             hourly once the reaper runs; hidden at zero like the
+             warming-up row. -->
+        <div class="health-row">
+          <span class="health-label">Dormant</span>
+          <span class="health-value">{snap.dormant}</span>
+        </div>
+      {/if}
       {#if snap.quarantined > 0}
         <!-- Informational, never thresholded: warming-up depth is normal
              between backfill ticks. Hidden at zero (unlike the sibling

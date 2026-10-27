@@ -307,6 +307,74 @@ describe('releaseStatus', () => {
       expect(s).toMatch(/established/);
       expect(s).not.toMatch(/warming/);
     });
+
+  describe('dormancy (event-time release)', () => {
+    // The streak rides the verdict-counts shape; older callers omit it
+    // and read exactly as before.
+    const dormant = { ...none, notEngaged: 15, recentNotEngagedStreak: 15, recentNotEngagedThreads: 5 };
+    const fewThreads = { ...none, notEngaged: 15, recentNotEngagedStreak: 15, recentNotEngagedThreads: 3 };
+
+    it('a 15-streak claim with no pending fire reads dormant, ahead of established', () => {
+      // Historical tallies can be real while the behavior moved on -
+      // the reaper will collect it, and the pane must say so rather
+      // than "established - N genuine tests".
+      const s = releaseStatus(
+        daysAgo(50),
+        { ...none, held: 2, lastGenuineAt: daysAgo(40), recentNotEngagedStreak: 15, recentNotEngagedThreads: 5 },
+        3.37,
+        now,
+        { activatedAt: daysAgo(30), backfillAttempts: 0 }
+      );
+      expect(s).toMatch(/dormant - never engaged in its last 15 judged fires/);
+      expect(s).not.toMatch(/established/);
+    });
+
+    it('a streak confined to few threads does NOT promise collection (the reaper floor)', () => {
+      const s = releaseStatus(
+        daysAgo(50),
+        fewThreads,
+        0,
+        now,
+        { activatedAt: daysAgo(30), backfillAttempts: 0 }
+      );
+      expect(s).not.toMatch(/dormant/);
+      expect(s).not.toMatch(/the hourly reaper collects it/);
+    });
+
+    it('a pending fire suppresses the dormant line (the reaper withholds too)', () => {
+      const s = releaseStatus(
+        daysAgo(50),
+        { ...dormant, pending: 1 },
+        0,
+        now,
+        { activatedAt: daysAgo(30), backfillAttempts: 0 }
+      );
+      expect(s).not.toMatch(/dormant/);
+    });
+
+    it('a streak below 15 renders the existing branches', () => {
+      const s = releaseStatus(
+        daysAgo(100),
+        { ...none, held: 1, lastGenuineAt: daysAgo(10), recentNotEngagedStreak: 14 },
+        1.0,
+        now,
+        { activatedAt: daysAgo(30), backfillAttempts: 0 }
+      );
+      expect(s).toMatch(/established/);
+      expect(s).not.toMatch(/dormant/);
+    });
+
+    it('omitting the streak field entirely reads as before', () => {
+      const s = releaseStatus(
+        daysAgo(100),
+        { ...none, held: 1, lastGenuineAt: daysAgo(10) },
+        1.0,
+        now,
+        { activatedAt: daysAgo(30), backfillAttempts: 0 }
+      );
+      expect(s).toMatch(/established/);
+    });
+  });
   });
 });
 

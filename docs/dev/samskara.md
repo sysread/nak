@@ -1338,6 +1338,64 @@ classifier that resolved only ~4% of fires. Both are retired and dropped.
 Design of record + the model's derivation:
 [`plans/samskara-decay-relevance-gated-plan.md`](plans/samskara-decay-relevance-gated-plan.md).
 
+### Dormancy: event-time release for never-engaging claims
+
+The reapers above are wall-clock: reap_dead needs health below the
+floor (a never-batting claim never earns it - it sits at p0),
+reap_untested needs tally zero (a claim with historical evidence is
+exempt), and the stale tier needs 90 quiet days. None of them reaches
+the claim that fires constantly and never once engages: `not-engaged`
+is a no-op for the posterior by design (a loose match is not a fair
+test), so the claim's score freezes at whatever it earned and the
+claim occupies its slot forever. Prod, 2026-10-27: four claims
+produced ~150 of the week's 595 not-engaged fires this way (streaks
+of 68, 49, 34, 30 with zero genuine verdicts among them).
+
+`samskara_reap_dormant()` deletes them, measured in EVENT TIME - the
+claim's own verdicted fires, not days (the owner's usage is spotty; a
+silent month is the calendar, not a verdict). The standard:
+
+- the claim's **15 most recent verdicted fires are ALL not-engaged**
+  (DORMANT_STREAK; verdicted includes the expired stamps
+  `samskara_expire_unjudgeable_fires` writes - "the situation never
+  arose" is the same claim administratively);
+- those 15 fires **span at least 5 distinct threads**
+  (DORMANT_COHORT_FLOOR) - fires arrive per turn and a single hot
+  afternoon could manufacture a 15-streak inside one thread, so the
+  floor counts conversations, not turns;
+- **no unresolved fire** (the spare-the-pending-test guard; the reaper
+  runs after expire_unjudgeable_fires in the :13 cron statement, so
+  freshly expired stamps count and genuinely-stuck pendings are
+  already terminal);
+- **the claim is activated** (quarantined claims are the warmup
+  pool's domain).
+
+The margin is a canyon, not a tuning problem: healthy claims run
+roughly half not-engaged (54% on prod that week), so a 15-fire
+all-not-engaged run is far outside healthy noise - the observed junk
+sat at 30-68. A narrow-but-genuine claim in a busy neighborhood CAN
+be collected; that death is defensible because the corpus is capped
+(a never-engaging claim occupies a slot a better claim could use),
+N is set generously for exactly that case, and the plan record
+(docs/dev/in-progress/samskara-dormancy-plan.md) preserves the
+reasoning.
+
+Deliberately NOT this design's earlier mistake: not-engaged never touches the
+tallies, health, confidence, or p0. An earlier design discounted
+evidence per not-engaged verdict and live data killed it - evidence
+decayed ~4x faster than genuine tests could accrue it (see the 4x
+incident on `samskara_apply_evaluation`). The reaper READS the
+verdict stream and acts on the pattern; the posterior stays pure
+genuine tests.
+
+The detail pane's verdict counts carry
+`recent_not_engaged_streak` (the current run's true length), and
+`releaseStatus` renders a dormant claim as "dormant - never engaged
+in its last 15 judged fires; the hourly reaper collects it" - gated
+on the full predicate the UI can see (streak, thread span, no
+pending fire), because the pane must not promise collection the
+worker won't deliver.
+
 ### Dedup formula
 
 Two passes per `samskara_collapse_by_cofiring()` call.
@@ -1414,6 +1472,12 @@ grows. The log10 shows up again on the input-cap side when the
 summarizer reads samskaras to feed the agent.
 
 ## Interactions with other features
+
+- **Evaluation** - the :13 reap cron statement now orders
+  `samskara_expire_unjudgeable_fires` -> `samskara_reap_dormant` ->
+  `samskara_reap_dead` -> `samskara_reap_untested`; the dormancy
+  reaper reads the evaluation sweep's verdict stamps (and the
+  expired stamps expire_unjudgeable_fires writes first).
 
 - **Embeddings** - the embeddings worker drains the
   `samskara-substrate-query` source (the backfill retrieval index);
@@ -1880,7 +1944,8 @@ that same simplification.)
   detail + provenance. Backed by `listSamskarasPage`,
   `searchSamskarasByEmbedding` / `searchSamskarasByText`,
   `samskara_cluster_corpus`, `samskara_provenance_detail`, and
-  `samskara_verdict_counts` (the per-samskara lifetime verdict tally).
+  `samskara_verdict_counts` (the per-samskara lifetime verdict tally,
+  plus the current not-engaged streak the dormancy reaper keys on).
   Pieces: `src/screens/Samskaras.svelte`,
   `src/components/SamskaraBrowseList.svelte`,
   `src/lib/samskara-browse-store.svelte.ts`,

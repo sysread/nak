@@ -9962,6 +9962,96 @@ end $$;
 revoke all on function public.samskara_reap_untested(int) from public, anon, authenticated;
 grant execute on function public.samskara_reap_untested(int) to service_role;
 
+-- Dormancy reaper: delete claims whose recent judged history is ALL
+-- not-engaged. The behavioral-complement to the reapers above: reap_dead
+-- clears claims disproven by real misses, reap_untested clears claims
+-- whose topic never arose at all, and this one clears claims whose
+-- topic arises CONSTANTLY but whose predicted situation never does -
+-- the too-broad claim that fires on every adjacent turn, gets ruled a
+-- loose match every time, and is therefore immune to decay (not-engaged
+-- is a no-op for the posterior by design; see the 4x-decay incident
+-- recorded on samskara_apply_evaluation). Measured in EVENT TIME - the
+-- claim's own verdicted fires - because wall-clock dormancy is wrong
+-- for a spotty user: two silent weeks are the calendar, not a verdict.
+--
+-- The standard (DORMANT_STREAK x DORMANT_COHORT_FLOOR):
+--   - the claim's 15 most recent VERDICTED fires (verdict not null,
+--     including the expired stamps expire_unjudgeable_fires writes -
+--     "the situation never arose" is the same claim administratively)
+--     are ALL not-engaged;
+--   - those 15 span at least 5 distinct THREADS - fires arrive per
+--     turn and cohort_id is per-turn, so a single hot afternoon could
+--     manufacture a 15-streak inside one thread; five conversations
+--     means the claim failed on five separate occasions;
+--   - no unresolved fire exists (the spare-the-pending-test guard:
+--     a verdict in flight may be the first genuine test); runs after
+--     samskara_expire_unjudgeable_fires in the reap cron statement so
+--     freshly expired stamps count and genuinely-stuck pendings are
+--     already terminal;
+--   - the claim is activated (quarantined claims are the warmup
+--     pool's domain).
+--
+-- Why this is not the 4x-decay mistake: not-engaged never touches the
+-- tallies, health, confidence, or p0. The posterior stays pure
+-- genuine tests; the reaper READS the verdict stream and acts on the
+-- pattern, it does not weight it into the score.
+--
+-- Margin: healthy claims run roughly half not-engaged (prod 2026-10-27:
+-- 54% overall), so a 15-fire all-not-engaged run is far outside
+-- healthy noise; the observed junk claims sat at 30-68. A narrow but
+-- genuine claim in a busy neighborhood can be collected - the corpus
+-- cap is what makes the death defensible (a never-engaging claim
+-- occupies a slot a better claim could use), and N is set generously
+-- for exactly that case.
+drop function if exists public.samskara_reap_dormant();
+create or replace function public.samskara_reap_dormant()
+returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  -- Mirrored by DORMANT_STREAK in src/lib/ui/samskara-browse.ts and
+  -- pinned across all three sites by tests/samskara-dormancy.test.ts.
+  dormant_streak constant int := 15;
+  dormant_cohort_floor constant int := 5;
+  affected int;
+begin
+  -- One window pass over all verdicted fires; per-claim aggregates join
+  -- the delete. Set-based like the sibling reapers, not per-claim
+  -- correlated.
+  with recent as (
+    select f.samskara_id, f.verdict, f.thread_id,
+           row_number() over (partition by f.samskara_id
+                              order by f.fired_at desc, f.id desc) as rn
+      from public.samskara_fires f
+     where f.verdict is not null
+  ),
+  streaks as (
+    select samskara_id,
+           count(*) as in_window,
+           count(*) filter (where verdict <> 'not-engaged') as genuine_in_window,
+           count(distinct thread_id) as threads
+      from recent
+     where rn <= dormant_streak
+     group by samskara_id
+  )
+  delete from public.samskaras s
+   where s.activated_at is not null
+     and not exists (
+       select 1 from public.samskara_fires f
+        where f.samskara_id = s.id and f.verdict is null
+     )
+     and exists (
+       select 1 from streaks st
+        where st.samskara_id = s.id
+          and st.in_window = dormant_streak
+          and st.genuine_in_window = 0
+          and st.threads >= dormant_cohort_floor
+     );
+  get diagnostics affected = row_count;
+  return affected;
+end $$;
+revoke all on function public.samskara_reap_dormant() from public, anon, authenticated;
+grant execute on function public.samskara_reap_dormant() to service_role;
+
 -- Unjudgeable-fire expiry: stamp a terminal 'not-engaged' on fires no
 -- verdict will ever reach.
 --
@@ -11066,6 +11156,17 @@ $$;
 -- select policy scopes the read; the explicit user_id filter is
 -- belt-and-braces (mirrors samskara_provenance_detail).
 drop function if exists public.samskara_verdict_counts(uuid);
+-- recent_not_engaged_streak: the claim's CURRENT all-not-engaged run
+-- over verdicted fires (newest first) - the dormancy reaper's leading
+-- indicator for the detail pane. TRUE run length, not a window count:
+-- the rank of the most recent non-not-engaged verdicted fire minus one
+-- (0 when the newest judged fire is genuine; total verdicted when every
+-- verdict is not-engaged). Unresolved fires neither extend nor break
+-- the run. recent_not_engaged_threads: the distinct conversations the
+-- NEWEST 15 verdicted fires span (the reaper's predicate is
+-- window-scoped, so a run longer than 15 is judged by its newest 15),
+-- letting the UI mirror the full predicate. Drop-then-create:
+-- RETURNS TABLE change.
 create or replace function public.samskara_verdict_counts(p_samskara_id uuid)
 returns table (
   held int,
@@ -11073,19 +11174,32 @@ returns table (
   not_borne_out int,
   not_engaged int,
   pending int,
-  last_genuine_at timestamptz
+  last_genuine_at timestamptz,
+  recent_not_engaged_streak int,
+  recent_not_engaged_threads int
 )
 language sql stable security invoker set search_path = public as $$
+  with v as (
+    select f.verdict, f.fired_at, f.thread_id,
+           row_number() over (order by f.fired_at desc, f.id desc) as rn
+      from public.samskara_fires f
+     where f.samskara_id = p_samskara_id
+       and f.user_id = auth.uid()
+       and f.verdict is not null
+  )
   select
     count(*) filter (where verdict = 'held')::int,
     count(*) filter (where verdict = 'contradicted')::int,
     count(*) filter (where verdict = 'not-borne-out')::int,
     count(*) filter (where verdict = 'not-engaged')::int,
-    count(*) filter (where verdict is null)::int,
-    max(fired_at) filter (where verdict in ('held', 'contradicted', 'not-borne-out'))
-  from public.samskara_fires
-  where samskara_id = p_samskara_id
-    and user_id = auth.uid();
+    (select count(*) from public.samskara_fires
+      where samskara_id = p_samskara_id and user_id = auth.uid()
+        and verdict is null)::int,
+    max(fired_at) filter (where verdict in ('held', 'contradicted', 'not-borne-out')),
+    (select coalesce(min(rn) filter (where verdict <> 'not-engaged'), count(*) + 1) - 1
+       from v)::int,
+    (select count(distinct thread_id) from v where rn <= 15)::int
+  from v;
 $$;
 
 -- One-row corpus-wide health snapshot for the Health panel. Each column
@@ -11142,9 +11256,29 @@ returns table (
   stuck_assimilate_claims int,
   stuck_embed_claims int,
   quarantined int,
-  stuck_backfill_claims int
+  stuck_backfill_claims int,
+  dormant int
 )
 language sql stable security invoker as $$
+  -- Dormancy streaks shared by the dormant column below: one window
+  -- pass over ALL verdicted fires, aggregated per claim (the same
+  -- shape samskara_reap_dormant computes).
+  with dormancy as (
+    select samskara_id,
+           count(*) as in_window,
+           count(*) filter (where verdict <> 'not-engaged') as genuine_in_window,
+           count(distinct thread_id) as threads
+      from (
+        select f.samskara_id, f.verdict, f.thread_id, f.user_id,
+               row_number() over (partition by f.samskara_id
+                                  order by f.fired_at desc, f.id desc) as rn
+          from public.samskara_fires f
+         where f.verdict is not null
+      ) recent
+     where rn <= 15
+       and user_id = auth.uid()
+     group by samskara_id
+  )
   select
     -- The panel's corpus total meters the LIVE corpus (the compound-
     -- regen delta reads it); quarantine depth is its own column below,
@@ -11257,7 +11391,26 @@ language sql stable security invoker as $$
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid()
         and s.backfill_claim_holder is not null
-        and s.backfill_claim_expires < now())::int
+        and s.backfill_claim_expires < now())::int,
+    -- Dormancy pool: claims meeting samskara_reap_dormant's FULL
+    -- predicate (15-verdict all-not-engaged run across >= 5 threads, no
+    -- pending fire, activated) - the pool the reaper drains, in
+    -- lockstep like every mirror column above. Informational; the
+    -- reaper runs hourly regardless of this count.
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid()
+        and s.activated_at is not null
+        and not exists (
+          select 1 from public.samskara_fires f
+           where f.samskara_id = s.id and f.verdict is null
+        )
+        and exists (
+          select 1 from dormancy d
+           where d.samskara_id = s.id
+             and d.in_window = 15
+             and d.genuine_in_window = 0
+             and d.threads >= 5
+        ))::int
 $$;
 
 -- Windowed activity rates for the Health panel. Computed from existing
@@ -15918,16 +16071,19 @@ $cron$;
 --
 -- The freed minute-13 slot now drives the REAPERS: pure-SQL passes (no
 -- pg_net, same shape the old decay used). samskara_expire_unjudgeable_fires
--- runs FIRST so the guards in the two reapers see its terminal verdicts
+-- runs FIRST so the guards in the three reapers see its terminal verdicts
 -- in the same tick: it clears the fires no verdict will ever reach
 -- (abandoned one-round threads, fires the judge's cursor passed,
 -- threads parked at the attempt gate) that would otherwise read as
--- "test in flight" and shield their samskaras from every release path.
--- samskara_reap_dead deletes repeatedly-contradicted, long-quiet
--- samskaras; samskara_reap_untested deletes never-genuinely-tested rows
--- past the 45-day probation window (the one-off-lookup mints that would
--- otherwise hold capped slots at the p0 baseline forever).
--- Tested-and-baseline rows are spared by both. Was :13/:43; one pass a
+-- "test in flight" and shield their samskaras from every release path -
+-- and its stamps count toward samskara_reap_dormant's streak, so the
+-- dormancy pass runs second. samskara_reap_dead deletes
+-- repeatedly-contradicted, long-quiet samskaras;
+-- samskara_reap_untested deletes never-genuinely-tested rows past the
+-- 45-day probation window; samskara_reap_dormant deletes claims whose
+-- recent judged history is all not-engaged with zero real engagements
+-- across the run (see its own block for the event-time standard).
+-- Tested-and-baseline rows are spared by all three. Was :13/:43; one pass a
 -- day's worth of cadence suffices, so a single :13 tick runs all three
 -- in one statement.
 do $cron$
@@ -15943,7 +16099,7 @@ begin
     perform cron.schedule(
       'nak-samskara-reap',
       '13 * * * *',
-      $job$ select public.samskara_expire_unjudgeable_fires(), public.samskara_reap_dead(), public.samskara_reap_untested(); $job$
+      $job$ select public.samskara_expire_unjudgeable_fires(), public.samskara_reap_dormant(), public.samskara_reap_dead(), public.samskara_reap_untested(); $job$
     );
   end if;
 exception when others then

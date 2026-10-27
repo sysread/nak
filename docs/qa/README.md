@@ -235,6 +235,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [samskara-association-mint](./use-cases/samskara-association-mint.md) -
   the sweep-only association mint phase: minting from the
   association graph, the consumption stamp, mixed-kind provenance.
+- [samskara-dormancy](./use-cases/samskara-dormancy.md) - the
+  event-time release path for never-engaging claims: the 15-streak
+  standard, the 5-thread floor, the pending guard, the streak
+  field's run semantics, and the UI surfaces.
 - [samskara-backfill](./use-cases/samskara-backfill.md) - the
   evidence-backfill warmup pool: quarantine at mint, candidate
   exclusions (both provenance paths), fold weights, the activation

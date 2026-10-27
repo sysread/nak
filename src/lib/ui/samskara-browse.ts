@@ -276,6 +276,8 @@ export function engagementSummary(counts: {
  * through to the release branches below.
  */
 const BACKFILL_ATTEMPT_BUDGET = 8; // MIRROR: ATTEMPT_BUDGET in agents/samskara_backfill.ts.
+const DORMANT_STREAK = 15; // MIRROR: dormant_streak in samskara_reap_dormant (schema.sql).
+const DORMANT_THREAD_FLOOR = 5; // MIRROR: dormant_cohort_floor in samskara_reap_dormant (schema.sql).
 
 export function releaseStatus(
   createdAt: string,
@@ -286,6 +288,8 @@ export function releaseStatus(
     notEngaged: number;
     pending: number;
     lastGenuineAt: string | null;
+    recentNotEngagedStreak?: number;
+    recentNotEngagedThreads?: number;
   },
   evidenceTally: number,
   nowMs: number,
@@ -309,6 +313,20 @@ export function releaseStatus(
     return remaining <= 0
       ? 'warmed up - history never engaged this claim; the hourly reaper collects it'
       : `warmed up - history never engaged this claim; release at probation in ${remaining}d`;
+  }
+  // Dormancy: the claim's recent judged history is ALL not-engaged
+  // across enough conversations - the same pattern the dormancy reaper
+  // deletes on (docs/dev/in-progress/samskara-dormancy-plan.md). Gated
+  // on the FULL reaper predicate the UI can see: streak length, thread
+  // span (cohort_id is per-turn, so a streak confined to few threads is
+  // one hot afternoon, not five failures), and no pending verdict -
+  // the pane must not promise collection the worker won't deliver.
+  // Sits ahead of the established branch because a dormant claim can
+  // carry historical tallies its behavior no longer reflects.
+  const streak = counts.recentNotEngagedStreak ?? 0;
+  const threads = counts.recentNotEngagedThreads ?? 0;
+  if (streak >= DORMANT_STREAK && threads >= DORMANT_THREAD_FLOOR && counts.pending === 0) {
+    return `dormant - never engaged in its last ${DORMANT_STREAK} judged fires; the hourly reaper collects it`;
   }
   const { judged, genuine } = engagementSummary(counts);
   if (genuine > 0) {
