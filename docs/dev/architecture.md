@@ -341,10 +341,10 @@ venice edge function on two kinds of trigger:
   The minute ladder: embed backfill `* * * * *` (every minute, up
   from `*/5` for the gte-small migration drain), bias `:03`, wiki
   `:07`, samskara reap `:13`, rem + wiki-records `:17`, samskara
-  sweep `:23`, reflection `:27`, backfill `:21`, intent-employment
-  `:33`, librarian + recipe-image GC `:37`, fork-gc `:43`,
+  sweep `:23`, reflection `:27`, intent-employment `:33`,
+  librarian + recipe-image GC `:37`, fork-gc `:43`,
   deep-sleep `:47`, conversation digest `:53`, curation `:57`;
-  the evaluation sweep polls `*/10`. The authoritative list is the
+  the evaluation and backfill sweeps poll `*/10`. The authoritative list is the
   schema's `cron.schedule` calls, not this ladder.
 
 Mutual exclusion between a tail and the sweep that backs it up

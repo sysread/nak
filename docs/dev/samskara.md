@@ -289,10 +289,10 @@ toast is just a glance cue that the bias model is forming.
   timeout; the worst case is a cohort logged whose think-block never
   reached the model - the next-day judge still rules on those fires,
   which typically read as loose topical matches and land not-engaged.
-- **`/samskara-backfill-sweep` cron route** - hourly at :21
-  (`nak-samskara-backfill-sweep`), gated by
+- **`/samskara-backfill-sweep` cron route** - every 10 minutes
+  (`nak-samskara-backfill-sweep`, `*/10`), gated by
   `samskara_backfillable_exists()` (a cheap EXISTS on the
-  quarantine pool). Claims up to two quarantined claims and drives
+  quarantine pool; idle ticks never POST). Claims up to two quarantined claims and drives
   each through retrieve -> judge -> fold -> gate under
   EdgeRuntime.waitUntil. See "Evidence backfill: the warmup pool".
 - **Inline `CohortPanel` in `Chat.svelte`** - on thread load,

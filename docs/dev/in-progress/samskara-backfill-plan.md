@@ -174,7 +174,7 @@ these deltas. Each row verified against the source this drafting.
 | Aspect | Live judge | Backfill judge |
 | --- | --- | --- |
 | Completion unit | One completion per judged THREAD, predictions batched (p1..pn tags, buildVerdictRequest). | One completion per (claim, exchange) pair; single prediction, single tag. |
-| Trigger | Fires recorded in a thread; day-gated thread claim; */10 cron. | Quarantine pool; hourly claim-based sweep (:21); claim-RPC pattern. |
+| Trigger | Fires recorded in a thread; day-gated thread claim; */10 cron. | Quarantine pool; claim-based sweep, hourly (:21) at build, raised to `*/10` by owner decision 2026-10-27 to boost warmup throughput; claim-RPC pattern. |
 | Conversation framing | "predictions that were live during the conversation above" | Prediction + transcript only; framing sentence replaced wholesale, no live/quarantine/backfill disclosure (decision 6). |
 | Message layout | Thread transcript as native role turns, then the verdict-request user turn. | Same layout: slice as native role turns, then the verdict-request user turn. |
 | Transcript input | Whole thread transcript. | Exchange slice: target round's user message + assistant reply, +-1 adjacent exchange. |

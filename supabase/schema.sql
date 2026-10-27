@@ -15642,12 +15642,15 @@ begin
     if exists (select 1 from cron.job where jobname = 'nak-samskara-backfill-sweep') then
       perform cron.unschedule('nak-samskara-backfill-sweep');
     end if;
-    -- Minute :21, verified free against the schema's cron.schedule
-    -- calls (:33 intent-employment and :53 conversation-digest are
-    -- taken; docs/dev/architecture.md's ladder now matches).
+    -- Every 10 minutes (owner decision 2026-10-27: boost warmup
+    -- throughput while the quarantine pool drains). Idle ticks cost one
+    -- cheap SQL EXISTS via the fast-exit gate above; an active tick's
+    -- worst case (2 claims x 8 completions, ~8 min) stays inside the
+    -- claim TTL (900s) and inside the 10-minute window, so overlapping
+    -- ticks claim different rows.
     perform cron.schedule(
       'nak-samskara-backfill-sweep',
-      '21 * * * *',
+      '*/10 * * * *',
       $job$ select public.nak_trigger_samskara_backfill_sweep(); $job$
     );
   end if;
