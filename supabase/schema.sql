@@ -10052,6 +10052,116 @@ end $$;
 revoke all on function public.samskara_reap_dormant() from public, anon, authenticated;
 grant execute on function public.samskara_reap_dormant() to service_role;
 
+-- Evidence-based release reaper: the three eviction passes from
+-- samskara_evict_for_mint, run UNCONDITIONALLY on the reap cron.
+-- History: the passes' only trigger was cap pressure (a capped mint
+-- searched for a victim before it could proceed). The population cap
+-- demotes to POPULATION_TRIPWIRE (300, arms only on a pathological
+-- condition), which removes that trigger - so the evidence standards
+-- move here and run on their own schedule: death by evidence, not by
+-- capacity (the same principle as the dormancy reaper).
+-- samskara_evict_for_mint keeps its wiring for the cap-pressure
+-- transition, but this hourly pass drains its victim pool first, so
+-- a tripwire-armed mint normally halts (evicting only in the window
+-- before the next reap tick collects a row that just crossed a
+-- predicate).
+--
+-- The passes are named by content; the eviction function's internal
+-- "tier 1/2/3" comment numbering was retired with the compound layer
+-- (that vocabulary belongs to it).
+--   - UNTESTED-JUNK: judged 10+ times, zero genuine engagements,
+--     14+ days old. Partially covered by the dormancy reaper (which
+--     needs a 15-fire all-not-engaged streak across 5+ threads);
+--     this pass catches the 10-14-judged and sub-5-thread residual
+--     shapes. An all-not-engaged history never touches the posterior
+--     (the 4x-decay incident), so these rows sit at p0 forever -
+--     dead weight no tally can surface.
+--   - STALE: weakly established (total tally <= 1.0) whose last
+--     genuine verdict is 90+ days old. NOT covered by dormancy (one
+--     old held breaks the not-engaged streak).
+--   - UNDERPERFORMER: demonstrated failure, health below 85 percent
+--     of the user's p0. NOT covered by reap_dead (its floor is 50
+--     percent) or dormancy. No pending-fire guard, matching
+--     samskara_evict_for_mint: a row this far under water cannot be
+--     exonerated by one more verdict (the pending guard would spare
+--     a row whose in-flight fire may be its FIRST test, but this
+--     standard requires an already-demonstrated failure).
+--
+-- Constants mirror samskara_evict_for_mint's literal copies (pinned
+-- across both sites by tests/samskara-density-admission.test.ts);
+-- drift makes the health snapshot's evictable columns report a pool
+-- nobody drains, or reap rows the snapshot calls safe.
+drop function if exists public.samskara_reap_evidence();
+create or replace function public.samskara_reap_evidence()
+returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  junk_min_judged constant int := 10;
+  junk_min_age_days constant int := 14;
+  stale_max_tally constant real := 1.0;
+  stale_quiet_days constant int := 90;
+  underperformer_ratio constant real := 0.85;
+  affected int;
+  v_pass int;
+begin
+  -- UNTESTED-JUNK pass: the spare-the-pending-test guard applies (a
+  -- verdict in flight may be the claim's first genuine test).
+  delete from public.samskaras s
+   where s.activated_at is not null
+     and s.confirm_count = 0
+     and s.disconfirm_count = 0
+     and s.created_at < now() - make_interval(days => junk_min_age_days)
+     and not exists (
+       select 1 from public.samskara_fires f
+        where f.samskara_id = s.id and f.verdict is null
+     )
+     and (
+       select count(*) from public.samskara_fires f
+        where f.samskara_id = s.id and f.verdict is not null
+     ) >= junk_min_judged;
+  get diagnostics affected = row_count;
+
+  -- STALE pass: the pending guard applies (same reasoning - the
+  -- stale clock measures silence, and a pending fire is not silence).
+  -- The clock runs from the last LIVE genuine verdict; a claim
+  -- established by the warmup pool's backfill verdicts (which write
+  -- tallies but never fire rows) clocks from ACTIVATION instead -
+  -- otherwise its max-live-genuine is NULL and the row could never
+  -- go stale (post-warmup-pool, every claim activates this way, so
+  -- the seam would be the rule, not the exception).
+  delete from public.samskaras s
+   where s.activated_at is not null
+     and s.confirm_count + s.disconfirm_count > 0
+     and s.confirm_count + s.disconfirm_count <= stale_max_tally
+     and not exists (
+       select 1 from public.samskara_fires f
+        where f.samskara_id = s.id and f.verdict is null
+     )
+     and coalesce(
+       (
+         select max(f.fired_at) from public.samskara_fires f
+          where f.samskara_id = s.id
+            and f.verdict in ('held', 'contradicted', 'not-borne-out')
+       ),
+       s.activated_at
+     ) < now() - make_interval(days => stale_quiet_days);
+  get diagnostics v_pass = row_count;
+  affected := affected + v_pass;
+
+  -- UNDERPERFORMER pass: NO pending-fire guard, deliberately (see the
+  -- block comment - one more verdict cannot exonerate a demonstrated
+  -- failure).
+  delete from public.samskaras s
+   where s.activated_at is not null
+     and s.health < underperformer_ratio * public.samskara_population_p0(s.user_id);
+  get diagnostics v_pass = row_count;
+  affected := affected + v_pass;
+
+  return affected;
+end $$;
+revoke all on function public.samskara_reap_evidence() from public, anon, authenticated;
+grant execute on function public.samskara_reap_evidence() to service_role;
+
 -- Unjudgeable-fire expiry: stamp a terminal 'not-engaged' on fires no
 -- verdict will ever reach.
 --
@@ -10168,8 +10278,18 @@ revoke all on function public.samskara_expire_unjudgeable_fires() from public, a
 grant execute on function public.samskara_expire_unjudgeable_fires() to service_role;
 
 -- Cap-pressure eviction: free one capped slot for a pending mint by
--- deleting the corpus's most-disproven untested row. Called by the
--- mint probes only when the population cap blocks a mint, so
+-- deleting the corpus's most-disproven untested row. Its trigger is
+-- population pressure ONLY - since the POPULATION_TRIPWIRE demotion
+-- (300, pathological-only) the passes here run UNCONDITIONALLY on the
+-- :13 reap cron via samskara_reap_evidence, which drains this
+-- function's victim pool hourly; a tripwire-armed mint normally
+-- halts - evicting only in the window before the next reap tick
+-- collects a row that just crossed a predicate - and this function
+-- is transition wiring expected to be removed with the tripwire.
+-- The predicates below stay
+-- as the transition copy; the reaper's named constants mirror them
+-- (pinned by tests/samskara-density-admission.test.ts). Called by the
+-- mint probes only when the tripwire blocks a mint, so
 -- eviction happens exactly as fast as formation pressure demands -
 -- decay by replacement, not by clock.
 --
@@ -10190,12 +10310,12 @@ grant execute on function public.samskara_expire_unjudgeable_fires() to service_
 -- Victims are ranked most-judged-first (the most adjacency-disproven
 -- row goes first), oldest as the tiebreak.
 --
--- When no untested row qualifies, a SECOND tier keeps eviction
+-- When no untested row qualifies, the STALE pass keeps eviction
 -- pressure alive as the corpus matures: weakly-established rows gone
 -- stale. Without it, one genuine test ever is a lifetime pass - a row
 -- that held once and never genuinely engaged again is untouchable by
 -- probation (nonzero tally) and by staleness here, and a mature corpus
--- fills with exactly those. A stale-tier victim must be:
+-- fills with exactly those. A STALE-pass victim must be:
 --   - genuinely tested at some point (tally > 0 - never-tested rows
 --     never tested at all), but only weakly:
 --     total tally <= 1.0, i.e. at most one full test's worth of
@@ -10206,14 +10326,15 @@ grant execute on function public.samskara_expire_unjudgeable_fires() to service_
 --   - not awaiting a judgment (same pending-fire guard).
 -- Ranked stalest-first, smallest tally as the tiebreak.
 --
--- When neither of those qualifies, a THIRD tier evicts on demonstrated
+-- When neither of those qualifies, the UNDERPERFORMER pass evicts on
+-- demonstrated
 -- failure: the lowest-health row whose posterior sits more than 15%
 -- below the user's own population prior p0. Low health is earned, not
 -- drifted into - under the k=5 shrinkage of samskara_apply_evaluation
 -- a row needs roughly two full contradictions' worth of net miss
 -- evidence to fall below 0.85 * p0 - so every victim here is a claim
 -- the judge genuinely tested and genuinely rejected, never one that is
--- merely quiet. This tier deliberately drops the pending-fire guard
+-- merely quiet. This pass deliberately drops the pending-fire guard
 -- the first two carry: that guard exists to spare a row whose
 -- in-flight fire may be its FIRST genuine test, but a row this far
 -- under water cannot be exonerated by one more verdict (a single held
@@ -10227,7 +10348,7 @@ grant execute on function public.samskara_expire_unjudgeable_fires() to service_
 -- first, larger evidence tally as the tiebreak (the better-measured
 -- failure goes before the marginal one).
 --
--- Returns the deleted id, or null when no tier qualifies - the caller
+-- Returns the deleted id, or null when no pass qualifies - the caller
 -- then skips the mint, same as before eviction existed.
 create or replace function public.samskara_evict_for_mint(
   p_user_id uuid
@@ -10236,6 +10357,8 @@ language plpgsql security definer set search_path = public as $$
 declare
   victim uuid;
 begin
+  -- UNTESTED-JUNK pass: judged 10+ times, zero genuine engagements,
+  -- 14+ days old.
   select s.id into victim
     from public.samskaras s
    where s.user_id = p_user_id
@@ -10258,8 +10381,12 @@ begin
      s.created_at asc
    limit 1;
   if victim is null then
-    -- Stale tier: weakly-established rows whose last genuine
-    -- engagement is 90+ days old.
+    -- STALE pass: weakly-established rows whose last genuine
+    -- engagement is 90+ days old. The clock runs from the last LIVE
+    -- genuine verdict, falling back to activation for claims
+    -- established by the warmup pool's backfill verdicts (tallies
+    -- but no fire rows - without the fallback they could never go
+    -- stale).
     select s.id into victim
       from public.samskaras s
      where s.user_id = p_user_id
@@ -10270,21 +10397,27 @@ begin
          select 1 from public.samskara_fires f
           where f.samskara_id = s.id and f.verdict is null
        )
-       and (
-         select max(f.fired_at) from public.samskara_fires f
-          where f.samskara_id = s.id
-            and f.verdict in ('held', 'contradicted', 'not-borne-out')
+       and coalesce(
+         (
+           select max(f.fired_at) from public.samskara_fires f
+            where f.samskara_id = s.id
+              and f.verdict in ('held', 'contradicted', 'not-borne-out')
+         ),
+         s.activated_at
        ) < now() - interval '90 days'
-     order by (
-         select max(f.fired_at) from public.samskara_fires f
-          where f.samskara_id = s.id
-            and f.verdict in ('held', 'contradicted', 'not-borne-out')
+     order by coalesce(
+         (
+           select max(f.fired_at) from public.samskara_fires f
+            where f.samskara_id = s.id
+              and f.verdict in ('held', 'contradicted', 'not-borne-out')
+         ),
+         s.activated_at
        ) asc,
        s.confirm_count + s.disconfirm_count asc
      limit 1;
   end if;
   if victim is null then
-    -- Underperformer tier: demonstrated failure well below the user's
+    -- UNDERPERFORMER pass: demonstrated failure well below the user's
     -- own baseline. No pending-fire guard - see header comment.
     -- activated_at: quarantined rows hold no live-corpus slots, so
     -- evicting one would free nothing for the waiting mint.
@@ -10640,6 +10773,88 @@ begin
   return true;
 end $$;
 
+-- Mint-time density admission support -------------------------------------
+--
+-- `samskara_density_check` backs the density gate in
+-- supabase/functions/venice/agents/samskara.ts: a new claim whose
+-- neighborhood is already well-represented by ESTABLISHED claims is
+-- not minted - its evidence reinforces the nearest existing claim
+-- instead. Companion to `samskara_nearest_by_prediction` (the
+-- hard-twin dedup above): that one catches 1-NN twins at the 0.50
+-- bar; this one catches SPREAD redundancy - a candidate
+-- moderately-similar to K established claims is redundant even
+-- though no single row is a twin. With the warmup pool (entry
+-- testing) and the dormancy/evidence reapers (death), this gate is
+-- the ENTRY half of corpus regulation: the population becomes
+-- emergent, and POPULATION_TRIPWIRE in the edge module arms only on
+-- a pathological condition.
+--
+-- The register is the CLAIM mean - the same register the twin dedup
+-- uses - because the density question is claim-vs-claim ("is this
+-- idea already represented in the claim corpus"). The measured
+-- distributions drove this: claim-vs-claim nearest-neighbor median
+-- is 0.404 under the claim mean vs 0.648 under the substrate mean
+-- (docs/dev/samskara.md), so a floor calibrated for the claim-mean
+-- scale would count nearly every established claim as "dense" under
+-- the substrate register and reject virtually every mint. The fire
+-- path's substrate-mean register stays where it belongs:
+-- message-vs-claim firing (see the register warning on
+-- samskara_centering).
+--
+-- ESTABLISHED = at least one genuine verdict tally (confirm_count +
+-- disconfirm_count > 0) AND activated. The tally gate is the
+-- entrenchment mitigation: a neighborhood of unproven newcomers must
+-- not gate a genuinely new claim (whoever mints first would crowd
+-- the door for corrections later). Activation excludes quarantined
+-- rows - the warmup pool's domain; their tallies exist but they are
+-- not yet part of the live corpus.
+--
+-- Returns ONE row: the established-neighbor count at or above
+-- p_floor, the nearest established neighbor (id + cosine - the
+-- reinforce target when the caller rejects the mint), and ready
+-- (claim-mean readiness). Not ready -> count 0, null nearest, ready
+-- false: the caller skips the density branch (the house SKIP-not-raw
+-- pattern - raw claim-claim cosine never drops below ~0.76, so a
+-- raw-cosine density count would read every pair as dense and
+-- reject everything from a new user's very first claims).
+--
+-- No index: expression ordering bypasses any vector index anyway,
+-- and the per-user corpus is small by design (the tripwire arms at
+-- 300).
+drop function if exists public.samskara_density_check(vector, real);
+drop function if exists public.samskara_density_check(vector, real, uuid);
+create or replace function public.samskara_density_check(
+  p_query_embedding vector(2048),
+  p_floor real,
+  p_user_id uuid default null
+) returns table (
+  neighbor_count int,
+  nearest_id uuid,
+  nearest_cosine real,
+  ready boolean
+)
+language sql stable security invoker as $$
+  with v as (
+    select coalesce(p_user_id, auth.uid()) as uid,
+           public._samskara_claim_centering_mean(coalesce(p_user_id, auth.uid())) as m
+  ),
+  neighbors as (
+    select s.id,
+           (1 - ((s.prediction_embedding - v.m) <=> (p_query_embedding - v.m)))::real as cosine
+      from public.samskaras s cross join v
+     where s.user_id = v.uid
+       and s.activated_at is not null
+       and s.confirm_count + s.disconfirm_count > 0
+       and s.prediction_embedding is not null
+       and public._samskara_claim_centering_ready(v.uid)
+       and (1 - ((s.prediction_embedding - v.m) <=> (p_query_embedding - v.m))) >= p_floor
+  )
+  select (select count(*) from neighbors)::int,
+         (select n.id from neighbors n order by n.cosine desc limit 1),
+         (select n.cosine from neighbors n order by n.cosine desc limit 1),
+         public._samskara_claim_centering_ready((select uid from v))
+$$;
+
 -- Retire the earlier threshold-only collapse RPC. Superseded by
 -- `samskara_collapse_by_cofiring` below, which uses behavioural
 -- redundancy (co-firing in the same cohort) as its primary signal
@@ -10751,11 +10966,16 @@ end $$;
 -- merge pairs with cosine < `p_cap_cosine_floor`. This guards
 -- against a diverse-but-overflowing pool where no pair meets the
 -- co-firing bar but the count is still growing without bound.
--- `p_target_count` MUST stay in sync with SAMSKARA_POPULATION_CAP in
--- venice/agents/samskara.ts: the mint probes skip while the pool is
--- at that cap, so this overflow pass is the backstop for races, not
+-- `p_target_count` MUST stay in sync with POPULATION_TRIPWIRE in
+-- venice/agents/samskara.ts: the mint probes halt while the pool is
+-- at that tripwire, so this overflow pass is the backstop for races, not
 -- the routine make-room mechanism (it merges distinct claims, and
 -- running it once per mint was the treadmill the mint gate removed).
+-- With density admission (samskara_density_check) regulating entry,
+-- the overflow pass should never fire in steady state: a firing is
+-- either a race overshoot (population just past the tripwire) or a
+-- density-constant miscalibration (population well past it) - the
+-- readout records the population at fire to tell them apart.
 --
 -- Per-call cap. `p_max_collapses` bounds work per invocation so a
 -- single RPC never chains through a pathological pool. The
@@ -10781,7 +11001,7 @@ create or replace function public.samskara_collapse_by_cofiring(
   -- that has NO behavioural evidence, so it keeps the conservative
   -- same-idea-family boundary (AUC 0.92 against everything below).
   p_cosine_floor real default 0.30,
-  p_target_count int default 150,
+  p_target_count int default 300,
   p_cap_cosine_floor real default 0.40,
   p_max_collapses int default 20,
   p_user_id uuid default null
@@ -11150,7 +11370,7 @@ $$;
 -- not-engaged rather than being folded invisibly into disconfirm_count.
 -- pending = fired but not yet judged (null verdict). last_genuine_at is
 -- when the judge last ruled a genuine verdict (held / contradicted /
--- not-borne-out) - the timestamp the stale-eviction tier keys on, so
+-- not-borne-out) - the timestamp the STALE eviction pass keys on, so
 -- the detail pane can show how long an established claim has gone
 -- without re-engaging. security invoker so the samskara_fires RLS
 -- select policy scopes the read; the explicit user_id filter is
@@ -11218,18 +11438,20 @@ $$;
 --   - near_dead / never_fired: corpus-quality signals (decay working,
 --     mints that never match anything).
 --   - probation_eligible / evictable / evictable_stale /
---     evictable_unhealthy: rows the decay machinery will release.
+--     evictable_unhealthy: rows the release machinery will collect.
 --     probation_eligible mirrors samskara_reap_untested's predicate
 --     (never genuinely tested, past the 45-day window, no pending
 --     fire) - drains at the next hourly reap tick, so a persistent
 --     nonzero means the reaper cron is stalled. evictable mirrors
---     samskara_evict_for_mint's first tier (judged 10+ times, zero
---     genuine engagements, 14+ days old); evictable_stale mirrors its
---     second (weakly established, last genuine verdict 90+ days ago);
---     evictable_unhealthy mirrors its third (health more than 15%
---     below the user's own p0) - together the pool a capped mint may
---     draw a victim from; informational, since eviction only runs
---     under cap pressure.
+--     the UNTESTED-JUNK pass (judged 10+ times, zero genuine
+--     engagements, 14+ days old); evictable_stale mirrors the STALE
+--     pass (weakly established, last genuine verdict 90+ days ago);
+--     evictable_unhealthy mirrors the UNDERPERFORMER pass (health
+--     more than 15% below the user's own p0). All three passes run
+--     unconditionally on the :13 cron (samskara_reap_evidence, the
+--     successor to cap-pressure-only eviction), so like
+--     probation_eligible these drain hourly - a persistent nonzero
+--     means the reap cron is stalled.
 --   - associations / associations_unconsumed: the relation graph total
 --     and the slice still awaiting an association-mint pass. A standing
 --     unconsumed pile is normal between hourly sweeps; it should drain,
@@ -11321,10 +11543,15 @@ language sql stable security invoker as $$
           select 1 from public.samskara_fires f
            where f.samskara_id = s.id and f.verdict is null
         )
-        and (select max(f.fired_at) from public.samskara_fires f
-              where f.samskara_id = s.id
-                and f.verdict in ('held', 'contradicted', 'not-borne-out'))
-            < now() - interval '90 days')::int,
+        -- Clock mirrors the STALE pass: last live genuine verdict,
+        -- falling back to activation for backfill-established claims
+        -- (their tallies never produce fire rows).
+        and coalesce(
+          (select max(f.fired_at) from public.samskara_fires f
+            where f.samskara_id = s.id
+              and f.verdict in ('held', 'contradicted', 'not-borne-out')),
+          s.activated_at
+        ) < now() - interval '90 days')::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid()
         and s.activated_at is not null
@@ -16071,7 +16298,7 @@ $cron$;
 --
 -- The freed minute-13 slot now drives the REAPERS: pure-SQL passes (no
 -- pg_net, same shape the old decay used). samskara_expire_unjudgeable_fires
--- runs FIRST so the guards in the three reapers see its terminal verdicts
+-- runs FIRST so the guards in the four reapers see its terminal verdicts
 -- in the same tick: it clears the fires no verdict will ever reach
 -- (abandoned one-round threads, fires the judge's cursor passed,
 -- threads parked at the attempt gate) that would otherwise read as
@@ -16082,9 +16309,14 @@ $cron$;
 -- samskara_reap_untested deletes never-genuinely-tested rows past the
 -- 45-day probation window; samskara_reap_dormant deletes claims whose
 -- recent judged history is all not-engaged with zero real engagements
--- across the run (see its own block for the event-time standard).
--- Tested-and-baseline rows are spared by all three. Was :13/:43; one pass a
--- day's worth of cadence suffices, so a single :13 tick runs all three
+-- across the run (see its own block for the event-time standard); and
+-- samskara_reap_evidence runs the three eviction passes (untested-junk,
+-- stale, underperformer) unconditionally - they used to fire only under
+-- cap pressure, a trigger the POPULATION_TRIPWIRE demotion removed.
+-- Rows carrying more than one full test's worth of genuine evidence are
+-- spared by all four (the STALE pass exists precisely to end the "one
+-- genuine test ever is a lifetime pass" disease). Was :13/:43; one pass a
+-- day's worth of cadence suffices, so a single :13 tick runs all four
 -- in one statement.
 do $cron$
 begin
@@ -16099,7 +16331,7 @@ begin
     perform cron.schedule(
       'nak-samskara-reap',
       '13 * * * *',
-      $job$ select public.samskara_expire_unjudgeable_fires(), public.samskara_reap_dormant(), public.samskara_reap_dead(), public.samskara_reap_untested(); $job$
+      $job$ select public.samskara_expire_unjudgeable_fires(), public.samskara_reap_dormant(), public.samskara_reap_dead(), public.samskara_reap_untested(), public.samskara_reap_evidence(); $job$
     );
   end if;
 exception when others then

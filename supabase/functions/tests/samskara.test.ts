@@ -23,7 +23,9 @@ const {
   PAIR_RELATE_COSINE_FLOOR,
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
-  SAMSKARA_POPULATION_CAP,
+  POPULATION_TRIPWIRE,
+  DENSITY_FLOOR,
+  DENSITY_K,
   ASSOC_HUBS_PER_TICK,
   buildTopicalCluster,
   buildAssociationCluster,
@@ -199,10 +201,22 @@ Deno.test('caps and thresholds hold their designed relationships', () => {
   assert(MINT_CLUSTER_MIN >= 3);
   assert(MINT_CLUSTER_MAX >= MINT_CLUSTER_MIN);
   // Pinned to the exact value because it MUST mirror p_target_count on
-  // samskara_collapse_by_cofiring (schema.sql). Drift re-opens the
-  // mint/cap-merge treadmill (cap here higher) or freezes minting
-  // permanently (cap here lower) - change both together.
-  assertEquals(SAMSKARA_POPULATION_CAP, 150);
+  // samskara_collapse_by_cofiring (schema.sql). NOT a capacity limit:
+  // density admission (samskara_density_check) is the routine limiter,
+  // and this tripwire arms only on a pathological condition. Drift
+  // re-opens the evidence-free overflow merge (RPC target higher than
+  // this) or keeps the halt from arming (lower) - change both together.
+  assertEquals(POPULATION_TRIPWIRE, 300);
+  // Density admission: the entry gate. Floor calibrated on the
+  // committed labeled probe set (claim-mean register): 0.40 counts
+  // 71% of duplicate/same-topic pairs toward density while zero
+  // unrelated pairs count. K=3 is conservative on the live corpus
+  // (5/138 established claims K-dense). Floor must sit BELOW the
+  // dedup bar on the same register - the density check exists to
+  // catch the band the twin check deliberately lets through.
+  assertEquals(DENSITY_FLOOR, 0.4);
+  assertEquals(DENSITY_K, 3);
+  assert(DENSITY_FLOOR < MINT_DEDUP_COSINE);
   // Bounded small on purpose: each hub is one minter call and the
   // probe runs every sweep tick - the cap IS the spend ceiling.
   assert(ASSOC_HUBS_PER_TICK >= 1 && ASSOC_HUBS_PER_TICK <= 5);
@@ -233,6 +247,24 @@ Deno.test('probe-set fixture holds the labeled calibration data', () => {
   const counts: Record<string, number> = {};
   for (const p of fixture.pairs) counts[p.label] = (counts[p.label] ?? 0) + 1;
   assertEquals(counts, { duplicate: 12, 'same-topic': 19, related: 28, unrelated: 21 });
+
+  // The density floor's operating point, recomputed from the fixture
+  // so the comment's calibration numbers stay verifiable rather than
+  // folklore: at DENSITY_FLOOR the same-idea classes (duplicate +
+  // same-topic) must keep the clear majority of their pairs above the
+  // floor while NO unrelated pair counts (a related pair may - it
+  // takes K of them to reject, and K same-idea neighbors are the
+  // real signal).
+  const sameIdeaAbove = fixture.pairs.filter(
+    (p) => (p.label === 'duplicate' || p.label === 'same-topic') && p.sim_claim_mean >= DENSITY_FLOOR,
+  ).length;
+  const unrelatedAbove = fixture.pairs.filter(
+    (p) => p.label === 'unrelated' && p.sim_claim_mean >= DENSITY_FLOOR,
+  ).length;
+  const sameIdeaTotal = counts['duplicate'] + counts['same-topic'];
+  assertEquals(sameIdeaAbove, 22); // 71% of 31 - the floor keeps most of the occupied mass
+  assertEquals(unrelatedAbove, 0); // the floor never counts an unrelated pair
+  assert(sameIdeaAbove > sameIdeaTotal / 2);
 });
 
 Deno.test('insertMint stamps the embedding model on every mint row', async () => {

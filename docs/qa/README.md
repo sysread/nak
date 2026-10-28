@@ -226,9 +226,14 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   prior, and the dead-row reaper, exercised deterministically via
   SQL; the live judge as the hosted tail.
 - [samskara-cap-eviction](./use-cases/samskara-cap-eviction.md) -
-  `samskara_evict_for_mint`'s three victim tiers, the shared
+  `samskara_evict_for_mint`'s three victim passes (transition
+  wiring since the evidence reaper took them over), the shared
   cap-or-evict mint gate, and the Health-panel pool readouts that
   mirror them.
+- [samskara-density-admission](./use-cases/samskara-density-admission.md) -
+  the mint-time density check (the cap replacement): rejection,
+  entrenchment mitigation, the reinforce-target provenance, the
+  cold-start skip, and the evidence reaper's three passes.
 - [samskara-formation](./use-cases/samskara-formation.md) - the
   seven-phase formation rotation (assimilate through
   compound-regen) plus the mint toast surface.

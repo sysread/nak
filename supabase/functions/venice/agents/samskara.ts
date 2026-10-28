@@ -105,6 +105,35 @@ const SWEEP_ASSIMILATE_CAP = 10;
 const MINT_DEDUP_COSINE = 0.5;
 
 /**
+ * Density admission gate (the entry half of corpus regulation; the
+ * warmup pool tests entry and the reapers handle death). After the
+ * hard-twin dedup passes, a candidate whose neighborhood holds
+ * DENSITY_K or more ESTABLISHED claims at or above DENSITY_FLOOR
+ * (centered cosine, claim-mean register - the dedup's own register,
+ * comparable scale) is SPREAD-redundant: no single row is a twin,
+ * but the idea is already represented K times over. The mint is
+ * rejected and the candidate's evidence reinforces the nearest
+ * established claim instead. Floor sits BELOW the dedup bar by
+ * design - the density check catches the band the twin check
+ * deliberately lets through.
+ *
+ * Calibrated against the committed labeled probe set
+ * (supabase/functions/tests/fixtures/samskara-probe-set.json, 80
+ * hand-labeled claim pairs, claim-mean register): at 0.40 the floor
+ * counts 71% of
+ * duplicate/same-topic pairs toward density while ZERO unrelated
+ * pairs count; 0.45 drops that recall to 48 percent; 0.30 adds only
+ * 3 same-idea pairs at the same zero unrelated cost. K=3 is
+ * conservative on the live corpus: 64% of
+ * established claims have no same-idea neighbor at all and only
+ * 5/138 sit in a K-dense neighborhood (the M5 admission-mix readout
+ * is the ongoing test that the gate fires neither never nor
+ * always).
+ */
+const DENSITY_FLOOR = 0.4;
+const DENSITY_K = 3;
+
+/**
  * Health nudge applied to a reinforced samskara on a dedup hit. Small
  * by design - re-observing a similar claim is a weak positive signal
  * (the user didn't actively confirm it); the main confidence swing
@@ -135,18 +164,22 @@ const MINT_CLUSTER_MAX = 5;
 const MINT_CLUSTER_MIN = 3;
 
 /**
- * Population carrying capacity. Both mint probes skip (before any
- * Venice spend) while the user's count is at or above this, so new
- * claims enter only as the reaper or the Hebbian dedup pass makes
- * room. Without the gate, minting at cap forces the collapse RPC's
- * overflow pass to greedy-merge two DISTINCT existing claims for
- * every new mint: a 2026-07 prod audit measured 49 mints/week
- * churning through exactly that treadmill. MUST mirror
+ * Population tripwire. NOT a capacity limit: with density admission
+ * (samskara_density_check) regulating entry, the corpus size is
+ * emergent and this constant exists to catch a PATHOLOGICAL
+ * condition - density admission failed to bound the corpus. Armed
+ * (the user's active count at or above this), the mint probes
+ * normally halt before any Venice spend and log at warn; the hourly
+ * evidence reaper drains the eviction passes' victim pool, so the
+ * halt is the usual response (the transition eviction wiring fires
+ * only when a row crossed a predicate since the last reap tick).
+ * MUST mirror
  * `p_target_count` on `samskara_collapse_by_cofiring` in
- * supabase/schema.sql - if the two drift, either the gate never opens
- * (cap here lower) or the treadmill quietly resumes (cap here higher).
+ * supabase/schema.sql - if the two drift, the RPC's evidence-free
+ * overflow merge can start collapsing DISTINCT claims (RPC target
+ * higher than this) or the halt can never arm (lower).
  */
-const SAMSKARA_POPULATION_CAP = 150;
+const POPULATION_TRIPWIRE = 300;
 
 /**
  * Hubs the association-mint probe adjudicates per sweep tick. One per
@@ -1168,20 +1201,21 @@ async function pairRelateProbe(
 }
 
 /**
- * Population-headroom gate shared by the two mint probes. True
- * when the user's count sits at or above SAMSKARA_POPULATION_CAP.
- * Fails open on a count error: a transient RPC blip should not silence
- * minting, and the collapse RPC's overflow pass still bounds the
- * population if one mint slips through at cap.
+ * Tripwire check shared by the two mint probes. True when the user's
+ * ACTIVE count sits at or above POPULATION_TRIPWIRE - a pathological
+ * condition (density admission should have kept the corpus bounded),
+ * so arming logs at warn, not debug. Fails open on a count error: a
+ * transient RPC blip should not silence minting, and the collapse
+ * RPC's overflow pass still bounds the population if one mint slips
+ * through armed.
  */
-async function corpusAtCap(
+async function tripwireArmed(
   admin: SupabaseClient,
   userId: string,
   log: EdgeLogger,
 ): Promise<boolean> {
-  // Only ACTIVE rows meter the cap: quarantined claims (the
-  // evidence-backfill warmup pool) hold no live-corpus slots, and no
-  // eviction tier can free them.
+  // Only ACTIVE rows meter the tripwire: quarantined claims (the
+  // evidence-backfill warmup pool) hold no live-corpus slots.
   const { count, error } = await admin
     .from('samskaras')
     .select('id', { count: 'exact', head: true })
@@ -1191,21 +1225,40 @@ async function corpusAtCap(
     log.debug('mint gate: corpus count failed, proceeding', { error: error.message });
     return false;
   }
-  return (count ?? 0) >= SAMSKARA_POPULATION_CAP;
+  const armed = (count ?? 0) >= POPULATION_TRIPWIRE;
+  if (armed) {
+    // Warn, not debug: arming means the corpus passed the tripwire.
+    // The usual cause is density-admission miscalibration (the alert
+    // is the signal), but a warmup-pool drain can also push the
+    // active count over without any mint (backfill activation has no
+    // population gate by design) - check recent activations before
+    // recalibrating.
+    log.warn('POPULATION_TRIPWIRE armed; halting mints', {
+      population: count ?? 0,
+      tripwire: POPULATION_TRIPWIRE,
+    });
+  }
+  return armed;
 }
 
 /**
  * Cap-or-evict gate shared by BOTH mint probes. Returns true
- * when the probe may proceed: the corpus is below cap, or cap-pressure
+ * when the probe may proceed: the tripwire is unarmed, or cap-pressure
  * eviction (samskara_evict_for_mint, see the decay section of the dev
- * doc) freed a slot. Shared on purpose: entry to a capped corpus is
- * decided by whether a qualified eviction victim exists, NOT by probe
- * order. When only the recency probe could evict, it ran first in the
- * sweep and refilled every slot it freed, so the association probe -
- * gated on the same cap - starved permanently behind an
- * ever-growing unconsumed-edge backlog (1,082 edges at the 2026-08
- * audit). Eviction errors and no-victim both return false (the probe
- * skips, evidence intact); the next cap-hit retries.
+ * doc) freed a slot. TRANSITION WIRING: since the tripwire demotion,
+ * the eviction passes run unconditionally on the :13 reap cron
+ * (samskara_reap_evidence), which drains this function's victim pool
+ * hourly - so an armed tripwire normally just halts (no victim
+ * qualifies; the reaper collected the evidence-shaped rows first) and
+ * this eviction call is expected to be removed with the tripwire.
+ * Shared on purpose: entry is decided by whether a qualified eviction
+ * victim exists, NOT by probe order. When only the recency probe could
+ * evict, it ran first in the sweep and refilled every slot it freed,
+ * so the association probe - gated on the same cap - starved
+ * permanently behind an ever-growing unconsumed-edge backlog (1,082
+ * edges at the 2026-08 audit). Eviction errors and no-victim both
+ * return false (the probe skips, evidence intact); the next armed
+ * tick retries.
  */
 async function ensureMintHeadroom(
   admin: SupabaseClient,
@@ -1213,7 +1266,7 @@ async function ensureMintHeadroom(
   log: EdgeLogger,
   probeTag: string,
 ): Promise<boolean> {
-  if (!(await corpusAtCap(admin, userId, log))) return true;
+  if (!(await tripwireArmed(admin, userId, log))) return true;
   const { data: evicted, error: evictErr } = await admin.rpc('samskara_evict_for_mint', {
     p_user_id: userId,
   });
@@ -1221,7 +1274,7 @@ async function ensureMintHeadroom(
     if (evictErr) {
       log.debug(`${probeTag}: eviction RPC failed; skipping mint`, { error: evictErr.message });
     } else {
-      log.trace(`${probeTag}: corpus at cap, nothing evictable; skipping`);
+      log.trace(`${probeTag}: population tripwire armed, nothing evictable; skipping`);
     }
     return false;
   }
@@ -1229,6 +1282,95 @@ async function ensureMintHeadroom(
     evictedId: evicted as string,
   });
   return true;
+}
+
+/**
+ * Density gate shared by BOTH mint probes, run after the hard-twin
+ * dedup. Counts the candidate's ESTABLISHED neighbors (genuine tally
+ * + activation - the RPC's gate; unproven newcomers must not gate a
+ * genuinely new claim) at or above DENSITY_FLOOR and rejects the mint
+ * when the count reaches DENSITY_K, handing back the nearest
+ * established claim as the reinforce target. Returns 'admit' when the
+ * neighborhood is open OR the claim mean is not ready (cold-start
+ * SKIP: raw claim-claim cosine never drops below ~0.76, so a raw
+ * count would read every pair as dense) OR the check fails - the
+ * dedup guard's fail-open contract: better a possible redundant
+ * claim than a dropped signal, and the evidence reaper is the
+ * cleanup lane.
+ */
+async function densityGate(
+  admin: SupabaseClient,
+  userId: string,
+  log: EdgeLogger,
+  predEmbedding: number[],
+  probeTag: string,
+): Promise<
+  | { kind: 'admit' }
+  | { kind: 'density-reject'; reinforceTarget: string; neighborCount: number; nearestCosine: number }
+> {
+  try {
+    const { data, error } = await admin.rpc('samskara_density_check', {
+      p_query_embedding: predEmbedding,
+      p_floor: DENSITY_FLOOR,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(error.message);
+    const check = Array.isArray(data) ? data[0] : data;
+    if (!check || check.ready !== true) return { kind: 'admit' };
+    const neighborCount = typeof check.neighbor_count === 'number' ? check.neighbor_count : 0;
+    if (neighborCount < DENSITY_K) {
+      return { kind: 'admit' };
+    }
+    // The RPC's nearest_id is the nearest ESTABLISHED claim - the
+    // reinforce target must not be an unproven newcomer.
+    if (typeof check.nearest_id !== 'string') {
+      // Dense neighborhood with no nearest row is contradictory; treat
+      // as a failed check and admit (fail-open).
+      throw new Error('density check dense but returned no nearest established claim');
+    }
+    return {
+      kind: 'density-reject',
+      reinforceTarget: check.nearest_id,
+      neighborCount,
+      nearestCosine: typeof check.nearest_cosine === 'number' ? check.nearest_cosine : 0,
+    };
+  } catch (err) {
+    if (err instanceof VeniceError) throw err;
+    log.debug(`${probeTag}: density check failed, proceeding with mint`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { kind: 'admit' };
+  }
+}
+
+/**
+ * Reinforce on a density rejection, mirroring the dedup-hit bump: the
+ * cluster's evidence re-observes the nearest established claim, so it
+ * lands as the same weak positive signal. Health-only by design -
+ * posterior moves stay with genuine verdicts. probeTag keeps the warn
+ * inside the originating probe's log filter.
+ */
+async function reinforceDensityTarget(
+  admin: SupabaseClient,
+  userId: string,
+  log: EdgeLogger,
+  probeTag: string,
+  reinforceTarget: string,
+): Promise<void> {
+  const { data: reinforced } = await admin.rpc('samskara_reinforce_existing', {
+    p_samskara_id: reinforceTarget,
+    p_health_bump: MINT_DEDUP_HEALTH_BUMP,
+    p_user_id: userId,
+  });
+  // false = the target vanished between the density check and the
+  // reinforce (an hourly reaper pass collected it). The rejection
+  // verdict still stands and the caller stamps/logs; the evidence
+  // rides the substrate for a future re-mint.
+  if (reinforced === false) {
+    log.warn(`${probeTag}: density reinforce target missing (reaped mid-gate)`, {
+      reinforceTarget,
+    });
+  }
 }
 
 /**
@@ -1274,14 +1416,26 @@ async function mintProbe(
     }),
   );
   // Recency path stamps nothing, so a decline and a failure are the
-  // same non-event here.
-  if (minted === null || minted === 'declined') {
-    log.trace('mint: agent declined');
+  // same non-event here. They are NOT the same admission outcome:
+  // null is a transport/parse failure (the association probe's
+  // no-verdict semantics) and counting it as a decline would skew
+  // the M5 mix with Venice flakes, so only a clean refusal logs.
+  if (minted === null) {
+    log.trace('mint: no verdict (agent failed)');
+    return;
+  }
+  if (minted === 'declined') {
+    log.debug('mint: admission mix', { outcome: 'declined' });
     return;
   }
 
   const predEmbedding = await embedPrediction(minted.prediction);
-  if (!predEmbedding) return;
+  if (!predEmbedding) {
+    // Terminal in this probe (no retry lane; the sweep's probes get
+    // fresh substrate next tick) - count it so the mix is honest.
+    log.debug('mint: admission mix', { outcome: 'embed-failed' });
+    return;
+  }
 
   // Dedup guard: the minter only sees the cluster and cheerfully
   // rewords claims the corpus already holds. A near-duplicate gets a
@@ -1306,6 +1460,7 @@ async function mintProbe(
         cosine: top.cosine,
         candidate: shorten(minted.prediction),
       });
+      log.debug('mint: admission mix', { outcome: 'dedup-reinforced' });
       return;
     }
   } catch (err) {
@@ -1313,6 +1468,22 @@ async function mintProbe(
     log.debug('mint: dedup check failed, proceeding with mint', {
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  // Density admission: a spread-redundant candidate (K established
+  // neighbors above the floor, no single twin) reinforces instead of
+  // minting - the entry half of corpus regulation.
+  const density = await densityGate(admin, userId, log, predEmbedding, 'mint');
+  if (density.kind === 'density-reject') {
+    await reinforceDensityTarget(admin, userId, log, 'mint', density.reinforceTarget);
+    log.debug('mint: density-rejected (K established claims in neighborhood)', {
+      reinforceTarget: density.reinforceTarget,
+      neighbors: density.neighborCount,
+      nearestCosine: density.nearestCosine,
+      candidate: shorten(minted.prediction),
+    });
+    log.debug('mint: admission mix', { outcome: 'density-rejected' });
+    return;
   }
 
   const id = await insertMint(
@@ -1330,6 +1501,9 @@ async function mintProbe(
       valence: minted.valence,
       confidence: minted.confidence,
     });
+    log.debug('mint: admission mix', { outcome: 'minted' });
+  } else {
+    log.debug('mint: admission mix', { outcome: 'insert-failed' });
   }
 }
 
@@ -1426,13 +1600,13 @@ async function stampConsumed(
  * structurally cannot co-locate - and feeds the hub's cluster, WITH the
  * edge labels in the long-empty sample_labels slot, to the same minter.
  *
- * Self-quenching by the same logic pair-relate uses: every minter
- * verdict (mint, dedup-hit, OR decline) stamps the fed edges consumed,
- * so a stable graph spends one minter call then goes quiet. Only a
- * non-verdict (transport/parse failure, embed failure, or a failed
- * insert) leaves the edges unstamped for a later retry - never stamp
- * evidence we didn't actually adjudicate. New corroboration re-opens
- * the hub as fresh unstamped edges.
+ * Self-quenching by the same logic pair-relate uses: every verdict
+ * (mint, dedup-hit, density-reject, OR decline) stamps the fed edges
+ * consumed, so a stable graph spends one minter call then goes quiet.
+ * Only a non-verdict (transport/parse failure, embed failure, or a
+ * failed insert) leaves the edges unstamped for a later retry - never
+ * stamp evidence we didn't actually adjudicate. New corroboration
+ * re-opens the hub as fresh unstamped edges.
  *
  * The probe adjudicates up to ASSOC_HUBS_PER_TICK hubs per run. A
  * verdict stamps the fed hub's edges, so the next cluster read returns
@@ -1455,8 +1629,8 @@ async function mintFromAssociationsProbe(
 /**
  * Adjudicate one association hub: gate, read the top cluster, ask the
  * minter, apply the verdict. Returns 'verdict' when the hub's edges
- * were stamped (mint, dedup-hit, or decline) so the caller may safely
- * loop to the next hub.
+ * were stamped (mint, dedup-hit, density-reject, or decline) so the
+ * caller may safely loop to the next hub.
  */
 async function assocHubOnce(
   admin: SupabaseClient,
@@ -1496,6 +1670,9 @@ async function assocHubOnce(
   );
 
   // No verdict: leave the edges unconsumed so a later sweep retries.
+  // Deliberately NOT an admission-mix outcome: the mix counts
+  // adjudications (and the recency probe's terminal losses); a
+  // non-verdict retries and would double-count.
   if (minted === null) {
     log.debug('mint-from-associations: no verdict, leaving edges unconsumed', {
       edges: edgeIds.length,
@@ -1508,6 +1685,7 @@ async function assocHubOnce(
   if (minted === 'declined') {
     await stampConsumed(admin, userId, edgeIds, log);
     log.trace('mint-from-associations: minter declined the cluster', { edges: edgeIds.length });
+    log.debug('mint-from-associations: admission mix', { outcome: 'declined' });
     return 'verdict';
   }
 
@@ -1541,6 +1719,7 @@ async function assocHubOnce(
         cosine: top.cosine,
         candidate: shorten(minted.prediction),
       });
+      log.debug('mint-from-associations: admission mix', { outcome: 'dedup-reinforced' });
       return 'verdict';
     }
   } catch (err) {
@@ -1548,6 +1727,32 @@ async function assocHubOnce(
     log.debug('mint-from-associations: dedup check failed, proceeding with mint', {
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  // Density admission, identical to the recency path. A rejection is
+  // a VERDICT: the minter produced a claim and the corpus gate
+  // adjudicated it (reinforce, no entry) - so the edges stamp
+  // consumed. A non-verdict here would re-feed the same hub every
+  // sweep (the documented re-ask pathology).
+  const density = await densityGate(admin, userId, log, predEmbedding, 'mint-from-associations');
+  if (density.kind === 'density-reject') {
+    await reinforceDensityTarget(
+      admin,
+      userId,
+      log,
+      'mint-from-associations',
+      density.reinforceTarget,
+    );
+    await stampConsumed(admin, userId, edgeIds, log);
+    log.debug('mint-from-associations: density-rejected (K established claims in neighborhood)', {
+      reinforceTarget: density.reinforceTarget,
+      neighbors: density.neighborCount,
+      nearestCosine: density.nearestCosine,
+      candidate: shorten(minted.prediction),
+      edges: edgeIds.length,
+    });
+    log.debug('mint-from-associations: admission mix', { outcome: 'density-rejected' });
+    return 'verdict';
   }
 
   // Provenance: the member substrate rows (weight 1.0) plus the
@@ -1575,6 +1780,7 @@ async function assocHubOnce(
     prediction: shorten(minted.prediction),
     edges: edgeIds.length,
   });
+  log.debug('mint-from-associations: admission mix', { outcome: 'minted' });
   return 'verdict';
 }
 
@@ -1594,7 +1800,19 @@ async function dedupProbe(
   });
   if (error) throw new Error(`dedup: RPC failed: ${error.message}`);
   const collapsed = typeof data === 'number' ? data : 0;
-  if (collapsed > 0) log.debug('dedup: collapsed samskaras', { collapsed });
+  if (collapsed > 0) {
+    // The population at merge time is the M5 readout's race-vs-
+    // miscalibration signal for the collapse RPC's overflow pass: a
+    // firing at ~300 is a race overshoot, one well past it is the
+    // density constants mis-calibrating. Fetching it only when
+    // something actually collapsed keeps this off the hot path.
+    const { count } = await admin
+      .from('samskaras')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .not('activated_at', 'is', null);
+    log.debug('dedup: collapsed samskaras', { collapsed, population: count ?? 0 });
+  }
 }
 
 /**
@@ -1906,7 +2124,9 @@ export const __test = {
   PAIR_RELATE_COSINE_FLOOR,
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
-  SAMSKARA_POPULATION_CAP,
+  POPULATION_TRIPWIRE,
+  DENSITY_FLOOR,
+  DENSITY_K,
   ASSOC_HUBS_PER_TICK,
   buildTopicalCluster,
   buildAssociationCluster,

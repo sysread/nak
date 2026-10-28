@@ -714,11 +714,11 @@ logs and yields to the next phase.
   {prediction, inner_voice, valence, confidence} | null` (null
   covers both parse failure and an explicit `confirm: false`
   refusal). The probe is population-gated via the shared
-  the cap-or-evict gate: at or above `SAMSKARA_POPULATION_CAP`
-  (150, mirroring the collapse RPC's `p_target_count` - see the
-  treadmill gotcha) it first attempts cap-pressure eviction
-  (`samskara_evict_for_mint`, see the decay section) and returns
-  before any Venice spend when no victim qualifies. With headroom, the
+  cap-or-evict gate: at or above `POPULATION_TRIPWIRE`
+  (300, mirroring the collapse RPC's `p_target_count` - see the
+  treadmill gotcha) it logs at warn and returns
+  before any Venice spend (the transition eviction attempt fires
+  first; see the decay section). With headroom, the
   phase fetches the recent embedded substrate window, then
   builds a **topical cluster**: it seeds on the most recent row
   and keeps only the later rows whose situation embedding is
@@ -944,7 +944,8 @@ in the first draft of the recalibration and was caught by
 re-scoring the probe set under the implemented scale). The split:
 
 - **claim mean** - claim-vs-claim comparisons: mint dedup
-  (`samskara_nearest_by_prediction`), co-fire collapse, and the
+  (`samskara_nearest_by_prediction`), the density admission check
+  (`samskara_density_check`), co-fire collapse, and the
   corpus/thread diagnostics clustering and search.
 - **substrate mean** - observation-vs-observation comparisons
   (mint topical clustering, pair-relate probes) and the fire
@@ -1005,6 +1006,7 @@ substrate-space bars on the substrate mean):
 | bar | value | space | notes |
 | --- | --- | --- | --- |
 | mint dedup (`MINT_DEDUP_COSINE`) | 0.50 | claim | top of the dup/sibling overlap zone; prefers letting a twin through (collapse reaps it) over absorbing a sibling (irreversible) |
+| density admission floor (`DENSITY_FLOOR`) | 0.40 | claim | counts 71% of duplicate/same-topic pairs toward density, zero unrelated; K=3 established neighbors rejects the mint |
 | co-fire collapse floor | 0.30 | claim | below dedup on purpose; co-fire criteria are the real evidence |
 | overflow-pass cap floor | 0.40 | claim | no behavioural evidence, keeps the same-idea-family boundary |
 | mint cluster floor | 0.05 | substrate | no labels in this space; offset-mapped to just above the distribution median |
@@ -1205,6 +1207,61 @@ past experience in light of a new pattern:
   message-vs-claim probe set (the existing probe set is claim-pairs
   under claim-mean centering, a different register).
 
+### Admission: dedup -> density -> mint (the entry gate)
+
+Mint-time admission is a two-stage quality judgment, then the insert.
+Both mint probes (recency and association) run the same order, pinned
+structurally by the vitest suite:
+
+1. **Hard-twin dedup** (`samskara_nearest_by_prediction`): 1-NN >=
+   0.50, claim-mean register - a near-duplicate reinforces the
+   existing row (health bump) instead of minting a twin.
+2. **Density check** (`samskara_density_check`): the candidate's
+   ESTABLISHED neighbors (genuine tally > 0 AND activated) at or
+   above DENSITY_FLOOR (0.40, same claim-mean register) - if the
+   count reaches DENSITY_K (3), the idea is already represented K
+   times over and the mint is rejected: the evidence reinforces the
+   nearest ESTABLISHED claim (the RPC returns it; never an unproven
+   newcomer) instead. A rejection in the association probe is a
+   VERDICT (the edges stamp consumed) or the hub would re-feed every
+   sweep. Both checks FAIL OPEN on error or cold start (claim mean
+   not ready) - better a possible redundant claim than a dropped
+   signal; the reapers are the cleanup lane.
+3. **Mint.**
+
+The gate is the ENTRY half of corpus regulation: the warmup pool
+tests entry, admission rejects what adds no representational value,
+and the release paths (below) handle death. Corpus size is emergent;
+there is no hard cap.
+
+Every adjudication outcome logs an
+`admission mix` line (`minted` / `dedup-reinforced` / `density-rejected`
+/ `declined`, plus the recency probe's terminal losses `embed-failed`
+/ `insert-failed`; the association probe's non-verdicts retry, so they
+log no mix line, and the recency probe's minter transport/parse
+failure logs only a trace - counting it as a decline would skew the
+mix with Venice flakes); the M5 readout counts from those logs.
+
+Calibration (the labeled probe set's discipline, not the live
+distribution - re-tuning against the live corpus is circular): at
+0.40 the floor counts 71% of duplicate/same-topic pairs toward
+density while ZERO unrelated pairs do; 0.45 drops that recall to 48
+percent; 0.30 adds only 3 same-idea pairs at the same zero unrelated
+cost. K=3 is conservative on the live corpus
+(64% of established claims have no same-idea neighbor; 5/138 sit
+K-dense). The tally gate is the entrenchment mitigation: a
+neighborhood of unproven newcomers must not gate a genuinely new
+claim, so only claims the judge has actually tested count.
+
+Accepted seam, same mechanism on the activation side: same-idea
+claims minted inside one quarantine drain all activate established
+without ever gating each other (the dedup bar only catches 0.50+
+twins), so a family the gate would have capped can form in the
+minutes a drain takes. The warmup pool drains 2 claims per 10
+minutes, co-fire collapse merges the survivors behaviorally, and the
+M5 readout watches for the pattern; running a density check at
+activation is the escalation if it shows up.
+
 ### Decay: relevance-gated forgetting (no wall clock)
 
 There is no wall-clock decay pass. Forgetting IS the evidence discount
@@ -1232,13 +1289,13 @@ contradicted on every test forever, so the reaper could never fire. At
 the 0.5 ratio a row is reaped once net miss evidence outweighs roughly
 `k` genuine tests' worth of prior.
 
-### Release of never-tested claims: probation + cap-pressure eviction
+### Release of never-tested claims: probation + the evidence reaper
 
 Relevance-gated decay has a blind spot: a claim whose topic never
 *genuinely* arises - the one-off-lookup mints (a burst of questions
 about one technology, a single shopping errand) - never accrues
-evidence in either direction, sits at `p0` forever, and holds a capped
-slot. Two release paths clear that residue. Both key on
+evidence in either direction, sits at `p0` forever, and occupies
+space. Two release paths clear that residue. Both key on
 `confirm_count = 0 and disconfirm_count = 0`, which identifies
 never-genuinely-tested exactly (any genuine verdict, even a soft miss,
 writes a nonzero tally, and the discount decays tallies toward but
@@ -1254,72 +1311,52 @@ be the first genuine test, and the next-day judge hasn't ruled).
   situation isn't part of the user's life. The window is wall-clock and
   calibrated to daily use; a long-idle account under-tests its corpus
   and would need it widened.
-- **Cap-pressure eviction** (`samskara_evict_for_mint`, called by
-  both mint probes - recency and association, via the shared
-  cap-or-evict gate - when the population cap blocks a
-  mint): frees
-  one slot by deleting the most-disproven untested row - judged >= 10
-  times with zero genuine engagements, >= 14 days old, ranked
-  most-judged-first. Decay by replacement: it runs exactly as fast as
-  formation pressure demands. Merely-quiet rows (the median untested
-  row has ~2 judged fires) are NOT evictable. When no untested victim
-  qualifies, a second tier keeps pressure alive as the corpus matures:
-  **weakly-established rows gone stale** - at most one full test's
-  worth of evidence tally (a single held is 1.0, a lone soft miss
-  0.25) whose last genuine verdict is >= 90 days old, ranked
-  stalest-first. Without this tier one genuine test ever is a lifetime
-  pass, and a mature corpus fills with claims established once and
-  never re-engaged. Rows with a real track record (tally > 1.0) are
-  untouchable by this tier, the staleness clock only matters under cap
-  pressure (an idle account never bleeds), and the pending-fire guard
-  applies to both of these tiers. When neither qualifies, a **third
-  tier evicts on demonstrated failure**: the lowest-health row whose
-  posterior sits more than 15% below the user's own `p0`. Low health
-  is earned - under the k=5 shrinkage a row needs roughly two full
-  contradictions' worth of net miss evidence to fall below
-  `0.85 * p0` - so every victim is a claim the judge genuinely tested
-  and rejected, never one that is merely quiet. This tier drops the
-  pending-fire guard on purpose: that guard spares a row whose
-  in-flight fire may be its FIRST test, but a row this far under
-  water cannot be exonerated by one more verdict, and on an active
-  day the guard empties the pool (2026-08 measurement: 115 of 150
-  rows carried a fire awaiting next-day judgment). If no tier
-  qualifies the probe skips at cap exactly as it did before eviction
-  existed. (A fourth "graduation" tier - retiring the parts of
-  established compounds - was removed with the compound layer; the
-  tier deleted the least-evidenced part whenever a compound built
-  on that claim met the bar, and in twenty days it stripped every
-  established compound of all its parts.)
+- **The evidence reaper** (`samskara_reap_evidence`, same :13 cron
+  statement as the other reapers, run unconditionally): the three
+  eviction passes - named by content, NOT "tiers" (that vocabulary
+  belongs to the retired compound layer). History: their only trigger
+  was cap pressure (a capped mint searched for a victim before it
+  could proceed); with the population cap demoted to
+  POPULATION_TRIPWIRE that trigger disappeared, so the evidence
+  standards moved to the reaper cron and run on their own schedule -
+  death by evidence, not by capacity (the same principle as the
+  dormancy reaper below). The passes: **UNTESTED-JUNK** (judged >= 10
+  times, zero genuine engagements, >= 14 days old; the dormancy
+  reaper's residual - it needs a 15-fire all-not-engaged streak
+  across 5+ threads, this pass catches the 10-14-judged and
+  sub-5-thread shapes), **STALE** (weakly established - total tally
+  <= 1.0 - whose last genuine engagement is >= 90 days old; NOT covered
+  by dormancy, one old held breaks the streak; the clock runs from
+  the last LIVE genuine verdict, falling back to activation for
+  claims established by the warmup pool's backfill verdicts - those
+  write tallies but never fire rows, so without the fallback they
+  could never go stale), and
+  **UNDERPERFORMER** (health below 85 percent of the user's `p0`;
+  NOT covered by reap_dead, whose floor is 50 percent, or dormancy).
+  The pending-fire guard applies to the first two; the underperformer
+  pass drops it on purpose - a row that far under water cannot be
+  exonerated by one more verdict (a single held moves the posterior
+  only a few points), and on an active day the guard empties the
+  pool (2026-08 measurement: 115 of 150 rows carried a fire awaiting
+  next-day judgment). Merely-quiet rows (the median untested row has
+  ~2 judged fires) are NOT collectible.
 
-Eviction is reachable from BOTH mint probes on purpose. When only the
-recency probe could evict, sweep order decided who minted: recency
-runs first, evicted, and refilled the slot in the same probe, so the
-association probe - gated on the same cap - never saw headroom and its
-unconsumed-edge backlog grew without bound (1,082 edges at the 2026-08
-audit, months of cross-session evidence never reaching the minter).
-With the shared cap-or-evict gate, entry to a capped corpus
-is decided by whether a qualified victim exists when a probe wants a
-slot, not by which probe runs first; within one sweep the two probes
-draw victims from the same pool in turn.
+  `samskara_evict_for_mint` keeps its cap-pressure wiring for the
+  transition, but the reaper drains its victim pool hourly, so a
+  tripwire-armed mint normally halts (evicting only in the window
+  before the next reap tick collects a row that just crossed a
+  predicate); the function is
+  transition wiring expected to be removed once the M5 readouts
+  confirm steady state.
 
-All eviction tiers are threshold-gated, so pressure can still dry up:
-if the "Probation due" and all "Evictable" readouts sit at zero while
-the corpus is pinned at cap and the mint probe keeps skipping, no release
-path has material and formation is starved. This state actually
-occurred (2026-08-08): the first two tiers had zero victims - the
-judge rework engages most fires now, so `confirm_count = 0` rows
-(the untested tier's requirement) barely exist, and nothing could yet be 90
-days stale in a corpus whose judge only started ruling in July - and
-every mint path sat blocked at cap for ~42 hours while the
-association backlog grew. The health tier is the remedy: it keys on
-the one signal the judge rework made trustworthy (a discriminating
-posterior) and needs no new state. The earlier-deferred alternative,
-demand-driven escalation (relaxing criteria as skipped-at-cap
-attempts accumulate), stays deferred for the same reason as before:
-it is the only option needing new state (nothing records a skipped
-mint), and the health tier's pool regenerates continuously as
-verdicts land. Re-evaluate it only if all three readouts sit at zero
-while the cap is pinned and probes keep skipping.
+The shared cap-or-evict gate (both probes, one gate) predates the
+demotion and remains the wiring: when only the recency probe could
+evict, sweep order decided who minted, and the association probe
+starved behind an ever-growing unconsumed-edge backlog (1,082 edges
+at the 2026-08 audit). With admission now density-gated and the
+evidence reaper draining the pool hourly, the gate's eviction arm is
+not expected to fire; it exists so a tripwire-armed corpus still has
+a bounded escape hatch during the transition.
 
 A released claim is cheap to lose: if the pattern is real and recurs,
 minting re-creates it from fresh substrate. A design road not taken:
@@ -1328,9 +1365,9 @@ against the substrate archive was measured and rejected - at the 0.6
 substrate floor the mint-cluster centroid matched 30-70% of the entire
 archive, and at 0.7 known one-off junk still spanned 12 distinct weeks;
 the judge's per-fire rulings are the reliable archive-grounded signal,
-already computed out-of-sample. The baseline-sitting *tested* majority
-remains bounded by `samskara_collapse_by_cofiring` and the 150-row
-population cap, not by decay.
+already computed out-of-sample. The tested majority remains bounded by
+`samskara_collapse_by_cofiring`, the density admission gate, and the
+release paths above - not by a population number.
 
 History: this replaced a wall-clock `samskara_decay_sweep` (a per-pass
 health nudge on a 30-minute cron) plus a live 1-10 minute reaction
@@ -1343,7 +1380,7 @@ Design of record + the model's derivation:
 The reapers above are wall-clock: reap_dead needs health below the
 floor (a never-batting claim never earns it - it sits at p0),
 reap_untested needs tally zero (a claim with historical evidence is
-exempt), and the stale tier needs 90 quiet days. None of them reaches
+exempt), and the STALE pass needs 90 quiet days. None of them reaches
 the claim that fires constantly and never once engages: `not-engaged`
 is a no-op for the posterior by design (a loose match is not a fair
 test), so the claim's score freezes at whatever it earned and the
@@ -1374,8 +1411,9 @@ The margin is a canyon, not a tuning problem: healthy claims run
 roughly half not-engaged (54% on prod that week), so a 15-fire
 all-not-engaged run is far outside healthy noise - the observed junk
 sat at 30-68. A narrow-but-genuine claim in a busy neighborhood CAN
-be collected; that death is defensible because the corpus is capped
-(a never-engaging claim occupies a slot a better claim could use),
+be collected; that death is defensible because corpus space is
+regulated by admission and release quality (a never-engaging claim
+occupies space a better claim could use),
 N is set generously for exactly that case, and the plan record
 (docs/dev/in-progress/samskara-dormancy-plan.md) preserves the
 reasoning.
@@ -1425,7 +1463,7 @@ are merged in descending (ratio, cosine) order so the strongest
 redundancies consolidate first.
 
 **Safety cap: population overflow.** If the count still
-exceeds `p_target_count` (default 150) after the primary pass,
+exceeds `p_target_count` (default 300) after the primary pass,
 fall through to pure embedding-cosine greedy merge in ascending
 cosine-distance order, refusing to merge pairs with centered
 cosine below
@@ -1435,10 +1473,14 @@ same-idea-family boundary (the labeled probe set's ~0.92-AUC
 split - see "Similarity calibration"). It guards against a
 diverse-but-overflowing pool where no pair meets the co-firing
 bar but the count is still growing without bound. With the mint
-probes' `SAMSKARA_POPULATION_CAP` gate in place this pass is a
+probes' `POPULATION_TRIPWIRE` halt in place this pass is a
 backstop for races (a mint slipping through while the count query
 fails open), not the routine make-room mechanism - see the
-treadmill gotcha.
+treadmill gotcha. With density admission regulating entry it
+should never fire in steady state: a firing is either a race
+overshoot (population just past the tripwire) or a
+miscalibration alarm (population well past it) - record the
+population at fire to tell them apart.
 
 **Per-call cap.** `p_max_collapses` (default 20) bounds work per
 invocation. The hourly sweep's dedup probe calls the RPC once
@@ -1475,7 +1517,8 @@ summarizer reads samskaras to feed the agent.
 
 - **Evaluation** - the :13 reap cron statement now orders
   `samskara_expire_unjudgeable_fires` -> `samskara_reap_dormant` ->
-  `samskara_reap_dead` -> `samskara_reap_untested`; the dormancy
+  `samskara_reap_dead` -> `samskara_reap_untested` ->
+  `samskara_reap_evidence`; the dormancy
   reaper reads the evaluation sweep's verdict stamps (and the
   expired stamps expire_unjudgeable_fires writes first).
 
@@ -1765,25 +1808,33 @@ summarizer reads samskaras to feed the agent.
   are cron-only
   (heavy or timing-insensitive), and moving a phase across that
   line should be a deliberate decision.
-- **Minting is population-gated; the overflow merge is a backstop,
-  not the make-room mechanism.** Both mint probes go through
-  the shared cap-or-evict gate: at `SAMSKARA_POPULATION_CAP`
-  (150) they first try cap-pressure eviction and skip when no victim
-  qualifies, so at cap the corpus changes only through the reaper
-  (repeated real failure), the Hebbian dedup pass (true duplicates),
-  and eviction of provably-useless rows. Without the gate,
-  every mint at cap forced the collapse RPC's overflow pass to
-  greedy-merge two DISTINCT claims at its 0.40 centered-cosine floor -
-  the "related but distinct" band - and a
-  2026-07 prod audit measured 49 mints/week churning through that
+- **Entry is quality-gated; the tripwire is a backstop, not a limit.**
+  Both mint probes admit through the quality chain: the dedup bar
+  catches hard twins, the density check
+  (`samskara_density_check`) rejects spread-redundant candidates
+  (K established claims above DENSITY_FLOOR - see "Admission"
+  above), and the tripwire (`POPULATION_TRIPWIRE`, 300) halts
+  minting only on a pathological condition that should be
+  impossible with a calibrated density gate. History: a hard
+  `SAMSKARA_POPULATION_CAP` (150) used to meter formation against
+  test throughput, and at cap every mint forced the collapse RPC's
+  overflow pass to greedy-merge two DISTINCT claims at its 0.40
+  centered-cosine floor - the "related but distinct" band - with a
+  2026-07 prod audit measuring 49 mints/week churning through that
   treadmill: Venice spend to mint a claim, then a merge that blurs
-  two others to make room for it. The gate fails OPEN on a count
-  error (a transient blip must not silence minting), which is why
-  the overflow pass stays: it catches the rare mint that slips
-  through at cap. `SAMSKARA_POPULATION_CAP` and the RPC's
-  `p_target_count` must move together - the Deno suite pins the TS
-  side and both sites carry mirror comments. Raising the cap is now
-  the sanctioned way to grow the corpus; removing the gate is not.
+  two others to make room for it. The demotion removed that
+  mechanism: at the tripwire the probes halt and log at warn
+  (arming = the density constants are mis-calibrated; the alert is
+  the signal), the corpus changes only through the reapers and the
+  Hebbian dedup pass, and the transition eviction wiring stays only
+  until the M5 readouts confirm steady state. The gate fails OPEN on
+  a count error (a transient blip must not silence minting), which
+  is why the overflow pass stays: it catches the rare mint that
+  slips through armed. `POPULATION_TRIPWIRE` and the RPC's
+  `p_target_count` must move together - the Deno suite pins both
+  sides and both sites carry mirror comments. Removing the gate is
+  not sanctioned; recalibrating the density constants (from the
+  labeled probe set, not the live distribution) is.
 
 - **Pair-relate seeds corpus-wide, round-robin, not on the
   recency frontier.** One pair per probe, but the seed is the
@@ -2077,16 +2128,19 @@ not its level - sustained growth in the reachable share is the "not
 keeping up" signal; a stable floor is the resting state.
 
 **Decay-standing legibility.** The release machinery (probation reap +
-cap-pressure eviction, see the decay section) surfaces on both
+the evidence reaper's three passes, see the decay section) surfaces on
+both
 diagnostics reads. The Overview Corpus card shows a **"Probation due"**
 count and an **"Evictable (untested / stale / unhealthy)"** triple
 (four `samskara_health_snapshot` columns whose predicates deliberately
-mirror `samskara_reap_untested` / `samskara_evict_for_mint`'s three
-tiers - keep them in lockstep). All are informational, not dotted:
+mirror `samskara_reap_untested` / `samskara_reap_evidence`'s three
+passes - keep them in lockstep). All are informational, not dotted:
 probation-due
 drains at the next hourly reap tick (a value that never drains means
-the reaper cron is stalled), and a nonzero evictable pool is the normal
-resting state while the cap is pinned. The Corpus detail pane
+the reaper cron is stalled), and the evictable pool drains the same
+way now that the evidence reaper runs the passes unconditionally - a
+persistent nonzero means the reap cron is stalled, not healthy
+pressure. The Corpus detail pane
 adds an **engagement** stat (genuine/judged, `engagementSummary`) to
 the verdict tally and a one-line **release status** under it
 (`releaseStatus` - established / weakly-established-gone-stale /
@@ -2094,7 +2148,7 @@ awaiting judgment / probation countdown / evictable), with the SQL
 thresholds mirrored as named constants in
 `src/lib/ui/samskara-browse.ts`. The stale read rides
 `samskara_verdict_counts`' `last_genuine_at` column plus the row's own
-discounted evidence tally - the same two numbers the SQL stale tier
+discounted evidence tally - the same two numbers the SQL STALE pass
 tests.
 
 Read-only by design - no delete/pin/edit. Curation would re-open the
