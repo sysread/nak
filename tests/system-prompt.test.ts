@@ -446,11 +446,15 @@ describe('every tool available every turn', () => {
     expect(prompt).toContain('op=save');
     expect(prompt).toMatch(/announce every/i);
     // Routing rule beats: the how-to-do-a-task trigger must point at
-    // op=save, the doing-vs-context test must be stated, and the
-    // empty-index discouragement must be countered.
+    // op=save, the doing-vs-context test must be stated, the
+    // empty-index discouragement must be countered, and the wiki
+    // must be excluded as a destination for task guidance (it is a
+    // model-reachable write surface whose own block never excluded
+    // "how the user works" articles).
     expect(prompt).toMatch(/skill material/i);
     expect(prompt).toMatch(/if it changes the doing, it is a skill/i);
     expect(prompt).toMatch(/empty skills index/i);
+    expect(prompt).toMatch(/wiki is not a destination for task guidance/i);
     // Reading-order caveat: the block must never claim the index
     // arrives before the user's words (it rides the tail metadata
     // message, after the conversation).

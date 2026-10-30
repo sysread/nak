@@ -109,7 +109,9 @@ writer besides the user.
   even when no similar skill exists yet (added after live QA -
   without it the model routed casually-stated procedural
   preferences to `memory_save`, so the first skill was never
-  created; the index entry is what triggers skill-thinking).
+  created; the index entry is what triggers skill-thinking), with
+  the wiki explicitly excluded as a destination for task guidance
+  (the third model-reachable write surface, closed the same day).
   Slotted into the `sections` array near
   the other feature blocks; cache-safe because it is static.
 - `src/lib/chat/prompt-assembly.ts` - `buildSkillsIndexSection`
@@ -440,6 +442,23 @@ DELETE vs UPDATE:
   input clears the on-screen keyboard. A new sidebar search
   without the class regresses mobile keyboard overlap with no
   failing test.
+- **The reflection sweep has no skills awareness - a stated
+  preference can land twice.** The chat model saves a task
+  format as a skill, and the reflection sweep reading the same
+  settled thread can ALSO write it as a memory (reflection's
+  prompt knows nothing about skills). Harmless while the two
+  agree; the drift risk arrives when a skill is later honed - the
+  memory keeps the old format and can surface via recall
+  contradicting the current skill body. The model-facing
+  mitigation is structural: a skill is explicit current
+  instructions, a recalled preference memory is context, and
+  SUBCONSCIOUS_BLOCK's override framing covers stale expectations
+  - but if the contradiction ever confuses turns in practice, the
+  hardening options are teaching the reflection prompt that task
+  formats live in skills (skip or cross-reference instead of
+  duplicating), or a SKILLS_BLOCK line that a skill outranks a
+  recalled preference memory. Deferred until observed, not
+  speculatively.
 
 ## Where to go next
 
