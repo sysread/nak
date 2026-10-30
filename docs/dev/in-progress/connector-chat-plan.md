@@ -159,8 +159,10 @@ driver's beat budget is the knob.
 - Nak initiating conversations (v1 is reply-only).
 - Any non-thatch external system as a driver.
 
-## Settled in the co-brainstorm (all subject to Jeff's veto when
-this graduates)
+## Settled in the co-brainstorm
+
+All of these are subject to Jeff's veto whenever this graduates
+from parked to planned.
 
 - Poll-only; no push in v1 (thatch keeps its zero network
   surface).
