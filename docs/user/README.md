@@ -57,6 +57,10 @@ You can reach these pages two ways:
   about projects, people, places, and topics, maintained by both you
   and a background agent. The assistant reaches them through the
   always-on `wiki_search` tool.
+- [Skills](./skills.md) — reusable task guidance (formats, procedures,
+  checklists) Nak loads when a task matches and helps keep current:
+  the per-message skills scan, proactive capture from the chat, and
+  the Skills drawer tab for managing them yourself.
 - [Library](./library.md) — upload documents (contracts, insurance
   policies, tax docs) to keep as permanent, searchable reference
   material. The assistant can search inside them to answer your

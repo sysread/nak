@@ -434,6 +434,8 @@ turn:
 | `threads.intuition_payload` / `context_recall_payload` | Function | Priming stage in `getStreamingResponse` |
 | `threads.bias_active_at_turn` | Function | Bias priming in `getStreamingResponse` |
 | `topics`, recipe edits, memory rows, settings | Browser | Direct user action UIs |
+| `skills` (panel create/edit/delete) | Browser | Skills panel edits (stamp `last_author 'user'`) |
+| `skills` (model CRUD incl. delete) | Function | `skills` combination tool dispatch (stamps `last_author 'assistant'`) |
 | `topics` / `summary` derivations | Function | Curation tail after a completed turn + hourly sweep |
 | Embedding rows | Function | `pg_cron` + venice `/backfill` |
 | `samskaras` / substrate enrichment | Function | Samskara tail + hourly sweep |

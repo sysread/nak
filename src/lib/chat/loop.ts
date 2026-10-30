@@ -139,16 +139,22 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // venice edge function's priming stage
   // (supabase/functions/venice/priming.ts), so the whole turn - priming
   // included - survives a browser disconnect. What remains browser-side
-  // are the two deterministic inputs the metadata system message needs:
-  // the user-round index and the thread-attachments inventory (neither
-  // is LLM priming).
+  // are the three deterministic inputs the metadata system message
+  // needs: the user-round index, the thread-attachments inventory, and
+  // the skills index (none is LLM priming).
   const currentUserRound = countUserRounds(history);
-  // Per-turn thread-attachments inventory. A single thread-scoped SELECT
-  // feeding buildMetadataSystemMessage; failure is swallowed - the model
-  // falls back to the per-message inline note from buildUserVeniceContent.
-  const attachmentSummaries = await supabase
-    .listAttachmentSummariesForThread(thread.id)
-    .catch(() => []);
+  // Per-turn thread-attachments inventory + skills index, fetched
+  // CONCURRENTLY so two Supabase round trips do not land on
+  // turn-start latency serially. Each leg swallows its own failure:
+  // attachments degrade to the per-message inline note from
+  // buildUserVeniceContent, and a failed skills fetch degrades to an
+  // empty index - no metadata section, which the baseline prompt's
+  // op=list fallback covers (a fetch failure is indistinguishable
+  // from an empty store to the model).
+  const [attachmentSummaries, skillIndex] = await Promise.all([
+    supabase.listAttachmentSummariesForThread(thread.id).catch(() => []),
+    supabase.listSkills().catch(() => []),
+  ]);
 
   // System-prompt assembly with the per-turn metadata pinned LAST.
   // The baseline prompt (identity, voice, recall framing, toolbox
@@ -204,6 +210,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     threadTitle: thread.title,
     titleManuallySet: thread.title_manually_set,
     currentUserRound,
+    skillIndex,
   });
   const requestMessages: VeniceMessage[] = [
     {

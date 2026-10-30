@@ -52,7 +52,11 @@ Two distinct injection surfaces:
   request.
 - **The per-turn metadata block (row 8)** carries turn-volatile ambient
   state: wall-clock, the thread attachments inventory, the
-  emphasis-markdown nudge, and the title nudge. It rides LAST for
+  emphasis-markdown nudge, the title nudge, and - the final
+  section, after the title nudge - the skills index: one
+  `name: description` line per saved skill, flattened and entry-
+  and byte-capped, the model's trigger surface for loading a
+  matching skill's body on demand. It rides LAST for
   prompt-cache economics (see Gotchas).
 
 ## The contributors

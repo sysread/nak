@@ -3,7 +3,7 @@
  * state that survives a refresh lives in the query string:
  *
  *   cid     = active thread id
- *   drawer  = 'chats' | 'groceries' | 'recipes' | 'memories' | 'wiki' | ...  (sidebar tab; absent = 'chats')
+ *   drawer  = 'chats' | 'groceries' | 'recipes' | 'memories' | 'wiki' | 'skills' | ...  (sidebar tab; absent = 'chats')
  *   modal   = 'settings' | 'help' | 'samskara' | 'intuition' | 'bias-profile' | 'recall'  (utility overlays)
  *   recipe  = recipe id; selecting one switches the main panel to the recipe detail
  *   doc     = docs/user/ path when modal=help
@@ -66,6 +66,7 @@ export type DrawerTab =
   | 'recipes'
   | 'memories'
   | 'wiki'
+  | 'skills'
   | 'library'
   | 'artifacts'
   | 'samskara';
@@ -105,6 +106,14 @@ export interface Route {
    */
   samskara_id: string | null;
   /**
+   * Skill id for the focused skill panel. Absent means the panel
+   * shows the browse list + create button. Same "list in drawer,
+   * detail in panel" shape as `memory` / `wiki_article_id`; the
+   * param is singular against the plural drawer value 'skills'
+   * (the memory/memories convention).
+   */
+  skill: string | null;
+  /**
    * Presence flag ('1') for the Daily digest panel on the Chats tab.
    * Routed (rather than a local flag) so browser back closes the
    * panel and a refresh restores it. Unlike the wiki changelog it is
@@ -124,6 +133,7 @@ const ROUTED_KEYS = [
   'wiki_article_id',
   'document_id',
   'samskara_id',
+  'skill',
   'digest',
 ] as const;
 const MODAL_VALUES: readonly Modal[] = [
@@ -141,6 +151,7 @@ const DRAWER_VALUES: readonly DrawerTab[] = [
   'recipes',
   'memories',
   'wiki',
+  'skills',
   'library',
   'artifacts',
   'samskara',
@@ -156,6 +167,7 @@ export const route = $state<Route>({
   wiki_article_id: null,
   document_id: null,
   samskara_id: null,
+  skill: null,
   digest: null,
 });
 
@@ -186,6 +198,7 @@ export function parseUrl(search: string = typeof location !== 'undefined' ? loca
     wiki_article_id: readString(params, 'wiki_article_id'),
     document_id: readString(params, 'document_id'),
     samskara_id: readString(params, 'samskara_id'),
+    skill: readString(params, 'skill'),
     digest: readString(params, 'digest'),
   };
 }
@@ -211,6 +224,7 @@ export function buildSearch(
   if (r.wiki_article_id) params.set('wiki_article_id', r.wiki_article_id);
   if (r.document_id) params.set('document_id', r.document_id);
   if (r.samskara_id) params.set('samskara_id', r.samskara_id);
+  if (r.skill) params.set('skill', r.skill);
   if (r.digest) params.set('digest', r.digest);
   const s = params.toString();
   return s ? `?${s}` : '';
@@ -265,6 +279,10 @@ function applyPatch(patch: Partial<Route>): boolean {
   }
   if (patch.samskara_id !== undefined && patch.samskara_id !== route.samskara_id) {
     route.samskara_id = patch.samskara_id;
+    changed = true;
+  }
+  if (patch.skill !== undefined && patch.skill !== route.skill) {
+    route.skill = patch.skill;
     changed = true;
   }
   if (patch.digest !== undefined && patch.digest !== route.digest) {
@@ -375,6 +393,7 @@ export const __test = {
     route.wiki_article_id = null;
     route.document_id = null;
     route.samskara_id = null;
+    route.skill = null;
     route.digest = null;
   },
   syncFromUrl,

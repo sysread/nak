@@ -86,6 +86,10 @@ changing a contract that other features depend on.
   the user, the autonomous wiki agent, the per-article
   manual update flow, the `wiki_*` tools, and the Wiki
   drawer tab.
+- [Skills](./skills.md) — the `skills` store + the first
+  combination tool + the per-turn skills index + the Skills
+  drawer tab: reusable task guidance the user and the chat
+  model both maintain.
 - [Conversation digest](./conversation-digest.md) — the daily
   per-user recap of a day's conversations: the timezone day-gated
   claim RPC, the hourly digest sweep agent, the

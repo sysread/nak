@@ -11,10 +11,15 @@
  * The output file is gitignored. Run manually with
  * `mise run bundle-docs`; the dev-start task and the CI deploy step
  * call it automatically before they serve / deploy functions.
+ *
+ * Exported for tests: `buildCorpus` reads arbitrary roots and returns
+ * the module source without writing anything. The CLI behavior (write
+ * the real output path + log the summary) stays in `main()`, guarded
+ * so importing the module for tests does not regenerate anything.
  */
 import { readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -22,6 +27,33 @@ const USER_ROOT = join(REPO_ROOT, 'docs/user');
 const DEV_ROOT = join(REPO_ROOT, 'docs/dev');
 const OUT_DIR = join(REPO_ROOT, 'supabase/functions/venice/_generated');
 const OUT_PATH = join(OUT_DIR, 'research-docs-corpus.ts');
+
+/**
+ * The supabase CLI's edge-function module scanner is a regex over raw
+ * source text, not a parser: it cannot tell string content from code.
+ * A doc that quotes an import statement in prose (this repo's own plan
+ * docs do) therefore poisons the generated corpus - the scanner
+ * resolves the quoted specifier against the corpus's own directory,
+ * tries to read `.../_generated/<name>.ts`, and the whole local edge
+ * runtime dies at startup (observed 2026-10-29: `functions serve`
+ * exited code 1 on a plan doc quoting `import './wiki_save.ts';`,
+ * taking every function route to 503).
+ *
+ * Escaping the token as a Unicode escape inside the JSON string
+ * leaves the PARSED value byte-identical - TS/JSON unescape `r` back
+ * from `\u0072`, so even incidental hits inside words ("important",
+ * "importing") round-trip exactly - while the raw file text no longer
+ * contains any `import` token for the regex to latch onto.
+ *
+ * Known residual: an `export ... from './x'` line quoted in prose
+ * would need the same treatment for the `export`/`from` tokens; left
+ * alone because those words are common in prose and no failure has
+ * been observed from them. Extend the escape here first if one ever
+ * is.
+ */
+export function scannerSafeJsonStringify(value) {
+  return JSON.stringify(value).replaceAll('import', 'impo\\u0072t');
+}
 
 function walk(rootDir) {
   const out = [];
@@ -60,6 +92,19 @@ function emit(entries) {
   lines.push(`// edge runtime can compose the sub-completion's system prompt without`);
   lines.push(`// fetching at request time.`);
   lines.push(``);
+
+  function emitArr(name, arr) {
+    lines.push(`export const ${name}: readonly BundledDoc[] = [`);
+    for (const [path, body] of arr) {
+      lines.push(`  {`);
+      lines.push(`    path: ${scannerSafeJsonStringify(path)},`);
+      lines.push(`    body: ${scannerSafeJsonStringify(body)},`);
+      lines.push(`  },`);
+    }
+    lines.push(`];`);
+    lines.push(``);
+  }
+
   lines.push(`export interface BundledDoc {`);
   lines.push(`  /** Path relative to the corpus root (docs/user/ or docs/dev/). */`);
   lines.push(`  readonly path: string;`);
@@ -68,38 +113,49 @@ function emit(entries) {
   lines.push(`}`);
   lines.push(``);
 
-  function emitArr(name, arr) {
-    lines.push(`export const ${name}: readonly BundledDoc[] = [`);
-    for (const [path, body] of arr) {
-      lines.push(`  {`);
-      lines.push(`    path: ${JSON.stringify(path)},`);
-      lines.push(`    body: ${JSON.stringify(body)},`);
-      lines.push(`  },`);
-    }
-    lines.push(`];`);
-    lines.push(``);
-  }
-
   emitArr('USER_DOCS', entries.user);
   emitArr('DEV_DOCS', entries.dev);
 
   return lines.join('\n');
 }
 
-const entries = {
-  user: asEntries(USER_ROOT),
-  dev: asEntries(DEV_ROOT),
-};
+/**
+ * Read the two doc trees and return the corpus module source plus the
+ * counts the CLI log line reports. Pure: no writes, no repo-relative
+ * path assumptions - callers pass the roots, tests pass fixtures.
+ */
+export function buildCorpus({ userRoot, devRoot }) {
+  const entries = {
+    user: asEntries(userRoot),
+    dev: asEntries(devRoot),
+  };
+  const totalBytes = [...entries.user, ...entries.dev].reduce(
+    (n, [, body]) => n + body.length,
+    0,
+  );
+  return {
+    source: emit(entries),
+    userCount: entries.user.length,
+    devCount: entries.dev.length,
+    totalBytes,
+  };
+}
 
-mkdirSync(OUT_DIR, { recursive: true });
-writeFileSync(OUT_PATH, emit(entries), 'utf8');
+function main() {
+  const { source, userCount, devCount, totalBytes } = buildCorpus({
+    userRoot: USER_ROOT,
+    devRoot: DEV_ROOT,
+  });
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(OUT_PATH, source, 'utf8');
+  console.log(
+    `wrote ${relative(REPO_ROOT, OUT_PATH)} ` +
+      `(${userCount} user doc(s), ${devCount} dev doc(s), ` +
+      `${(totalBytes / 1024).toFixed(1)} KiB total markdown)`,
+  );
+}
 
-const totalBytes = [...entries.user, ...entries.dev].reduce(
-  (n, [, body]) => n + body.length,
-  0,
-);
-console.log(
-  `wrote ${relative(REPO_ROOT, OUT_PATH)} ` +
-    `(${entries.user.length} user doc(s), ${entries.dev.length} dev doc(s), ` +
-    `${(totalBytes / 1024).toFixed(1)} KiB total markdown)`,
-);
+// Run as a script (node / mise run bundle-docs), not when imported.
+if (import.meta.url === pathToFileURL(resolve(process.argv[1] ?? '')).href) {
+  main();
+}

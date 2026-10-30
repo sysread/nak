@@ -2532,6 +2532,85 @@ grant execute on function
   public.consolidate_memories(uuid, uuid, text, text, uuid)
   to service_role;
 
+-- skills ------------------------------------------------------------------
+--
+-- Named, described markdown instruction bodies that the user and the
+-- chat model both maintain. A skill is recurring task guidance - a
+-- format, a procedure, a checklist - that the model pulls in when a
+-- task matches, instead of re-deriving it per conversation. `name` is
+-- the invocation key; `description` is the trigger surface that rides
+-- every chat turn (the per-turn metadata index), so it carries the
+-- pressure to stay short; `body` is the full instruction text, loaded
+-- only on a match.
+--
+-- `last_author` records which surface wrote the current contents
+-- ('user' from the panel, 'assistant' from the skills chat tool). It
+-- is the whole edit trail in v1: no changelog table, on the accepted
+-- risk that the model announcing every create/update/delete in its
+-- reply plus this per-row stamp is enough (a changelog is the
+-- documented follow-up if silent model edits become a real problem).
+--
+-- Deliberately no embedding / claim / backfill machinery: search is
+-- ILIKE over name + description + body, which is enough while a
+-- personal skill store stays small. If stores ever grow to where
+-- a sequential scan per search is not, the right index is a pg_trgm
+-- GIN - a new extension for this schema, deliberately not added now.
+
+create table if not exists public.skills (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  description text not null,
+  body text not null,
+  last_author text not null default 'user'
+    check (last_author in ('user', 'assistant')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Natural key: one skill per (user, case-insensitive name). Every name
+-- comparison goes through lower(name) - tool lookups, the panel's
+-- duplicate check - and the unique expression index is what turns a
+-- case-variant duplicate create into the 23505 the panel surfaces by
+-- name. An inline unique constraint cannot hold an expression, so the
+-- index is the constraint.
+create unique index if not exists skills_user_name_lower_idx
+  on public.skills (user_id, lower(name));
+
+-- Stamp updated_at on every UPDATE. Skills are written from two
+-- surfaces (the browser panel and the server-side skills chat tool)
+-- and neither can be trusted to set it, so a trigger is the single
+-- source of truth - the recipe_records pattern.
+create or replace function public.touch_skill_updated_at()
+  returns trigger language plpgsql as $$
+begin
+  new.updated_at := now();
+  return new;
+end $$;
+
+drop trigger if exists touch_skill_updated_at on public.skills;
+create trigger touch_skill_updated_at
+  before update on public.skills
+  for each row execute function public.touch_skill_updated_at();
+
+alter table public.skills enable row level security;
+
+drop policy if exists "skills are self-selectable" on public.skills;
+create policy "skills are self-selectable" on public.skills
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "skills are self-insertable" on public.skills;
+create policy "skills are self-insertable" on public.skills
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "skills are self-updatable" on public.skills;
+create policy "skills are self-updatable" on public.skills
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "skills are self-deletable" on public.skills;
+create policy "skills are self-deletable" on public.skills
+  for delete using (auth.uid() = user_id);
+
 -- recipes ----------------------------------------------------------------
 --
 -- Cooklang recipes the user authors in Nak (often by asking the model to
@@ -14697,6 +14776,19 @@ begin
   ) then
     alter publication supabase_realtime add table public.grocery_sections;
   end if;
+  -- skills feeds the browser's skills refresh relay the same way
+  -- memories feeds emitMemoryChange: the skills chat tool writes
+  -- server-side (no browser event bus to fire), so an open Skills
+  -- panel learns about model-driven writes through a user-scoped
+  -- postgres_changes subscription (see subscribeToSkillChanges).
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'skills'
+  ) then
+    alter publication supabase_realtime add table public.skills;
+  end if;
   -- samskaras is deliberately NOT a member. Mint toasts ride a private
   -- samskara-mint Broadcast event (insertMint -> _shared/samskara-mint.ts
   -- + the owner-subscribe policy below), never a postgres_changes echo.
@@ -14781,6 +14873,9 @@ alter table public.grocery_list_entries replica identity using index grocery_lis
 create unique index if not exists grocery_sections_replident_idx
   on public.grocery_sections (id, user_id);
 alter table public.grocery_sections replica identity using index grocery_sections_replident_idx;
+create unique index if not exists skills_replident_idx
+  on public.skills (id, user_id);
+alter table public.skills replica identity using index skills_replident_idx;
 
 -- ---------------------------------------------------------------------------
 -- Realtime Broadcast authorization (streaming-root channels)

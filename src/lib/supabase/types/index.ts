@@ -9,6 +9,7 @@
 export * from './core';
 export * from './chat';
 export * from './memories';
+export * from './skills';
 export * from './wiki';
 export * from './cookbook';
 export * from './grocery';

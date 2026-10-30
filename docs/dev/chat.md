@@ -569,6 +569,17 @@ A chat turn goes:
   (memory facts verbatim; conversations + wiki by id); the system
   prompt nudges the model to consider this first when it wants broad
   context on the user. Same executor path. See `./context-recall.md`.
+- **Skills** - `Chat.svelte` owns the `skills` drawer tab (the
+  `SkillList` sidebar + `Skills.svelte` panel pair, lazy-mounted
+  off `drawerTab`, sharing `skillsStore`) and the realtime relay
+  feeding the skill event bus
+  (`subscribeToSkillChanges` -> `emitSkillChange`, the
+  memories-twin wiring). The chat loop fetches the per-turn
+  skills index concurrently with the attachment inventory and
+  passes it to `buildMetadataSystemMessage` (see "Wire shape"
+  above). The model reaches the store mid-turn through the
+  `skills` combination tool. See `./tools.md` and
+  [`./skills.md`](./skills.md).
 - **Summaries / journal** — no direct call; their triggers
   watch for a terminal assistant message newer than
   `last_summarised_msg_id`. The chat loop creates that
@@ -1098,7 +1109,14 @@ A chat turn goes:
      turn is silent on the title - the auto-title worker owns
      naming there. With a reliable worker the loud nag rarely
      fires; it's the safety net for the case where the worker
-     hasn't polled the row yet.
+     hasn't polled the row yet. The skills index is the final
+     section, after the title nudge: one `name: description`
+     line per saved skill, flattened and entry- and byte-capped,
+     fetched per turn concurrently with the attachment
+     inventory (one `Promise.all` in `loop.ts`; a failed fetch
+     degrades to no section). It is the model's trigger surface
+     for loading a matching skill's body on demand through the
+     `skills` tool.
 
   **Why metadata rides at the tail, not before the conversation.**
   Venice (like every OpenAI-compatible backend) can only reuse a

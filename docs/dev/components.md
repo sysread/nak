@@ -823,6 +823,31 @@ autonomous wiki agent's sweep, with the reason for each.
 
 Consumers: `WikiList.svelte`.
 
+## `<SkillList>`
+
+File: `src/components/SkillList.svelte`.
+
+Skills drawer tab sidebar: the search box plus the name +
+description-snippet rows for the user's saved skills, with the
+infinite-scroll sentinel for the paged browse list (name asc, 50
+per page, the wiki-list shape). Clicking a row navigates
+`?skill=<id>` so the main panel renders that skill's detail; the
+panel is `Skills.svelte` - a screen like `Memories.svelte`, so it
+gets no section here - and both surfaces share `skillsStore`,
+refreshing off the `skill-events` bus rather than their own
+fetches.
+
+Decision logic lives in `src/lib/ui/skills-list.ts` (the 200ms
+search debounce, the row snippet, the sidebar empty-state copy),
+unit-tested at `tests/skills-list.test.ts`. The `.svelte` file
+owns the debounce timer wiring and the markup. The search input
+carries the `sidebar-search-input` class - load-bearing, not
+cosmetic: `src/lib/ui/sidebar-search-focus.ts` duck-types that
+class name to collapse the mobile drawer nav (see the
+mobile-keyboard Gotcha in [`./chat.md`](./chat.md)).
+
+Consumers: drawer tabs in `Chat.svelte`.
+
 ## `<RecipeList>`
 
 File: `src/components/RecipeList.svelte`.

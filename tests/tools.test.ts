@@ -16,6 +16,7 @@ import {
   cookingToolbox,
   memoriesToolbox,
   wikiToolbox,
+  skillsToolbox,
   buildToolList,
   toOpenAIToolDef,
   type ToolDef,
@@ -78,6 +79,7 @@ describe('tool registry', () => {
       'wiki',
       'followups',
       'library',
+      'skills',
       'images',
     ]);
   });
@@ -175,6 +177,18 @@ describe('tool registry', () => {
     // the create-description invariants.
     expect(cookingToolbox.description).toContain('reports having cooked a recipe');
     expect(cookingToolbox.description).toContain('say so in the reply');
+  });
+
+  it('skillsToolbox description carries the capture trigger', () => {
+    // Same catalog-visibility rationale as the cooking trigger: the
+    // toolbox description is the only skills prose the catalog
+    // renders, so the proactive-capture instruction (recurring ask or
+    // hard-won guidance -> op=save, announced in the reply) rides it.
+    // The combo tool rides this toolbox only - never always-on, which
+    // is why the always-on membership tripwire does not list it.
+    expect(skillsToolbox.description).toContain('not yet a skill');
+    expect(skillsToolbox.description).toContain('say so in the reply');
+    expect(skillsToolbox.tools.map((t: ToolDef) => t.name)).toEqual(['skills']);
   });
 
   it('toOpenAIToolDef projects to the function-calling wire shape', () => {

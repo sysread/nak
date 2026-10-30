@@ -138,10 +138,14 @@ export function requireThreadId(ctx: ToolContext): string {
 }
 
 /**
- * Names of every tool registered on this Deno isolate. Used by the
- * /stream handler when it builds the response envelope so the
- * browser can warn (or refuse to send) when the model has tools
- * armed that the function cannot dispatch yet. Also used by tests.
+ * Names of every tool registered on this Deno isolate. The Deno test
+ * suite is the consumer: the barrel-membership test
+ * (tests/skills_barrel.test.ts) imports the tool barrel and checks
+ * the registrations landed, because a tool module forgotten in the
+ * barrel's side-effect imports produces no error at load time - the
+ * first symptom would be the model calling the tool and dispatch
+ * throwing ToolNotImplementedError, which no other gate stage
+ * catches.
  */
 export function listRegisteredTools(): string[] {
   return Array.from(REGISTRY.keys());

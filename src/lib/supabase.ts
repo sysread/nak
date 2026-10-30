@@ -74,6 +74,8 @@ import type { RenderedPdfPage } from './pdf-pages';
 import * as realtimeApi from './supabase/realtime';
 // Samskara domain slice, same delegation pattern.
 import * as samskaraApi from './supabase/samskara';
+// Skills domain slice, same delegation pattern.
+import * as skillsApi from './supabase/skills';
 // Settings + Venice-proxy domain slices, same delegation pattern.
 import * as settingsApi from './supabase/settings';
 import * as veniceProxyApi from './supabase/venice-proxy';
@@ -116,6 +118,8 @@ import type {
   MemoryChangelogEntry,
   SimilarMemory,
   MemoryRelation,
+  Skill,
+  SkillSummary,
   WikiArticle,
   WikiRecord,
   WikiRecordFile,
@@ -185,6 +189,8 @@ import type { FollowupInspectorRow } from './ui/followups-inspector';
  *                             setters                -> ./supabase/threads.ts
  *   Memories                  CRUD + changelog + paging
  *                                                    -> ./supabase/memories.ts
+ *   Skills                   CRUD + index listing + search
+ *                                                    -> ./supabase/skills.ts
  *   Cookbook                  recipes, versions, photos
  *                             (listIntents straggler lives here too)
  *                                                    -> ./supabase/cookbook.ts
@@ -582,6 +588,51 @@ export class SupabaseService {
     selectedTopics?: readonly string[];
   }): Promise<OffsetPage<Memory>> {
     return memoriesApi.listMemoriesPage(this.client, opts);
+  }
+
+  // --- Skills -----------------------------------------------------------
+  //
+  // Extracted domain slice: the implementations and their doc comments
+  // (including the RLS posture notes for the skills table and the
+  // body-less-projection rationale) live in ./supabase/skills.ts (the
+  // index listing, paged browse, single fetch, ILIKE search, and
+  // create/update/delete) as plain functions taking the client. These
+  // methods delegate one-for-one under the same names so call sites
+  // and grep targets stay stable.
+
+  async listSkills(): Promise<SkillSummary[]> {
+    return skillsApi.listSkills(this.client);
+  }
+
+  async listSkillsPage(opts: {
+    offset: number;
+    pageSize: number;
+  }): Promise<OffsetPage<Skill>> {
+    return skillsApi.listSkillsPage(this.client, opts);
+  }
+
+  async getSkill(id: string): Promise<Skill | null> {
+    return skillsApi.getSkill(this.client, id);
+  }
+
+  async searchSkills(opts: {
+    query: string;
+    limit?: number;
+  }): Promise<SkillSummary[]> {
+    return skillsApi.searchSkills(this.client, opts);
+  }
+
+  async saveSkill(args: {
+    id?: string;
+    name: string;
+    description: string;
+    body: string;
+  }): Promise<Skill> {
+    return skillsApi.saveSkill(this.client, args);
+  }
+
+  async deleteSkill(id: string): Promise<void> {
+    return skillsApi.deleteSkill(this.client, id);
   }
 
   // --- Cookbook --------------------------------------------------------
@@ -1617,6 +1668,10 @@ export class SupabaseService {
 
   subscribeToMemoryChanges(userId: string, onChange: () => void): () => void {
     return realtimeApi.subscribeToMemoryChanges(this.client, userId, onChange);
+  }
+
+  subscribeToSkillChanges(userId: string, onChange: () => void): () => void {
+    return realtimeApi.subscribeToSkillChanges(this.client, userId, onChange);
   }
 
   subscribeToRecipeChanges(userId: string, onChange: () => void): () => void {

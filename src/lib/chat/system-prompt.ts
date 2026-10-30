@@ -222,6 +222,39 @@ Typical flow: doc_list to pick the document, doc_grep for the exact clause, doc_
 To save a file the user attached to THIS conversation as a permanent document, call doc_save without an id (identify the file by its filename, and always give it a clear description of what it is for). Use doc_save with an id to rename a document or fix its description, and doc_delete when the user says a document is obsolete (e.g. they changed insurers and the old policy should go).
 `;
 
+// Skills framing. The third persistent-guidance store after the wiki
+// and the Library: named, described markdown instruction bodies the
+// model itself maintains. Distinct from memories (facts about the
+// user) and custom prompts (always-on voice) - a skill is working
+// instructions pulled in only when a task matches, so recurring task
+// guidance stops being re-derived per conversation. The volatile half
+// of the surface (the per-turn index) rides the metadata system
+// message; this block is the stable half that teaches the model what
+// to do with it.
+//
+// The routing paragraph is load-bearing, added after live QA
+// (2026-10-30): with only the abstract skills-vs-memories sentence,
+// the model reliably USED and HONED skills that already existed (the
+// index entry is what triggers skill-thinking) but routed a
+// casually-stated procedural preference ("when I ask for X, do it
+// this way") to memory_save instead - the first skill was never
+// created. The paragraph ties the trigger the model actually sees
+// (a how-to-do-a-task statement) to op=save, and names the
+// doing-vs-context test for the ambiguous middle.
+//
+// Reading-order caveat, handled in the wording: the index physically
+// arrives in the turn metadata AFTER the conversation (the tail
+// position is the accepted prompt-cache tradeoff), so the block says
+// "the skills index in the turn metadata" and never implies it
+// precedes the user's words.
+const SKILLS_BLOCK = `\
+The application also maintains the user's saved skills: named, reusable task guidance - formats, procedures, checklists - that you create and keep current yourself. Skills are distinct from memories (facts about the user and their world) and from custom prompts (always-on voice and persona): a skill is working instructions, pulled in only when a task matches.
+A skills index rides the turn metadata at the end of each request. Scan it before starting a task; when an entry plausibly matches the work, call the skills tool with op=get (by name or id) and follow the body. When no skills index section is present, do not conclude the user has no relevant skill - a failed fetch looks the same as an empty store, so call skills with op=list to check.
+Maintain skills proactively. When the user asks for the same kind of thing repeatedly, or when you have just worked out guidance you will need again, capture it as a skill with op=save. Update skills that proved wrong or stale, delete ones that no longer apply, and announce every create, update, or delete in your reply so nothing changes silently.
+Routing between skills and memories: when the user states HOW they want a kind of task done - "when I ask for X, always do it this way", a format, a procedure, a checklist - that is skill material. Capture it as a skill with op=save even when no similar skill exists yet; the description you write is what will make you find it again later. A memory is for facts about the user and their world, not for how work should be done. When a statement could be either, ask which one changes what you DO when executing a task: if it changes the doing, it is a skill; if it is context you would want recalled, it is a memory. Do not let an empty skills index talk you out of skill capture - the first skill for a recurring task is created exactly this way.
+Hygiene: a skill's description stays short (it rides every turn in the index); the body carries the detail. A skill that never matches any task is noise - fix it or delete it.
+`;
+
 // Clarifying-question framing. Counter-pushes against the model's
 // tendency to guess at ambiguous user intent and then waste a long
 // answer on the wrong branch. The ask_user tool lives in the always-on
@@ -301,7 +334,7 @@ None of this applies to the nak-marked <think> blocks described earlier. Those a
 `;
 
 /**
- * Flatten server-authored text to a single catalog line.
+ * Flatten server-authored text to a single line.
  *
  * The catalog is a newline-delimited list, so a line break inside a
  * value IS structure: an MCP tool description of
@@ -320,8 +353,15 @@ None of this applies to the nak-marked <think> blocks described earlier. Those a
  * Collapses CR/LF/tab and other C0 control characters to single spaces,
  * then squeezes runs of whitespace. Applied to the toolbox label (user-
  * typed, so also arbitrary) as well as the tool name and description.
+ *
+ * Exported for the per-turn metadata skills index
+ * (./prompt-assembly.ts): skill names and descriptions are model-
+ * authored text rendered into a system-role message, and a newline
+ * there could forge structure exactly the way an MCP description
+ * can here - the same collapse closes the same channel on both
+ * surfaces.
  */
-function oneLine(text: string): string {
+export function oneLine(text: string): string {
   return text
     .replace(/[\u0000-\u001f\u007f]+/g, ' ')
     .replace(/\s{2,}/g, ' ')
@@ -453,6 +493,7 @@ export function buildSystemPrompt(
     SUBCONSCIOUS_BLOCK,
     WIKI_BLOCK,
     LIBRARY_BLOCK,
+    SKILLS_BLOCK,
     ASK_USER_BLOCK,
     TOOLBOX_FRAMING_BLOCK,
     ACTIVITY_BLOCK,

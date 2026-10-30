@@ -1,12 +1,11 @@
 // wiki_save (create/update-merged wiki write)
 //
 // One tool behind an optional `id`: omit it to create a new article,
-// pass it to update. Consolidates the former wiki_create + wiki_update
-// (the routing contract lives in src/lib/tools/upsert.ts). Wire schema
-// lives in src/lib/tools/wiki_save.schema.ts; the agent mirrors
-// (agents/wiki.ts, agents/wiki_librarian.ts) carry their own wire
-// copies of the same shape. Auth: b-strict, explicit user_id stamp on
-// inserts, user_id filter on reads and updates.
+// pass it to update. Consolidates the former wiki_create + wiki_update.
+// Wire schema lives in src/lib/tools/wiki_save.schema.ts; the agent
+// mirrors (agents/wiki.ts, agents/wiki_librarian.ts) carry their own
+// wire copies of the same shape. Auth: b-strict, explicit user_id
+// stamp on inserts, user_id filter on reads and updates.
 //
 // Natural-key dedup: titles are unique per user (unique (user_id,
 // lower(title))). When a create lands with a title that exactly
@@ -16,7 +15,7 @@
 // to produce. A near-match (containment either way) is refused with
 // the candidate rows named, so "Maya Smith" against existing "Maya"
 // neither silently merges nor silently duplicates. See
-// resolveNaturalKeyMatch in _shared/upsert.ts.
+// resolveNaturalKeyMatch in _upsert_heuristics.ts.
 //
 // Any change to title or content fires the schema trigger that nulls
 // the embedding, sending the row back to the backfill queue.

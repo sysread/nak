@@ -121,6 +121,7 @@ import { generateImageSchema } from './generate_image.schema';
 import { editImageSchema } from './edit_image.schema';
 import { upscaleImageSchema } from './upscale_image.schema';
 import { removeBackgroundSchema } from './remove_background.schema';
+import { skillsSchema } from './skills.schema';
 
 // `serverSideTool` wraps a schema into a ToolDef whose execute() throws
 // - the browser ships catalog metadata only; every dispatch happens in
@@ -200,6 +201,7 @@ const generateImage = serverSideTool(generateImageSchema);
 const editImage = serverSideTool(editImageSchema);
 const upscaleImage = serverSideTool(upscaleImageSchema);
 const removeBackground = serverSideTool(removeBackgroundSchema);
+const skillsTool = serverSideTool(skillsSchema);
 
 /**
  * Always-on toolbox. The read-only surfaces every request carries.
@@ -510,6 +512,33 @@ export const libraryToolbox: Toolbox = {
 };
 
 /**
+ * Skills toolbox - the single `skills` combination tool (list / get /
+ * search / save / delete behind one `op` discriminator). One tool
+ * cannot be split across always-on + a write toolbox, so the reads
+ * ride inside the combo tool here; toolbox membership is catalog
+ * grouping only (every tool is declared on the wire every request
+ * regardless), which is also why `alwaysOnToolbox`'s hand-written
+ * description prose needs no skills edit.
+ *
+ * The toolbox description is catalog-visible (the catalog renders
+ * toolbox descriptions and per-tool short descriptions, never full
+ * tool descriptions), so it carries the maintenance trigger the
+ * cookingToolbox pattern set: the model captures recurring task
+ * guidance proactively rather than re-deriving it every
+ * conversation.
+ */
+export const skillsToolbox: Toolbox = {
+  name: 'skills',
+  description:
+    "Read and maintain the user's saved skills: reusable task guidance " +
+    '(formats, procedures, checklists) that loads on demand via the ' +
+    '`skills` tool. When a recurring ask or hard-won guidance is not yet ' +
+    'a skill, capture it with the skills tool (op=save) and say so in ' +
+    'the reply; update or delete skills that prove wrong or stale.',
+  tools: [skillsTool],
+};
+
+/**
  * The canonical ordered list of toolboxes exposed to the main chat.
  * Order is visible to the model (system-prompt catalog). Always-on
  * goes first so the model reads the read-only surfaces before the
@@ -525,6 +554,7 @@ export const TOOLBOXES: readonly Toolbox[] = [
   wikiToolbox,
   followupsToolbox,
   libraryToolbox,
+  skillsToolbox,
   imagesToolbox,
 ];
 

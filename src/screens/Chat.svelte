@@ -139,6 +139,7 @@
   type CookbookComponent = typeof import('./Cookbook.svelte').default;
   type DigestPanelComponent = typeof import('../components/DigestPanel.svelte').default;
   type MemoriesComponent = typeof import('./Memories.svelte').default;
+  type SkillsComponent = typeof import('./Skills.svelte').default;
   type WikiComponent = typeof import('./Wiki.svelte').default;
   type LibraryComponent = typeof import('./Library.svelte').default;
   type SamskarasComponent = typeof import('./Samskaras.svelte').default;
@@ -185,6 +186,11 @@
     memoryLibrarianOutcome,
   } from '$lib/agents/inflight-lease.svelte';
   import { emitMemoryChange } from '$lib/memory-events';
+  import { emitSkillChange } from '$lib/skill-events';
+  import {
+    skillsStore,
+    runSkillsSearch,
+  } from '$lib/skills-store.svelte';
   import {
     documentStore,
     runDocumentSearch,
@@ -311,6 +317,7 @@
   type GroceryListComponent = typeof import('../components/GroceryList.svelte').default;
   type GroceriesComponent = typeof import('./Groceries.svelte').default;
   type MemoryListComponent = typeof import('../components/MemoryList.svelte').default;
+  type SkillListComponent = typeof import('../components/SkillList.svelte').default;
   type CohortPanelComponent = typeof import('../components/CohortPanel.svelte').default;
   type AskUserCardComponent = typeof import('../components/AskUserCard.svelte').default;
   import { extractedTextDrawer } from '$lib/extractedTextDrawer.svelte';
@@ -352,12 +359,14 @@
   let GroceryListComp: GroceryListComponent | null = $state(null);
   let GroceriesComp: GroceriesComponent | null = $state(null);
   let MemoryListComp: MemoryListComponent | null = $state(null);
+  let SkillListComp: SkillListComponent | null = $state(null);
   let CohortPanelComp: CohortPanelComponent | null = $state(null);
   let AskUserCardComp: AskUserCardComponent | null = $state(null);
   let AuthComp: AuthComponent | null = $state(null);
   let CookbookComp: CookbookComponent | null = $state(null);
   let DigestPanelComp: DigestPanelComponent | null = $state(null);
   let MemoriesComp: MemoriesComponent | null = $state(null);
+  let SkillsComp: SkillsComponent | null = $state(null);
   let WikiComp: WikiComponent | null = $state(null);
   let LibraryComp: LibraryComponent | null = $state(null);
   let SamskarasComp: SamskarasComponent | null = $state(null);
@@ -402,6 +411,9 @@
   $effect(() => {
     if (drawerTab === 'memories' && !MemoriesComp) {
       void import('./Memories.svelte').then((m) => (MemoriesComp = m.default));
+    }
+    if (drawerTab === 'skills' && !SkillsComp) {
+      void import('./Skills.svelte').then((m) => (SkillsComp = m.default));
     }
   });
   $effect(() => {
@@ -469,6 +481,11 @@
     if (drawerTab === 'memories' && !MemoryListComp) {
       void import('../components/MemoryList.svelte').then(
         (m) => (MemoryListComp = m.default)
+      );
+    }
+    if (drawerTab === 'skills' && !SkillListComp) {
+      void import('../components/SkillList.svelte').then(
+        (m) => (SkillListComp = m.default)
       );
     }
   });
@@ -552,7 +569,7 @@
    * entries.
    */
   const drawerTab = $derived<
-    'chats' | 'groceries' | 'recipes' | 'memories' | 'wiki' | 'library' | 'artifacts' | 'samskara'
+    'chats' | 'groceries' | 'recipes' | 'memories' | 'wiki' | 'skills' | 'library' | 'artifacts' | 'samskara'
   >(route.drawer ?? 'chats');
   // Recipe and memory search/listing state has moved to the
   // RecipeList / MemoryList sidebar components.
@@ -596,6 +613,17 @@
     navigate({ drawer: 'wiki' }, { replace: true });
     if (app.supabase && !wikiStore.loaded && !wikiStore.loading) {
       void runWikiSearch(app.supabase);
+    }
+  }
+
+  // Skills drawer tab. Same lazy-load shape as memories - SkillList's
+  // $effect fires the first search via the shared `skillsStore`, but
+  // kicking it on tab-pick lets a deep-linked panel land on a
+  // non-empty listing.
+  function onPickSkillsTab(): void {
+    navigate({ drawer: 'skills' }, { replace: true });
+    if (app.supabase && !skillsStore.loaded && !skillsStore.loading) {
+      void runSkillsSearch(app.supabase);
     }
   }
 
@@ -661,6 +689,16 @@
     if (!app.supabase) return;
     if (wikiStore.loaded || wikiStore.loading) return;
     void runWikiSearch(app.supabase);
+  });
+
+  // Parallel for the skills tab. Same `loaded`-gate rationale - an
+  // account with zero skills would re-fire the load forever
+  // otherwise.
+  $effect(() => {
+    if (route.drawer !== 'skills') return;
+    if (!app.supabase) return;
+    if (skillsStore.loaded || skillsStore.loading) return;
+    void runSkillsSearch(app.supabase);
   });
 
   // Parallel for the library tab. Same `loaded`-gate rationale - a cold
@@ -2210,6 +2248,16 @@
   $effect(() => {
     if (!app.supabase || !sessionUserId) return;
     return app.supabase.subscribeToMemoryChanges(sessionUserId, emitMemoryChange);
+  });
+
+  // Realtime: the skills twin. The server-side skills chat tool (and
+  // another device's panel writes) reach the open Skills surfaces
+  // through this relay into the skill event bus; the panel's bus
+  // listener (listing refresh + open-skill reclassification) hangs
+  // off the bus (see Skills.svelte).
+  $effect(() => {
+    if (!app.supabase || !sessionUserId) return;
+    return app.supabase.subscribeToSkillChanges(sessionUserId, emitSkillChange);
   });
 
   // Realtime: the recipes leg of the same family. The recipe_* tools
@@ -7226,6 +7274,16 @@
               type="button"
               role="tab"
               class="thread grow"
+              class:active={drawerTab === 'skills'}
+              aria-selected={drawerTab === 'skills'}
+              onclick={() => onPickSkillsTab()}
+            >Skills</button>
+          </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
               class:active={drawerTab === 'artifacts'}
               aria-selected={drawerTab === 'artifacts'}
               onclick={() => onPickArtifactsTab()}
@@ -7532,6 +7590,13 @@
              listing. Clicking an article surfaces it in the main
              panel. onSelect mirrors the other tabs on mobile. -->
         <WikiList onSelect={closeDrawerOnMobile} />
+      {:else if drawerTab === 'skills'}
+        <!-- Skills tab. SkillList owns the search and the
+             name + snippet rows. Clicking a skill surfaces it in the
+             main panel. onSelect mirrors the other tabs on mobile. -->
+        {#if SkillListComp}
+          <SkillListComp onSelect={closeDrawerOnMobile} />
+        {/if}
       {:else if drawerTab === 'samskara'}
         <!-- Samskara diagnostics tab. SamskaraBrowseList owns the
              search, the tier/sort/hide-similar controls, and selection.
@@ -7665,6 +7730,18 @@
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
             <polyline points="17 8 12 3 7 8" />
             <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        {/snippet}
+        {#snippet allSkillsIcon()}
+          <!-- Feather "list" - reads as "back to the skills list". -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="8" y1="6" x2="21" y2="6" />
+            <line x1="8" y1="12" x2="21" y2="12" />
+            <line x1="8" y1="18" x2="21" y2="18" />
+            <line x1="3" y1="6" x2="3.01" y2="6" />
+            <line x1="3" y1="12" x2="3.01" y2="12" />
+            <line x1="3" y1="18" x2="3.01" y2="18" />
           </svg>
         {/snippet}
         {#snippet deepSleepIcon()}
@@ -7991,6 +8068,27 @@
           <TopBarActions {actions} menuLabel="Samskara actions" />
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Samskara</span>
+          </div>
+        {:else if drawerTab === 'skills'}
+          <!-- Skills top-bar. One action: clear the open skill so the
+               panel returns to the browse list. The detail and edit
+               surfaces carry no other back affordance, so a deep-linked
+               or long-open detail was a dead end short of editing the
+               URL. No-op when nothing is open, mirroring the Library
+               upload button's always-rendered shape. -->
+          {@const actions = [
+            {
+              id: 'all-skills',
+              label: 'All skills',
+              title: 'Back to all skills',
+              class: 'new-thread-mini',
+              onclick: () => navigate({ skill: null }),
+              icon: allSkillsIcon,
+            },
+          ]}
+          <TopBarActions {actions} menuLabel="Skills actions" />
+          <div class="title-wrap">
+            <span class="title-btn panel-section-label">Skills</span>
           </div>
         {:else}
           <!-- Library top-bar. The upload form lives in Library.svelte's
@@ -9368,6 +9466,15 @@
             bind:triggerChangelogView={wikiChangelogTrigger}
             bind:triggerSkippedView={wikiSkippedTrigger}
           />
+        {/if}
+      {:else if drawerTab === 'skills'}
+        <!-- Skills panel. Same inline-no-modal-chrome shape. The
+             sidebar SkillList shares the same `skillsStore` so a
+             search keystroke filters both surfaces. Create / edit /
+             delete happen inline; selecting a skill (route.skill)
+             shows its detail with the body rendered as markdown. -->
+        {#if SkillsComp}
+          <SkillsComp />
         {/if}
       {:else if drawerTab === 'samskara'}
         <!-- Samskara diagnostics panel. Overview is the default landing

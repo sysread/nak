@@ -404,12 +404,57 @@ describe('every tool available every turn', () => {
       'wiki',
       'followups',
       'library',
+      'skills',
       'images',
     ]) {
       expect(prompt).toMatch(new RegExp(`^  ${name} : `, 'm'));
     }
     expect(prompt).toMatch(/^      - recipe_save : /m);
     expect(prompt).toMatch(/^  - memory_search : /m);
+  });
+
+  it('carries the skills block: scan the turn-metadata index, op=get on a match, op=list when absent, proactive capture, hygiene', () => {
+    // SKILLS_BLOCK teaches the model to use and maintain the user's
+    // saved skills. Load-bearing beats, grep-style so phrasing tweaks
+    // don't churn the suite:
+    //   (1) what skills are, distinct from memories and custom
+    //       prompts - without the distinction the model files task
+    //       guidance into memories, where it never loads as
+    //       instructions;
+    //   (2) the index rides the turn metadata - worded for the tail
+    //       position it actually occupies (AFTER the conversation),
+    //       never implying it precedes the user's message;
+    //   (3) op=get on a plausible match, and op=list before
+    //       concluding the user has no relevant skill (a failed fetch
+    //       is indistinguishable from an empty store);
+    //   (4) proactive capture via op=save and announcing every write
+    //       in the reply - the anti-silent-mutation rule;
+    //   (5) the skills-vs-memories ROUTING rule: a user statement of
+    //       HOW they want a task done is skill material even when no
+    //       similar skill exists yet - live QA showed the model
+    //       routing such statements to memory_save without it (the
+    //       index entry is what triggers skill-thinking, so the
+    //       first skill was never created);
+    //   (6) hygiene: short descriptions, detail in the body, a
+    //       never-matching skill is noise.
+    const prompt = gatedPrompt();
+    expect(prompt).toMatch(/saved skills/);
+    expect(prompt).toMatch(/distinct from memories/);
+    expect(prompt).toMatch(/turn metadata/);
+    expect(prompt).toContain('op=get');
+    expect(prompt).toContain('op=list');
+    expect(prompt).toContain('op=save');
+    expect(prompt).toMatch(/announce every/i);
+    // Routing rule beats: the how-to-do-a-task trigger must point at
+    // op=save, the doing-vs-context test must be stated, and the
+    // empty-index discouragement must be countered.
+    expect(prompt).toMatch(/skill material/i);
+    expect(prompt).toMatch(/if it changes the doing, it is a skill/i);
+    expect(prompt).toMatch(/empty skills index/i);
+    // Reading-order caveat: the block must never claim the index
+    // arrives before the user's words (it rides the tail metadata
+    // message, after the conversation).
+    expect(prompt).not.toMatch(/before the user'?s message/i);
   });
 
   it('keeps the wiki and library guidance, minus the enable step', () => {

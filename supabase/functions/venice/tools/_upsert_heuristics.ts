@@ -1,9 +1,9 @@
 /**
- * Natural-key dedup heuristics for upsert-style tools - Deno-island
- * copy of the browser-side src/lib/tools/upsert.ts resolveNaturalKeyMatch.
- * Deliberately duplicated, not imported: the edge function cannot load
- * browser modules (see supabase/functions/README.md). Keep in sync
- * with the browser original.
+ * Natural-key dedup heuristics for upsert-style tools - the shared
+ * helper wiki_save, recipe_save, doc_save, and skills all route
+ * through. This is the canonical live copy: no browser twin exists
+ * (only the edge tools upsert by natural key), so there is nothing
+ * to keep in sync.
  *
  * The client surface is typed loosely (the raw postgrest chain is
  * thenable in awkward ways for structural typing); call sites cast

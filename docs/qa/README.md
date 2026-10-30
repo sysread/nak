@@ -372,3 +372,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   on `<html>`, square/flat/borderless rendering with side-border chat
   bubbles in both color modes, boot-cache reload (including legacy
   two-field blobs), and Supabase sync of `uiStyle`.
+- [skills](./use-cases/skills.md) - the Skills drawer tab CRUD round
+  trip (create / edit / delete, duplicate-name refusal, sidebar
+  search, deep link), the chat-driven `skills` tool round trip
+  (save with realtime delivery to an open panel, get on a matching
+  task, search), and the per-turn skills index landing on the next
+  turn's request wire.

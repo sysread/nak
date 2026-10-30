@@ -2,7 +2,8 @@
  * Realtime domain slice of the Supabase data layer: every subscribe*
  * channel the UI holds open (the per-thread message echo stream, the
  * sidebar's thread relay, the coarse "something changed" relays for
- * wiki articles / records, memories, recipes and recipe records, the
+ * wiki articles / records, memories, recipes and recipe records,
+ * skills, the
  * private Broadcast channels for edge-function logs, samskara mints
  * and agent-run progress, and the profiles-row relays for the
  * in-flight lease and last-run outcome), plus the point reads paired
@@ -561,6 +562,42 @@ export function subscribeToMemoryChanges(
         event: '*',
         schema: 'public',
         table: 'memories',
+        filter: `user_id=eq.${userId}`,
+      },
+      () => {
+        onChange();
+      }
+    )
+    .subscribe();
+  return () => {
+    void client.removeChannel(channel);
+  };
+}
+
+/**
+ * Subscribe to any change on the signed-in user's skills. The
+ * memories twin, for the skills chat tool: it writes server-side in
+ * the venice function, where no browser event bus can reach, so this
+ * replication-stream subscription is how an open Skills panel learns a
+ * model-driven write landed. The caller (Chat.svelte) routes the
+ * notification into the skills event bus so every skills surface
+ * refetches through the path it already had. Same coarse contract -
+ * "something changed", no row deltas. DELETE delivery rides the
+ * (id, user_id) replica-identity index (see schema.sql).
+ */
+export function subscribeToSkillChanges(
+  client: SupabaseClient,
+  userId: string,
+  onChange: () => void
+): () => void {
+  const channel = client
+    .channel(uniqueTopic(`skills:${userId}`))
+    .on(
+      'postgres_changes' as never,
+      {
+        event: '*',
+        schema: 'public',
+        table: 'skills',
         filter: `user_id=eq.${userId}`,
       },
       () => {

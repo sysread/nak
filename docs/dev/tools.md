@@ -195,6 +195,28 @@ surface lives in the always-on set above.
   user attached into a permanent searchable document, or update an
   existing document's metadata by id), `doc_delete`. See
   `./library.md`.
+- **`skills`** - the single `skills` combination tool: list / get /
+  search / save / delete behind one `op` enum discriminator plus
+  flat per-op params. This is the FIRST combination tool in nak -
+  every other toolbox member is a verb tool with its own schema -
+  adopted on live calibration data (no tools-array cap below 512,
+  latency flat through ~69 tools, both discriminator forms
+  composing reliably under free choice). One tool cannot be split
+  across always-on and a write toolbox, so the reads ride inside
+  it. Toolbox membership is catalog grouping only - every tool is
+  declared on the wire every request - so joining a toolbox
+  changes no wire behavior. That is also why
+  `alwaysOnToolbox`'s hand-written description prose needs no
+  skills edit. Per-op required fields (name + description + body
+  on create, query on search, name-or-id on get and delete)
+  cannot be expressed in one flat JSON Schema, so op-specific
+  validation routes through `ArgErrors` in the edge
+  implementation (the split is recorded in the wire schema's
+  header, `src/lib/tools/skills.schema.ts`). The toolbox
+  description carries the maintenance trigger the cookingToolbox pattern set (capture recurring task
+  guidance with `op=save` and say so in the reply). Tool writes
+  stamp `last_author = 'assistant'`; browser panel writes stamp
+  `'user'`. See [`./skills.md`](./skills.md).
 - **`images`** - `generate_image`. A generation
   spends Venice credits and writes a persistent attachment.
   Unusually for a tool, its real output does NOT come back in the
@@ -257,7 +279,8 @@ Browser catalog (`src/lib/tools/`):
 
 - `index.ts` - the toolbox definitions (`alwaysOnToolbox`,
   `cookingToolbox`, `memoriesToolbox`, `wikiToolbox`,
-  `libraryToolbox`, `imagesToolbox`), the ordered `TOOLBOXES` list,
+  `followupsToolbox`, `libraryToolbox`, `skillsToolbox`,
+  `imagesToolbox`), the ordered `TOOLBOXES` list,
   the flat `TOOLS` view used by tests, the wire builder
   (`buildToolList`), and `getToolFormatters` for the tool-call
   detail panel. Every `ToolDef` here is a `serverSideTool(schema)`.
@@ -366,8 +389,9 @@ Edge dispatch (`supabase/functions/venice/`):
 ## Data model
 
 - **Toolbox definitions** (`alwaysOnToolbox`, `cookingToolbox`,
-  `memoriesToolbox`, `wikiToolbox`, `libraryToolbox`,
-  `imagesToolbox`) - each is a `Toolbox` with a stable name, a
+  `memoriesToolbox`, `wikiToolbox`, `followupsToolbox`,
+  `libraryToolbox`, `skillsToolbox`, `imagesToolbox`) - each is a
+  `Toolbox` with a stable name, a
   human-readable description (surfaced in the system-prompt
   catalog), and an ordered `tools: ToolDef[]` array.
 - **`TOOLBOXES`** - ordered list: always-on first, then the write

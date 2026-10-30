@@ -63,6 +63,7 @@ import './recipe_record_search.ts';
 import './recipe_record_update.ts';
 import './recipe_save.ts';
 import './research_docs.ts';
+import './skills.ts';
 import './update_title.ts';
 import './web_search.ts';
 import './wiki_save.ts';
