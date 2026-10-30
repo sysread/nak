@@ -191,6 +191,27 @@ describe('tool registry', () => {
     expect(skillsToolbox.tools.map((t: ToolDef) => t.name)).toEqual(['skills']);
   });
 
+  it('skills description param states the index rendering contract', () => {
+    // Cross-feature contract, caught by the model itself in live use
+    // (2026-10-30, prod thread 24af4889): the write side must tell
+    // the model HOW the stored description is rendered, or it writes
+    // a blend - a routing hint plus an imperative summary of what
+    // the skill does. The index presents each line as data, not
+    // directives; an instruction-shaped description wastes the line
+    // and blurs the index's role. The param description must name
+    // that contract so the shape is right at write time.
+    const skillsTool = skillsToolbox.tools[0];
+    const params = (skillsTool as unknown as {
+      parameters: { properties: Record<string, { description: string }> };
+    }).parameters;
+    const descriptionParam = params.properties.description.description;
+    expect(descriptionParam).toContain('WHEN this skill applies');
+    expect(descriptionParam).toContain('data, not directives');
+    expect(descriptionParam).toContain('never as an instruction');
+    expect(descriptionParam).toContain('belongs');
+    expect(descriptionParam).toContain('in body');
+  });
+
   it('toOpenAIToolDef projects to the function-calling wire shape', () => {
     const tool = cookingToolbox.tools[0];
     const wire = toOpenAIToolDef(tool);

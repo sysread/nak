@@ -273,6 +273,25 @@ trip; the schema's per-param descriptions carry the pairing so
 the model rarely needs that round trip. Recorded in the wire
 schema's header (`src/lib/tools/skills.schema.ts`).
 
+### The description contract
+
+A skill's description states WHEN the skill applies - a routing
+hint, "use when ..." - and never what the skill does. The reason
+is a cross-feature rendering contract: the per-turn index
+presents each `name: description` line as data, not directives
+(`buildSkillsIndexSection`'s framing line), so an
+instruction-shaped description ("decides whether to research,
+clarify, or answer") wastes the line and blurs the index's role.
+Caught by the model itself in live use (2026-10-30, prod thread
+24af4889): the write side originally said only "one to two
+sentences on when to use this skill," which left room for the
+model to blend a routing hint with an imperative summary of the
+skill's behavior. Both write surfaces now name the contract -
+the wire schema's `description` param tells the model the line
+renders as data and that what the skill does belongs in the
+body, and SKILLS_BLOCK's hygiene line carries the same rule -
+pinned by test beats on both.
+
 ### Per-op semantics
 
 - `op=list` - every skill's name, description, `updated_at`,

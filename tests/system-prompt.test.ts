@@ -455,6 +455,10 @@ describe('every tool available every turn', () => {
     expect(prompt).toMatch(/if it changes the doing, it is a skill/i);
     expect(prompt).toMatch(/empty skills index/i);
     expect(prompt).toMatch(/wiki is not a destination for task guidance/i);
+    // Description-shape contract (live-caught 2026-10-30): the index
+    // line is data, so descriptions must state when a skill applies,
+    // never what it does.
+    expect(prompt).toMatch(/states when the skill applies, never what it does/i);
     // Reading-order caveat: the block must never claim the index
     // arrives before the user's words (it rides the tail metadata
     // message, after the conversation).

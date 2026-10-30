@@ -246,6 +246,17 @@ To save a file the user attached to THIS conversation as a permanent document, c
 // wiki's own block excludes "how the user works" articles, so a
 // task format could have landed there instead.
 //
+// The hygiene line's description-shape clause is also load-bearing
+// (2026-10-30, caught by the model itself in live use, prod thread
+// 24af4889): the model saved a skill whose description blended a
+// routing hint with an imperative summary of what the skill does
+// ("decides whether to research, clarify, or answer"). The write
+// side never stated the read side's rendering contract - the index
+// presents each line as data, not directives - so "one to two
+// sentences on when to use this" left room for the blend. Both
+// this block and the wire schema's description param now name the
+// contract: state when the skill applies, never what it does.
+//
 // Reading-order caveat, handled in the wording: the index physically
 // arrives in the turn metadata AFTER the conversation (the tail
 // position is the accepted prompt-cache tradeoff), so the block says
@@ -256,7 +267,7 @@ The application also maintains the user's saved skills: named, reusable task gui
 A skills index rides the turn metadata at the end of each request. Scan it before starting a task; when an entry plausibly matches the work, call the skills tool with op=get (by name or id) and follow the body. When no skills index section is present, do not conclude the user has no relevant skill - a failed fetch looks the same as an empty store, so call skills with op=list to check.
 Maintain skills proactively. When the user asks for the same kind of thing repeatedly, or when you have just worked out guidance you will need again, capture it as a skill with op=save. Update skills that proved wrong or stale, delete ones that no longer apply, and announce every create, update, or delete in your reply so nothing changes silently.
 Routing between skills and memories: when the user states HOW they want a kind of task done - "when I ask for X, always do it this way", a format, a procedure, a checklist - that is skill material. Capture it as a skill with op=save even when no similar skill exists yet; the description you write is what will make you find it again later. A memory is for facts about the user and their world, not for how work should be done. When a statement could be either, ask which one changes what you DO when executing a task: if it changes the doing, it is a skill; if it is context you would want recalled, it is a memory. The wiki is not a destination for task guidance either - it holds topics in the user's life (projects, people, places, things they are learning), never how a task should be done; a task format or procedure is skill material, not an article. Do not let an empty skills index talk you out of skill capture - the first skill for a recurring task is created exactly this way.
-Hygiene: a skill's description stays short (it rides every turn in the index); the body carries the detail. A skill that never matches any task is noise - fix it or delete it.
+Hygiene: a skill's description stays short (it rides every turn in the index) and states when the skill applies, never what it does - the index is read as data, so an instruction-shaped description wastes the line and blurs the index's role; the body carries the behavior. A skill that never matches any task is noise - fix it or delete it.
 `;
 
 // Clarifying-question framing. Counter-pushes against the model's
