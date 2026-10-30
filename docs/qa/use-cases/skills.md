@@ -118,6 +118,43 @@ so this case is their only regression net.
   the sidebar, clears the `skill` URL param, and lands back on
   the list surface.
 
+## Hone and capture (multi-conversation)
+
+These steps pin the system prompt's sufficiency, verified live
+before the feature merged: the model must HONE an existing skill
+from a bare preference statement, USE the honed version in a
+fresh thread, and CAPTURE the first skill for an untracked
+recurring task unprompted (the skills-vs-memories routing rule -
+without it the model routed these to `memory_save`).
+
+1. **Hone.** In a NEW thread send only a preference statement,
+   with no instruction to update anything: `Quick note: from now
+   on my weekly updates drop the Risks section - just Wins, then
+   Next Steps.`
+2. **Honed re-use.** In another NEW thread: `Draft my weekly
+   update from these notes: fixed the login bug; docs rewrite
+   starts Monday.`
+3. **Proactive capture.** Wipe the skills table first (so no
+   index entry can trigger skill-thinking), then in a NEW thread
+   send, with no mention of skills or saving: `When I ask you to
+   scale a recipe, I always want the ingredient list rescaled per
+   serving, never the whole batch, and metric units only.` If no
+   skill was captured, send: `Same deal when I ask you to halve
+   one.`
+
+Expected:
+
+- (Hone) The model updates the `qa-weekly-report` skill itself
+  (`op=save` with the id or by name) and says so in the reply;
+  the DB body and description both reflect the two-section
+  format.
+- (Honed re-use) The reply follows the NEW format - Wins then
+  Next Steps, no Risks - matching the DB body.
+- (Capture) The model captures a skill via `op=save` (searching
+  for an existing match first is fine) and announces it; no
+  memory row is created for the preference; `last_author =
+  'assistant'`.
+
 ## Cleanup
 
 - Delete any leftover QA skills:
@@ -136,3 +173,4 @@ so this case is their only regression net.
 | ---- | --- | ------ | ------ | ----- |
 | 2026-10-29 | local dev stack | a70faf94 | PARTIAL PASS | 10/11 steps pass, 0 console errors, table + threads cleaned. Step 9 PARTIAL: skills index verified in the wire dump; op=get legitimately skipped in-thread (body already in context) - a fresh-thread probe verified the index -> get -> follow-body path end to end; use-case reworded (fresh thread, supplied notes, op=get demoted to expected-not-required). Findings fixed after the run: the skills tab fell through to the Library top bar (wrong title + upload button) and skill detail had no back-to-list affordance (step 6 needed a URL workaround) - both fixed by the skills top-bar branch. Log-drawer instructions corrected (Debug+ level, chat-loop source). Realtime relay verified (model save appeared in the parked panel with no refresh); latency not measured. |
 | 2026-10-29 | local dev stack | 95cb853d | PASS (targeted re-check) | The two fixed surfaces re-verified: top bar reads Skills with no Upload-document button while a detail is open; the All-skills action clears the skill param and lands on the browse list; create/delete round trip clean; 0 console errors; skills table 0 rows after cleanup. Non-blocking notes: All-skills renders on the list surface too (documented no-op, the Library upload button's shape); the action carries the new-thread-mini sizing class like its Library sibling. |
+| 2026-10-30 | local dev stack | 98fd6142 (merged as e20ab151) | PASS (merge gate) | Full-surface verification before merge. UI: 14/14 (panel CRUD, duplicate refusal, top bar + back, deep link, 55-row seed with sidebar AND panel pagination, depth-preserving realtime refresh, hint gating, realtime DELETE collapse, cancel-after-remote-update, search); 0 console errors. LLM: 5/6 - save/announce/realtime, index verified in the wire dump, op=get + format followed, chat search; the HONE phase passed unprompted (the model updated the skill AND corrected its stale description on its own); the CAPTURE phase initially FAILED (a casually-stated preference routed to memory_save - no routing rule existed). Fixed by the skills-vs-memories routing paragraph in SKILLS_BLOCK; the re-test PASSED on the first message with no memory write (the model searched for an existing skill, then captured). Model-trait residuals accepted: one phantom/missing-param fumble per session on write tools (self-corrects in one round); small-model arithmetic slips are model quality, not feature. Hone/capture steps added to this use-case from the verified script. |
