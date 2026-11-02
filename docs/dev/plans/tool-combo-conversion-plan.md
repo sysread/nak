@@ -154,11 +154,11 @@ Verified facts the milestones rely on:
   update/delete/link_create/file_attach; `:1022-1032`),
   `agents/wiki_librarian.ts` (wiki search; no-create save via
   `asAgentToolNoCreate`; delete via `asAgentToolNoThread`; record
-  list/create/update/delete/link_create/link_delete; `:458-469`),
+  list/create/update/delete/link_create/link_delete; `:461-471`),
   `agents/wiki_records.ts` (wiki search/list; record
   list/create/link_create/file_attach; `:341-350`),
   `agents/wiki_recall.ts` (hand-rolled wiki_search wrapper,
-  `:156-159`), and `agents/context.ts` (inline wikiSearch +
+  `:155-165`), and `agents/context.ts` (inline wikiSearch +
   followupList executes, `:182-183`).
 
 ## MILESTONES
@@ -173,13 +173,15 @@ a branch, PR, merge (deploy via CI), and live-thread verification.
 - Ops: `attach` / `remove` / `reorder` / `label`. The
   cookingToolbox prose ("caption recipe photos") aligns to `label`
   in this milestone.
-- **Intent note (from archaeology):** the four-verb split was a
-  recorded anti-merge decision - commit `a49dd52d` (2026-05-02):
-  "The verbs are split rather than folded into a multi-mode tool
-  because 'set the photo set to X' is the kind of contract that
-  invites the LLM to forget to enumerate the existing photos and
-  silently clear them. Each verb's contract is closed." The merge
-  does not reopen that contract: every per-op body, closed
+- **Intent note (from archaeology):** three of the four verbs were
+  a recorded anti-merge decision - commit `a49dd52d` (2026-05-02,
+  attach/remove/reorder): "The verbs are split rather than folded
+  into a multi-mode tool because 'set the photo set to X' is the
+  kind of contract that invites the LLM to forget to enumerate the
+  existing photos and silently clear them. Each verb's contract is
+  closed." (`recipe_photo_label_set` arrived later, `4dbadf65`
+  #545 2026-09-08, with no recorded rationale either way.) The
+  merge does not reopen that contract: every per-op body, closed
   contract, and required field survives unchanged - only the
   envelope changes from name-to-name to name-plus-op, the same
   mechanism the skills calibration proved the model composes
@@ -222,12 +224,15 @@ a branch, PR, merge (deploy via CI), and live-thread verification.
   catalog (`src/lib/tools/recipe_save.schema.ts`, 7033 bytes) and
   every observed-failure guard survives verbatim, compressed per
   the collapse pattern.
-- Chat-only.
+- Chat-only. **First read-absorbing milestone:** `recipe_list` /
+  `recipe_get` are always-on reads, so this milestone drops them
+  from the `alwaysOnToolbox` description prose (`index.ts:291-294`).
 - **Pre-merge dependency: write impl tests for `recipe_list` /
   `recipe_get` first** (zero coverage today; save and delete are
   covered by `recipe_save.test.ts`, `recipe_save_edit_form.test.ts`
   - edit-by-id becomes `op=save` + id - and
   `tool-batch.test.ts:251-258`).
+- Tests: `tests/tools.test.ts` toolbox-membership arrays.
 - QA: `cookbook-recipe-lifecycle.md`, `cookbook-save-validation.md`
   baselines + re-runs.
 
@@ -235,13 +240,14 @@ a branch, PR, merge (deploy via CI), and live-thread verification.
 
 - Ops: `list` / `get` / `search` (absorbed always-on reads) +
   `create` / `update` / `delete`.
-- First read-absorbing milestone: the combo rides the `cooking`
-  toolbox; `alwaysOnToolbox` description prose drops the
-  recipe_record reads (`index.ts:291-294`) and `cookingToolbox`
-  op-ifies its `recipe_record_create` capture trigger (`:349-352`).
+- The combo rides the `cooking` toolbox; `alwaysOnToolbox`
+  description prose drops the recipe_record reads
+  (`index.ts:291-294`) and `cookingToolbox` op-ifies its
+  `recipe_record_create` capture trigger (`:349-352`).
 - Chat-only. Tests: `recipe_record_tools.test.ts` covers all six
   impls (best-covered cluster in the repo) - ports mechanically;
   keep the `['string','null']` null-outcome shape the test pins.
+  `tool-batch.test.ts:31` imports `recipeRecordDelete` directly.
   QA: `recipe-records.md` baseline + re-run.
 
 ### M5 - `docs` (6 tools to 1)
@@ -380,7 +386,10 @@ a branch, PR, merge (deploy via CI), and live-thread verification.
   retired names absent from `TOOLS`, combo registers once, unknown
   op rejected.
 - `tests/system-prompt.test.ts` catalog assertions update per
-  milestone (line counts and names).
+  milestone (line counts and names). So does `tests/tools.test.ts`
+  (exact toolbox tool-name arrays, `:88-176`) - every milestone
+  touches it; it is gate-loud, but named here so the sweep is
+  mechanical.
 - The `activity` narration param is untouched - injected once per
   call at `toOpenAIToolDef` regardless of combo shape.
 - Edge tests dispatch by calling registered ToolDefs' `execute()`
@@ -398,7 +407,7 @@ a branch, PR, merge (deploy via CI), and live-thread verification.
   pairings carried in per-param descriptions - is copied to every
   combo, so the model rarely needs the ArgErrors round trip to
   learn a pairing.
-- **Agent prompt drift.** Five agent files name merged tools in
+- **Agent prompt drift.** Six agent files name merged tools in
   prose or wrap merged impls; missing one in M6/M7/M8 leaves the
   agent model calling a retired name or the agent's import failing
   the deno build (loud, recoverable). The per-milestone checklist
