@@ -146,6 +146,14 @@ export type StreamSignal =
       kind: VeniceErrorKind;
       message: string;
       retryable: boolean;
+      /**
+       * HTTP status when the error came from a non-2xx Venice response
+       * (VeniceError.status). Optional so transport/network errors carry
+       * none. The round-loop consumer threads it into lastErrorInput so
+       * translateError's status branches fire; the browser's error
+       * handler reads only kind/message/retryable and ignores extras.
+       */
+      status?: number;
     }
   | {
       type: 'rate_limit_wait';

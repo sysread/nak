@@ -85,6 +85,20 @@ const RATE_LIMIT_WAIT_CAP_MS = 60_000;
 const TRUNCATED_MAX_ATTEMPTS = 2;
 const TRUNCATED_BACKOFF_MS = 500;
 
+// Pre-event transport-failure retry: a non-2xx Venice status ('http' -
+// anything but 401/403/429) or a connect failure ('network') throws
+// before the first stream event, so the identical body is re-issuable.
+// Capped at one automatic retry: the request never reached inference,
+// so a longer schedule would only add wall-clock, and a deterministic
+// 400 (malformed body, context overflow) just costs one bounded extra
+// round-trip. This deliberately diverges from veniceComplete's 4xx
+// exclusion (see _shared/venice.ts) because the streaming path's
+// motivating incident was itself a 4xx: Venice 400'd the turn when its
+// server-side fetch of a fresh signed image URL failed transiently
+// (2026-11-02, image-retry-data-uri-plan.md).
+const HTTP_MAX_ATTEMPTS = 2;
+const HTTP_RETRY_BACKOFF_MS = 1_500;
+
 export interface StreamingCompletionOpts {
   apiKey: string;
   /**
@@ -108,6 +122,12 @@ export interface StreamingCompletionOpts {
    * via streamGuardsForModel().
    */
   guardsOverride?: StreamGuard[];
+  /**
+   * Override the pre-event http/network retry backoff (tests).
+   * Production callers leave this undefined and get
+   * HTTP_RETRY_BACKOFF_MS.
+   */
+  httpRetryBackoffMs?: number;
   /**
    * When set, the raw SSE stream from Venice is mirrored to a file at
    * this path - one JSONL line per frame, each carrying both the raw
@@ -306,6 +326,9 @@ async function* withRateLimitRetry(
 ): AsyncGenerator<CompletionEvent | StreamSignal, void, void> {
   let rateLimitAttempt = 0;
   let truncatedAttempt = 0;
+  let httpAttempt = 0;
+  const httpRetryBackoffMs =
+    opts.httpRetryBackoffMs ?? HTTP_RETRY_BACKOFF_MS;
   for (;;) {
     let emitted = false;
     try {
@@ -376,6 +399,41 @@ async function* withRateLimitRetry(
           throw abortErr;
         }
         // Loop back into the streamFromVenice attempt fresh.
+        continue;
+      }
+      // Pre-event transport-failure retry. 'http' (non-2xx other than
+      // 401/403/429) and 'network' (connect failure) throw at
+      // fetch-open, before any event yields, so nothing has been
+      // delivered and the identical body is safe to re-issue. The
+      // emitted check is belt-and-suspenders: if either kind ever
+      // surfaced post-emission, it stays terminal rather than
+      // desyncing the consumer's bubble. No stream_retry signal -
+      // there is nothing to reset, and the browser drops any reason
+      // other than 'truncated' anyway.
+      const isPreEventHttp =
+        err instanceof VeniceError &&
+        (err.kind === 'http' || err.kind === 'network');
+      if (isPreEventHttp) {
+        if (
+          httpAttempt >= HTTP_MAX_ATTEMPTS - 1 ||
+          emitted ||
+          opts.signal.aborted
+        ) {
+          throw err;
+        }
+        httpAttempt += 1;
+        console.log(
+          `[withRateLimitRetry] pre-event ${err.kind} failure; retrying (attempt ${httpAttempt})`
+        );
+        const interrupted = await sleepCancellable(
+          httpRetryBackoffMs,
+          opts.signal
+        );
+        if (interrupted || opts.signal.aborted) {
+          const abortErr = new Error('Aborted');
+          abortErr.name = 'AbortError';
+          throw abortErr;
+        }
         continue;
       }
       const retriesExhausted =
@@ -733,6 +791,10 @@ function errorEventFor(err: unknown): StreamSignal {
       kind: err.kind as VeniceErrorKind,
       message: err.message,
       retryable: err.kind === 'rate_limit' || err.kind === 'network',
+      // Status rides so the terminal last_error translation can branch
+      // on it (translateError's http case); without it a status-400
+      // lands in the no-status branch and reads retryable:true.
+      status: err.status,
     };
   }
   if (err instanceof GuardExhaustedError) {

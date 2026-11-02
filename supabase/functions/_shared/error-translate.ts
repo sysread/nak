@@ -1,12 +1,12 @@
 // User-facing translation for chat-turn failures.
 //
 // One canonical mapping from "the system threw or routed an error" to
-// "the user-facing string we put in front of them," shared between the
-// Deno streaming function (which writes the result onto threads.last_error)
-// and the browser (which uses the same helper for transient errors that
-// never reach the function - JWT expiry mid-stream, channel drop). The
-// browser imports via the $shared alias (see vite.config.ts); the
-// function imports as a normal relative path.
+// "the user-facing string we put in front of them." Function-side only
+// today: the Deno streaming function writes the result onto
+// threads.last_error. (The browser no longer imports this helper - it
+// parses the last_error JSON via parseLastError in
+// src/lib/ui/completion-status.ts; an earlier design shared the helper
+// across the runtime boundary.)
 //
 // The output shape mirrors the threads.last_error column:
 //   { kind, message, retryable }

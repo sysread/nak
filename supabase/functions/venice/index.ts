@@ -62,6 +62,7 @@ import {
   type ModelPriceCaps,
 } from '../_shared/price-cap.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
+import { inlineAttachmentImages } from './inline-images.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
 import { runDigestSweepTick } from './agents/digest.ts';
 import { runWikiManualUpdate } from './agents/wiki_manual.ts';
@@ -1144,6 +1145,34 @@ async function handleStreamFresh(
       return json({ error: err.message, kind: err.kind }, err.status ?? 403);
     }
     throw err;
+  }
+
+  // Inline owned image attachments as data URIs before the turn starts
+  // (venice/inline-images.ts): the wire body's image_url parts arrive as
+  // signed Storage URLs that Venice fetches server-side every round; a
+  // slow or erroring fetch 400s the whole turn. The phase never throws
+  // and degrades every failure to the signed URL, so the worst case is
+  // the pre-inline behavior. Runs inside the synchronous envelope POST,
+  // which is why it is bounded in bytes and time. After the inFlight
+  // early-return and the 403 gates above, so double-sends and rejected
+  // models never pay for downloads; every round and retry attempt below
+  // inherits the inlined body.
+  try {
+    const inlined = await inlineAttachmentImages(
+      ctx.admin,
+      body.body as Record<string, unknown>,
+      body.threadId
+    );
+    if (inlined.inlined > 0) {
+      console.log(
+        `[inline-images] inlined=${inlined.inlined} bytes=${inlined.bytesInlined}`
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[inline-images] inline phase failed; images stay as signed URLs:`,
+      err
+    );
   }
 
   // Kick off the orchestrator. It owns its own AbortController (the

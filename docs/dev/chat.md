@@ -360,7 +360,18 @@ A chat turn goes:
   owns it. A 502 from `/complete` therefore now means the retry
   schedule was exhausted (sustained outage), and the handler logs
   `kind`/`status`/message to the function logs since the edge
-  gateway records only the bare status code.
+  gateway records only the bare status code. The streaming wrapper
+  (`withRateLimitRetry` in `getStreamingCompletion.ts`) carries its
+  own retry classes: rate-limit (Retry-After-aware), mid-stream
+  truncation, strict-validation strip-and-retry, and - since the
+  image turn resilience work - one automatic retry for a failure that
+  lands *before the first streamed event*: a non-2xx Venice status
+  other than 401/403/429 (`kind='http'`) or a connect failure
+  (`kind='network'`). The request never reached inference, so the
+  identical body is re-issued after a short fixed backoff
+  (`httpRetryBackoffMs` overrides it in tests). Mid-stream failures
+  stay terminal - the wrapper refuses to re-issue once events have
+  been delivered.
 - `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
   `onGuardRetry` (a function-side output guard discarded a junk
