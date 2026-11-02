@@ -168,9 +168,9 @@ Each of these groups only tools that mutate user data; every read
 surface lives in the always-on set above.
 
 - **`cooking`** - recipe writes: `recipe_save` / `recipe_delete`,
-  the photo tools (`recipe_photos_attach` / `_remove` / `_reorder`,
-  `recipe_photo_label_set`), and the cooking-log record writes
-  (`recipe_record_create` / `recipe_record_update` /
+  the photo combination tool (`recipe_photos` - attach / remove /
+  reorder / label behind one op enum), and the cooking-log record
+  writes (`recipe_record_create` / `recipe_record_update` /
   `recipe_record_delete` - dated entries for what happened when the
   user cooked a recipe; the capture trigger rides this toolbox's
   description, which is the catalog-visible surface). See

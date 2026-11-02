@@ -79,10 +79,7 @@ import { recipeListSchema } from './recipe_list.schema';
 import { recipeGetSchema } from './recipe_get.schema';
 import { recipeSaveSchema } from './recipe_save.schema';
 import { recipeDeleteSchema } from './recipe_delete.schema';
-import { recipePhotosAttachSchema } from './recipe_photos_attach.schema';
-import { recipePhotosRemoveSchema } from './recipe_photos_remove.schema';
-import { recipePhotosReorderSchema } from './recipe_photos_reorder.schema';
-import { recipePhotoLabelSetSchema } from './recipe_photo_label_set.schema';
+import { recipePhotosSchema } from './recipe_photos.schema';
 import { recipeRecordCreateSchema } from './recipe_record_create.schema';
 import { recipeRecordUpdateSchema } from './recipe_record_update.schema';
 import { recipeRecordDeleteSchema } from './recipe_record_delete.schema';
@@ -160,10 +157,7 @@ const recipeList = serverSideTool(recipeListSchema);
 const recipeGet = serverSideTool(recipeGetSchema);
 const recipeSave = serverSideTool(recipeSaveSchema);
 const recipeDelete = serverSideTool(recipeDeleteSchema);
-const recipePhotosAttach = serverSideTool(recipePhotosAttachSchema);
-const recipePhotosRemove = serverSideTool(recipePhotosRemoveSchema);
-const recipePhotosReorder = serverSideTool(recipePhotosReorderSchema);
-const recipePhotoLabelSet = serverSideTool(recipePhotoLabelSetSchema);
+const recipePhotos = serverSideTool(recipePhotosSchema);
 const recipeRecordCreate = serverSideTool(recipeRecordCreateSchema);
 const recipeRecordUpdate = serverSideTool(recipeRecordUpdateSchema);
 const recipeRecordDelete = serverSideTool(recipeRecordDeleteSchema);
@@ -345,18 +339,15 @@ export const cookingToolbox: Toolbox = {
   name: 'cooking',
   description:
     'Save, edit, and delete recipes in the cookbook; attach, remove, ' +
-    'reorder, and caption recipe photos; log cooking records. When ' +
-    'the user reports having cooked a recipe and how it went, log it ' +
-    'with recipe_record_create and say so in the reply. Read tools ' +
-    '(recipe_list, recipe_get, and the recipe_record_* reads) are ' +
-    'always-on; this toolbox carries the writes.',
+    'reorder, and label recipe photos (one tool, one op); log cooking ' +
+    'records. When the user reports having cooked a recipe and how it ' +
+    'went, log it with recipe_record_create and say so in the reply. ' +
+    'Read tools (recipe_list, recipe_get, and the recipe_record_* ' +
+    'reads) are always-on; this toolbox carries the writes.',
   tools: [
     recipeSave,
     recipeDelete,
-    recipePhotosAttach,
-    recipePhotosRemove,
-    recipePhotosReorder,
-    recipePhotoLabelSet,
+    recipePhotos,
     recipeRecordCreate,
     recipeRecordUpdate,
     recipeRecordDelete,

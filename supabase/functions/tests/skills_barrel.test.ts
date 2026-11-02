@@ -27,13 +27,13 @@ Deno.test('the tool barrel registers the skills combination tool', () => {
 
 // Floor count, not an exact match. The registry total is the
 // barrel's import lines plus the modules that register several tools
-// under one line (recipe_photos.ts registers four), so equality with
-// the line count never holds. The floor still catches the failure
-// class this net exists for: registrations going missing (a module
-// edited to drop its registerTool call, or a barrel line whose
-// import resolves to nothing). Bump the floor alongside any change
-// that removes tools; additions need nothing.
-const MIN_REGISTERED_TOOLS = 68;
+// under one line (recipe_photos.ts registers its combination tool as
+// one), so equality with the line count never holds. The floor still
+// catches the failure class this net exists for: registrations going
+// missing (a module edited to drop its registerTool call, or a barrel
+// line whose import resolves to nothing). Bump the floor alongside
+// any change that removes tools; additions need nothing.
+const MIN_REGISTERED_TOOLS = 65;
 
 Deno.test(`the registry carries at least ${MIN_REGISTERED_TOOLS} registrations`, () => {
   const names = listRegisteredTools();
