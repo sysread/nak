@@ -411,16 +411,16 @@ same caption, or none at all.
   and caption changes) lands in one save with one change message,
   not one save per keystroke. Photo edits land in the History panel
   under the same change message as everything else in the save.
-- **Asking the model**: tell Nak which photos to add and it will call
-  `recipe_photos_attach`, optionally with a caption per photo
-  ("attach the cookies photo with the caption 'finished plate'").
-  The photos must be live in this conversation (not yet expired -
-  see the conversation drawer for the per-thread attachment list).
-  Nak can also remove photos (`recipe_photos_remove`), reorder them
-  (`recipe_photos_reorder`), or set captions on photos already on
-  the recipe (`recipe_photo_label_set`) when you ask. Each tool
-  call lands its own row in the History panel with the message Nak
-  wrote.
+- **Asking the model**: tell Nak which photos to add and it will
+  attach them, optionally with a caption per photo ("attach the
+  cookies photo with the caption 'finished plate'"). The photos
+  must be live in this conversation (not yet expired - see the
+  conversation drawer for the per-thread attachment list). Nak can
+  also remove photos, reorder them, or set captions on photos
+  already on the recipe when you ask - all through one
+  `recipe_photos` tool with an operation (attach / remove /
+  reorder / label). Each call lands its own row in the History
+  panel with the message Nak wrote.
 
 Captions and photos round-trip through the History panel like every
 other field: revert restores the exact photo set, order, and

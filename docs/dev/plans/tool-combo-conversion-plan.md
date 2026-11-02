@@ -303,8 +303,8 @@ a branch, PR, merge (deploy via CI), and live-thread verification.
 - Tests: `wiki.test.ts`, `wiki_librarian.test.ts`,
   `wiki_favorite_lock.test.ts` (save/delete lock guards),
   `tool-batch.test.ts:27-32` (imports `wikiDelete` directly).
-  QA: `wiki-chat-crud.md`, `wiki-editor-agent-update.md` baselines
-  + re-runs.
+  QA: `wiki-chat-crud.md` and `wiki-editor-agent-update.md`
+  baselines with re-runs.
 
 ### M8 - `records` (6 tools to 1)
 

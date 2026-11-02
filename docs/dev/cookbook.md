@@ -58,12 +58,13 @@ unaffected.
   `CustomEvent` (`nak:recipes:changed`) so tools stay UI-unaware - its
   handler calls `loadRecipes`, i.e. a tool mutation resets the list to
   the top rather than trying to patch a row in the middle of a page.
-- `src/lib/tools/recipe_*.schema.ts` — the fourteen LLM tools' wire
+- `src/lib/tools/recipe_*.schema.ts` — the eleven LLM tools' wire
   schemas (name, description, JSON Schema parameters). Schema only;
   the browser never executes a recipe tool.
 - `supabase/functions/venice/tools/recipe_save.ts`, `recipe_list.ts`,
   `recipe_get.ts`, `recipe_delete.ts`,
-  `recipe_photos.ts` (which carries all four photo verbs), and
+  `recipe_photos.ts` (the photo combination tool - one op-switch
+  def over attach/remove/reorder/label), and
   `recipe_record_*.ts` + `_recipe_record_helpers.ts` (the six record
   tools and their shared normalizers) — the
   implementations, dispatched function-side against the admin client.
@@ -832,8 +833,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   reordering or appending changes the link rows, not the image
   rows. The LLM tools surface these ids in `recipe_get`'s
   `photos: [{id, position}, ...]` projection so the model can
-  chain a `recipe_photos_remove` call against the same id it just
-  saw.
+  chain a photo-remove call against the same id it just saw.
 - **Photo lifecycle is link-driven.** Recipe delete cascades
   through `recipe_versions` to `recipe_version_images`; the
   AFTER-DELETE trigger on the link table reclaims the image row
@@ -849,10 +849,10 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   underlying bytes row changing. The edit form keeps draft
   captions in component state until Save - one save per overall
   edit, not one per keystroke - while the LLM-side
-  `recipe_photo_label_set` tool is the single-photo / batch-photo
-  caption update path. Empty strings normalise to NULL server-side
-  (and on the wire helper `splitPhotoInputs`) so "no caption"
-  reads as one shape everywhere.
+  `recipe_photos` tool (op=label) is the single-photo /
+  batch-photo caption update path. Empty strings normalise to NULL
+  server-side (and on the wire helper `splitPhotoInputs`) so "no
+  caption" reads as one shape everywhere.
 - **Section model layers on top of the flat AST.** `== Name ==` and
   `# Name` (line-start + space) introduce a section. The parser
   records a per-step `section: string | null` plus a top-level

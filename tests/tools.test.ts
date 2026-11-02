@@ -91,10 +91,7 @@ describe('tool registry', () => {
     expect(cookingToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'recipe_save',
       'recipe_delete',
-      'recipe_photos_attach',
-      'recipe_photos_remove',
-      'recipe_photos_reorder',
-      'recipe_photo_label_set',
+      'recipe_photos',
       'recipe_record_create',
       'recipe_record_update',
       'recipe_record_delete',
