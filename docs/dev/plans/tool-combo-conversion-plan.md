@@ -83,7 +83,7 @@ against it.
 - **Agent adaptation precedent.** `asAgentTool(tool, wire)`
   (`supabase/functions/venice/agents/_agent_tools.ts:23-36`) wraps a
   registered impl with an agent-pinned wire schema. Two agents
-  hand-roll instead: `agents/wiki_recall.ts:156-159` defines its own
+  hand-roll instead: `agents/wiki_recall.ts:155-165` defines its own
   single-tool AgentTool calling `wikiSearch.execute` directly, and
   `agents/context.ts:182-183` calls `wikiSearch.execute` /
   `followupList.execute` inline. Both consume the same registered
@@ -289,7 +289,7 @@ a branch, PR, merge (deploy via CI), and live-thread verification.
 - Agent consumers: `wiki.ts` (search/save/delete), `wiki_librarian.ts`
   (search; save under `asAgentToolNoCreate`; delete under
   `asAgentToolNoThread`), `wiki_records.ts` (search/list),
-  `wiki_recall.ts` (hand-rolled search wrapper, `:156-159`),
+  `wiki_recall.ts` (hand-rolled search wrapper, `:155-165`),
   `context.ts` (inline search execute, `:182`). The no-create guard
   re-expresses cleanly: the combo's save is create-or-update-by-id,
   and the wrapper's id-present check
