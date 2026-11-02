@@ -704,3 +704,48 @@ Deno.test('MAX_ROUNDS runaway: every round calls tools, terminal is the round-li
     .filter((u) => u.last_error !== undefined);
   assertEquals(lastError.length, 1);
 });
+
+Deno.test('http error with status lands kind + honest retryable in last_error', async () => {
+  // image-retry-data-uri-plan.md Change 3: the error-signal boundary
+  // used to drop the HTTP status, so every kind='http' error translated
+  // through translateError's no-status branch (retryable:true regardless
+  // of status - the prod incident's threads.last_error claimed a
+  // status-400 was retryable while nothing retried it). The signal now
+  // carries status and the consumer threads it through.
+  const env = makeEnv({
+    rounds: [
+      async function* () {
+        yield {
+          type: 'error',
+          kind: 'http',
+          message:
+            'Venice HTTP 400: {"error":"A remote image URL in the request could not be used."}',
+          retryable: false,
+          status: 400,
+        } as StreamSignal;
+      },
+    ],
+  });
+  await getStreamingResponse(env.opts);
+
+  assertEquals(endEvent(env).terminalKind, 'error');
+  assertEquals(commitRpcs(env).length, 0);
+  const lastError = callsOf(env, 'threads', 'update')
+    .map((a) => a[0] as Record<string, unknown>)
+    .filter((u) => u.last_error !== undefined);
+  assertEquals(lastError.length, 1);
+  // The stub records last_error as the raw object (the real client
+  // stringifies on the wire), so no parse here - mirror the
+  // commit-conflict test's stringify-and-inspect shape.
+  const payload = JSON.parse(JSON.stringify(lastError[0].last_error)) as {
+    kind: string;
+    message: string;
+    retryable: boolean;
+  };
+  assertEquals(payload.kind, 'http');
+  // Status-bearing translation: 400 is not in translateError's
+  // retryable set (408/425/429), so the flag is honestly false and the
+  // prose names the status.
+  assertEquals(payload.retryable, false);
+  assertStringIncludes(payload.message, 'HTTP 400');
+});

@@ -27,6 +27,7 @@ const HAPPY_SSE = [
 async function collect(
   body: Record<string, unknown>,
   fetchImpl: typeof fetch,
+  opts?: { httpRetryBackoffMs?: number }
 ): Promise<Array<CompletionEvent | StreamSignal>> {
   const events: Array<CompletionEvent | StreamSignal> = [];
   const ctl = new AbortController();
@@ -36,6 +37,7 @@ async function collect(
     signal: ctl.signal,
     fetchImpl,
     guardsOverride: [],
+    ...opts,
   })) {
     events.push(ev);
   }
@@ -165,10 +167,12 @@ Deno.test('strips a rejected reasoning_effort and retries successfully', async (
   assertEquals(signal?.field, 'reasoning_effort');
 });
 
-Deno.test('a repeat 400 naming an already-stripped field is terminal', async () => {
+Deno.test('a repeat 400 naming an already-stripped field is terminal after one retry', async () => {
   // Guards against an infinite strip loop: once the field is gone from
-  // the body, the same 400 must fall through to the error event rather
-  // than re-issuing forever.
+  // the body, the same 400 must surface as an error rather than
+  // re-issuing forever. The strip retry (call 1 -> 2) and the pre-event
+  // http retry (call 2 -> 3) have separate budgets, so a deterministic
+  // 400 that survives both costs three calls total.
   let calls = 0;
   const fakeFetch = ((_url: string | URL | Request) => {
     calls += 1;
@@ -182,15 +186,17 @@ Deno.test('a repeat 400 naming an already-stripped field is terminal', async () 
       text: { verbosity: 'low' },
     },
     fakeFetch,
+    { httpRetryBackoffMs: 0 }
   );
 
-  assertEquals(calls, 2);
+  assertEquals(calls, 3);
   assertEquals(events.at(-1)?.type, 'error');
 });
 
-Deno.test('a 400 naming a non-droppable field is terminal', async () => {
+Deno.test('a 400 naming a non-droppable field is terminal after one retry', async () => {
   // `tools` changes semantics - silently dropping it would answer the
-  // turn without the toolbox. Must surface as an error instead.
+  // turn without the toolbox. Must surface as an error instead. The
+  // pre-event http retry gets one shot at it first.
   let calls = 0;
   const fakeFetch = ((_url: string | URL | Request) => {
     calls += 1;
@@ -212,9 +218,10 @@ Deno.test('a 400 naming a non-droppable field is terminal', async () => {
       tools: [],
     },
     fakeFetch,
+    { httpRetryBackoffMs: 0 }
   );
 
-  assertEquals(calls, 1);
+  assertEquals(calls, 2);
   assertEquals(events.at(-1)?.type, 'error');
 });
 
@@ -261,9 +268,10 @@ Deno.test('maps a mandatory-reasoning 400 to the disable_thinking path and retri
   assertEquals(events.at(-1)?.type, 'DONE');
 });
 
-Deno.test('a mandatory-reasoning 400 with no disable_thinking in the body is terminal', async () => {
+Deno.test('a mandatory-reasoning 400 with no disable_thinking in the body is terminal after one retry', async () => {
   // If the request never asked to disable thinking, there is nothing
-  // to strip - the 400 must surface rather than loop.
+  // to strip - the 400 must surface rather than loop. The pre-event
+  // http retry gets one shot at it first.
   let calls = 0;
   const fakeFetch = ((_url: string | URL | Request) => {
     calls += 1;
@@ -273,9 +281,10 @@ Deno.test('a mandatory-reasoning 400 with no disable_thinking in the body is ter
   const events = await collect(
     { model: 'z-ai-glm-5-3', messages: [{ role: 'user', content: 'ping' }] },
     fakeFetch,
+    { httpRetryBackoffMs: 0 }
   );
 
-  assertEquals(calls, 1);
+  assertEquals(calls, 2);
   assertEquals(events.at(-1)?.type, 'error');
 });
 

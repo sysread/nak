@@ -620,12 +620,21 @@ Venice occasionally returns a 429 "model overloaded" response when the
 requested model is under heavy load. Nak silently retries the request
 once after a short pause before surfacing anything to you, since the
 overload window usually clears within a second or two and the second
-attempt succeeds.
+attempt succeeds. Other send-time failures get the same one silent
+retry: if Venice rejects the request with another error status before
+any of the reply streams (for example, a transient failure fetching
+an image you pasted), or the connection drops before the reply
+starts, Nak re-issues the request on its own once. Failures that
+happen after the reply started streaming are never retried silently -
+whatever arrived stays, and the error banner explains the rest.
 
 When the auto-retry also fails, the composer clears as usual, your
 message stays in the conversation, and a banner appears above the
 composer with the provider's explanation (e.g. "The model is currently
-overloaded. Please try again later.").
+overloaded. Please try again later."). An error Nak already retried
+automatically (a request Venice rejected twice) shows the explanation
+without the refresh-arrow button - sending a new message is the way
+to try again.
 
 Next to the banner is a refresh-arrow button — click it to re-send the
 same request without retyping. Retries pick up any intermediate

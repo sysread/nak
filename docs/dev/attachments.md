@@ -139,6 +139,18 @@ covers the attachment-specific pieces.
   for both the FK and the object key). Before the Venice call the
   chat-loop pre-resolves signed URLs for the live image attachments and
   threads them through `toVeniceMessage` -> `buildUserVeniceContent`.
+  The signed URLs never reach Venice itself: the `/stream` route's
+  inline phase (`venice/inline-images.ts`) downloads each OWNED image
+  attachment service-role and swaps the part to a `data:` URI before
+  the turn's rounds start, so Venice never fetches our URLs (a slow or
+  erroring fetch used to 400 the whole turn - prod incident
+  2026-11-02). Ownership is thread-scoped (the attachment id from the
+  URL must resolve to a live row in the already-validated thread, with
+  `storage_path` matching), every failure degrades to the signed URL,
+  and the walk is bounded: newest-first under a hard-stop 8 MB byte
+  cap (eviction takes the oldest history images), 10 s per download,
+  15 s whole-phase deadline. Generated images inline the same way -
+  they are `message_attachments` rows too.
 - **Message replayed on reload** - `listMessages` co-fetches attachment
   metadata (storage_path, no bytes); `MessageAttachments` resolves signed
   URLs for rendering.

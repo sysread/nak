@@ -729,6 +729,10 @@ export async function getStreamingResponse(
             lastErrorInput = {
               kind: isGuardExhausted ? 'guard_exhausted' : (ev.kind as TranslatedErrorKind),
               rawMessage: ev.message,
+              // Status rides through so translateError's http case can
+              // branch on it (5xx vs 4xx prose + retryable); without
+              // it every http error lands in the no-status branch.
+              status: ev.status,
             };
             log.error(
               `${runId} round ${round} venice error kind=${ev.kind}: ${ev.message}`,
