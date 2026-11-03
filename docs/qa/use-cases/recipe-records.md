@@ -5,7 +5,8 @@
 The `recipe_records` table and its full lifecycle
 ([dev: cookbook](../../dev/cookbook.md) - Records data model and the
 Records section; [dev: tools](../../dev/tools.md) - the
-`recipe_record_*` tool split). Specifically: the chat-capture journey
+`recipe_records` combination tool, one op enum over list / get /
+search / create / update / delete). Specifically: the chat-capture journey
 (the tools are the primary capture path - there is no background
 sweep), the detail pane's Records section (add / edit / filter /
 expand / export), the outcome filter end to end, cross-recipe search
@@ -46,15 +47,15 @@ offline posture.
 4. Chat capture: in a NEW conversation, tell the model "I baked the
    sourdough yesterday - crumb came out gummy, ferment longer next
    time" (the cook is on a past day, deliberately). The model should
-   call `recipe_record_create` and reply naming the new record. Then
+   call the recipe_records tool (op=create) and reply naming the new record. Then
    open the Cookbook detail pane for that recipe WITHOUT reloading.
 5. Same conversation: report the SAME event again ("like I said, the
-   gummy crumb bake"). The model should call `recipe_record_list`,
-   find the record, and `recipe_record_update` it - not stack a
+   gummy crumb bake"). The model should call the recipe_records
+   tool (op=list), find the record, and op=update it - not stack a
    second one.
 6. Same conversation: a detail correction ("actually the crumb was
    fine on day two, but the crust burned"). The model should
-   `recipe_record_get` the record and pass a MERGED body (both facts
+   op=get the record and pass a MERGED body (both facts
    present), not just the new sentence.
 7. Outcome end to end: ask the model "mark that bake as a failure",
    then check the record's outcome chip; use the Records **Outcome**
@@ -166,4 +167,6 @@ offline posture.
 | 2026-10-12 | local (recipe-records wt) | 4fa77e60 | P | P | F(tag) | P | P | P | P | P | P | P | P | P | P | P | Run 1: (3) failed - tags=cs.{a} Postgres-array literal vs jsonb 400; (5)/(6) passed with deviations (model merged/answered from context, no tool calls); (12) via cron shim, no drawer [embeddings] line (expectation fixed). |
 | 2026-10-12 | local (recipe-records wt) | 0dcca4e6 | - | - | P | - | - | - | P | - | - | - | - | - | - | - | Run 2 (focused): tag filter fixed (200 + narrows + combines with outcome); cross-recipe search with outcome both legs re-verified. |
 | 2026-10-13 | local (recipe-records wt) | ff6111fb | - | - | - | - | - | - | P | P | P | - | - | - | P | - | Run 3 (code-review fixes): no deleted-flash during title batch (pending state); backspace-exit == Clear; reconnect re-arms the log; offline uncached renders header + offline line; outcome:null via chat clears the chip; add/edit/delete regression clean. Also verified the empty-cookbook recipes-drawer loop fix (Chat.svelte loaded-gate: 11 bounded requests then flat, was 6203/8s). |
+| 2026-11-03 | local (tool-combos wt) | de7fddc5 (pre-M4 baseline) | P | P | P | P | P | P | P | P | P | P | P | P | P | P | Baseline before the recipe_record_* -> recipe_records combination-tool change. (5)/(6) passed with the known deviation (model answered from context; no recipe_record_list/get calls). (14) via client-side route change - vite dev registers no service worker. Captured the create dedup payload shape (same_date_siblings + most_recent_prior) and update semantics (supplied fields replace wholesale, omitted fields untouched). |
+| 2026-11-03 | local (tool-combos wt) | post-M3 head | P | P | P | BLOCKED | BLOCKED | BLOCKED | BLOCKED | P | P | P | P | BLOCKED | P | P | UI-only steps all PASS at parity (filters, cross-recipe search + nav text leg, sidebar nav, delete-confirm count, export single + all ignoring filters, offline 13/14). Steps 4-7 + 12 BLOCKED: the edge runtime died mid-run (503s 19:30-19:48Z, retried 13x; second collapse today - resource pressure under the combined three-session QA load). Doc drift noted: the baseline row had been missing (backfilled above). Superseded by the follow-up run below. |
 | *pending* | | | | | | | | | | | | | | | | | first run after feature lands |

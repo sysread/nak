@@ -65,8 +65,9 @@ unaffected.
 tool - one op-switch def over list / get / save / delete),
   `recipe_photos.ts` (the photo combination tool - one op-switch
   def over attach/remove/reorder/label), and
-  `recipe_record_*.ts` + `_recipe_record_helpers.ts` (the six record
-  tools and their shared normalizers) — the
+  `recipe_records.ts` (the cooking-log combination tool - one
+  op-switch def over list / get / search / create / update /
+  delete) + `_recipe_record_helpers.ts` (the shared normalizers) — the
   implementations, dispatched function-side against the admin client.
   `_recipe_helpers.ts` holds `readRecipePhotoMeta`, the "newest
   version's link set" read that the get op and the save op's edit form
@@ -509,7 +510,8 @@ current state and the History panel logs THAT THE SOURCE changed; a
 record is one dated event about what happened when the user cooked.
 Ported from the wiki records feature (see
 [`./wiki.md`](./wiki.md), "wiki_records (the dated journey layer)"):
-same table shape, same tool split (the `recipe_record_*` chat tools
+same table shape, same tool combo (`recipe_records` = one tool, one
+op enum over list / get / search / create / update / delete)
 landed with the section), same UI section anatomy. Full design
 decisions live in
 [`./plans/recipe-records-plan.md`](./plans/recipe-records-plan.md).

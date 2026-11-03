@@ -77,12 +77,7 @@ import { conversationSearchSchema } from './conversation_search.schema';
 import { conversationGetSchema } from './conversation_get.schema';
 import { recipesSchema } from './recipes.schema';
 import { recipePhotosSchema } from './recipe_photos.schema';
-import { recipeRecordCreateSchema } from './recipe_record_create.schema';
-import { recipeRecordUpdateSchema } from './recipe_record_update.schema';
-import { recipeRecordDeleteSchema } from './recipe_record_delete.schema';
-import { recipeRecordListSchema } from './recipe_record_list.schema';
-import { recipeRecordGetSchema } from './recipe_record_get.schema';
-import { recipeRecordSearchSchema } from './recipe_record_search.schema';
+import { recipeRecordsSchema } from './recipe_records.schema';
 import { researchDocsSchema } from './research_docs.schema';
 import { wikiSearchSchema } from './wiki_search.schema';
 import { wikiListSchema } from './wiki_list.schema';
@@ -149,12 +144,7 @@ const conversationSearch = serverSideTool(conversationSearchSchema);
 const conversationGet = serverSideTool(conversationGetSchema);
 const recipes = serverSideTool(recipesSchema);
 const recipePhotos = serverSideTool(recipePhotosSchema);
-const recipeRecordCreate = serverSideTool(recipeRecordCreateSchema);
-const recipeRecordUpdate = serverSideTool(recipeRecordUpdateSchema);
-const recipeRecordDelete = serverSideTool(recipeRecordDeleteSchema);
-const recipeRecordList = serverSideTool(recipeRecordListSchema);
-const recipeRecordGet = serverSideTool(recipeRecordGetSchema);
-const recipeRecordSearch = serverSideTool(recipeRecordSearchSchema);
+const recipeRecords = serverSideTool(recipeRecordsSchema);
 const researchDocs = serverSideTool(researchDocsSchema);
 const wikiSearch = serverSideTool(wikiSearchSchema);
 const wikiList = serverSideTool(wikiListSchema);
@@ -270,12 +260,12 @@ export const alwaysOnToolbox: Toolbox = {
     'The umbrella `context` recall, the three per-layer ' +
     'recall tools, and read-only surfaces (search across ' +
     'memories / conversations / wiki / app docs; ' +
-    'plus get for memories, conversations, and wiki, and ' +
-    'list/get/search for cookbook cooking records) ' +
+    'plus get for memories, conversations, and wiki) ' +
     'plus web search, ' +
     'update_title, analyze_image, analyze_pdf_page, and ask_user. ' +
-    'Recipe browsing lives in the recipes combination tool (cooking ' +
-    'toolbox) - its list/get ops are read-only.',
+    'Recipe browsing lives in the recipes combination tool and the ' +
+    'cooking log in the recipe_records combination tool (both cooking ' +
+    'toolbox) - their list/get/search ops are read-only.',
   tools: [
     contextTool,
     memoryRecall,
@@ -292,9 +282,6 @@ export const alwaysOnToolbox: Toolbox = {
     recordGet,
     recordSearch,
     followupList,
-    recipeRecordList,
-    recipeRecordGet,
-    recipeRecordSearch,
     docList,
     docGet,
     docGrep,
@@ -310,37 +297,31 @@ export const alwaysOnToolbox: Toolbox = {
 
 /**
  * Cookbook tools. The `recipes` combination tool (list / get / save /
- * delete behind one op enum) carries the whole recipe surface - its
- * list/get ops are read-only but ride here rather than always-on,
- * because one tool cannot be split across always-on and a write
- * toolbox (the skills precedent); the always-on description points at
- * it. This toolbox also carries the photo combination tool and the
- * cooking-log record writes.
+ * delete) and the `recipe_records` combination tool (list / get /
+ * search / create / update / delete) each carry their whole resource
+ * surface - the read ops ride inside the combos rather than always-on
+ * (one tool cannot be split across always-on and a write toolbox; the
+ * skills precedent), and the always-on description points at them.
+ * This toolbox also carries the photo combination tool.
  *
  * The toolbox description is catalog-visible (the catalog renders
  * toolbox descriptions and per-tool short descriptions, never full
  * tool descriptions), so it also carries the record-capture trigger:
  * the chat model logs a record when the user reports a cook, and the
- * short descriptions alone would not teach it when to reach for
- * recipe_record_create.
+ * short descriptions alone would not teach it when to reach for the
+ * record create op.
  */
 export const cookingToolbox: Toolbox = {
   name: 'cooking',
   description:
-    'Read, save, edit, and delete recipes (one combination tool: ' +
-    'list / get / save / delete ops); attach, remove, reorder, and ' +
-    'label recipe photos (one tool, one op); log cooking records. ' +
-    'When the user reports having cooked a recipe and how it went, ' +
-    'log it with recipe_record_create and say so in the reply. The ' +
-    'recipe_record_* reads are always-on; this toolbox carries the ' +
-    'rest.',
-  tools: [
-    recipes,
-    recipePhotos,
-    recipeRecordCreate,
-    recipeRecordUpdate,
-    recipeRecordDelete,
-  ],
+    'Read, save, edit, and delete recipes and their cooking logs ' +
+    '(two combination tools: recipes = list / get / save / delete; ' +
+    'recipe_records = list / get / search / create / update / ' +
+    'delete); attach, remove, reorder, and label recipe photos ' +
+    '(one tool, one op). When the user reports having cooked a ' +
+    'recipe and how it went, log it with recipe_records op=create ' +
+    'and say so in the reply.',
+  tools: [recipes, recipePhotos, recipeRecords],
 };
 
 /**

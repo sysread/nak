@@ -91,9 +91,7 @@ describe('tool registry', () => {
     expect(cookingToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'recipes',
       'recipe_photos',
-      'recipe_record_create',
-      'recipe_record_update',
-      'recipe_record_delete',
+      'recipe_records',
     ]);
     expect(memoriesToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'memory_save',
@@ -134,9 +132,6 @@ describe('tool registry', () => {
       'wiki_search',
       'wiki_list',
       'wiki_get',
-      'recipe_record_list',
-      'recipe_record_get',
-      'recipe_record_search',
       'research_docs',
       'web_search',
       'update_title',
@@ -145,13 +140,14 @@ describe('tool registry', () => {
     ]) {
       expect(names).toContain(expected);
     }
-    // And no writes leak into always-on. (The recipe-record writes
-    // ride the cooking toolbox; the wiki record writes the wiki box.)
+    // And no writes leak into always-on. (The record writes ride the
+    // recipes/recipe_records combos in the cooking toolbox; the wiki
+    // record writes the wiki box.)
     for (const write of [
       'memory_save',
       'memory_delete',
-      'recipe_save',
-      'recipe_delete',
+      'recipes',
+      'recipe_records',
       'recipe_record_create',
       'recipe_record_update',
       'recipe_record_delete',

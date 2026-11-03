@@ -235,9 +235,13 @@ export function validateToolArgs(
     }
 
     if (Array.isArray(propSchema.enum) && !propSchema.enum.includes(value)) {
-      errs.add(
-        `${name} must be one of: ${(propSchema.enum as unknown[]).join(', ')}`,
-      );
+      // Render null as the literal word - String(null) is '' and a
+      // dangling ', ' hides that null is a legal value (the nullable
+      // outcome params' clear-state rides the enum).
+      const legal = (propSchema.enum as unknown[])
+        .map((v) => (v === null ? 'null' : String(v)))
+        .join(', ');
+      errs.add(`${name} must be one of: ${legal}`);
     }
   }
 
