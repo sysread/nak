@@ -96,10 +96,7 @@ import { recordFileAttachSchema } from './record_file_attach.schema';
 import { recordFileRemoveSchema } from './record_file_remove.schema';
 import { recordLinkCreateSchema } from './record_link_create.schema';
 import { recordLinkDeleteSchema } from './record_link_delete.schema';
-import { followupCloseSchema } from './followup_close.schema';
-import { followupDismissSchema } from './followup_dismiss.schema';
-import { followupSaveSchema } from './followup_save.schema';
-import { followupListSchema } from './followup_list.schema';
+import { followupsSchema } from './followups.schema';
 import { docsSchema } from './docs.schema';
 import { imageSchema } from './image.schema';
 import { skillsSchema } from './skills.schema';
@@ -157,10 +154,7 @@ const recordFileAttach = serverSideTool(recordFileAttachSchema);
 const recordFileRemove = serverSideTool(recordFileRemoveSchema);
 const recordLinkCreate = serverSideTool(recordLinkCreateSchema);
 const recordLinkDelete = serverSideTool(recordLinkDeleteSchema);
-const followupSave = serverSideTool(followupSaveSchema);
-const followupClose = serverSideTool(followupCloseSchema);
-const followupDismiss = serverSideTool(followupDismissSchema);
-const followupList = serverSideTool(followupListSchema);
+const followups = serverSideTool(followupsSchema);
 const docs = serverSideTool(docsSchema);
 const image = serverSideTool(imageSchema);
 const skillsTool = serverSideTool(skillsSchema);
@@ -272,7 +266,6 @@ export const alwaysOnToolbox: Toolbox = {
     recordList,
     recordGet,
     recordSearch,
-    followupList,
     researchDocs,
     webSearch,
     updateTitle,
@@ -398,27 +391,30 @@ export const wikiToolbox: Toolbox = {
 };
 
 /**
- * Follow-up write tools. A follow-up is a pending question the model
+ * Follow-up tools. A follow-up is a pending question the model
  * saves for itself ("Ask how the lasagna turned out") so a later
  * conversation knows the outcome is unknown rather than hallucinating
  * one; surfacing rides the context-recall gather (semantic + date-due).
- * The read path (`followup_list`) is always-on like every other read;
- * this toolbox carries the four lifecycle writes (save / reschedule /
- * close / dismiss). The model reaches for them when the user shares a
- * plan worth following up on, or when their answer resolves an open
- * question.
+ * The single `followups` combination tool carries the whole lifecycle
+ * (list / save / close / dismiss behind one op enum) - the read op
+ * rides inside it rather than always-on (one tool cannot be split
+ * across always-on and a write toolbox; the skills precedent). The
+ * model reaches for it when the user shares a plan worth following up
+ * on, or when their answer resolves an open question.
  * Note the reflection agent writes follow-ups server-side too - this
  * toolbox governs only the chat model's volitional path.
  */
 export const followupsToolbox: Toolbox = {
   name: 'followups',
   description:
-    'Save, reschedule, close, and dismiss follow-ups: questions to ask ' +
-    'the user in a later conversation ("how did the lasagna turn out?"). ' +
-    'Save one when the user shares a plan or dated event worth asking ' +
-    'about later; close it when they report the outcome. The read path ' +
-    '(followup_list) is always-on; this toolbox carries the writes.',
-  tools: [followupSave, followupClose, followupDismiss],
+    'Maintain your follow-ups: questions to ask the user in a later ' +
+    'conversation ("how did the lasagna turn out?"). One tool, one ' +
+    'op: list shows the open set + recently closed (the dedup read ' +
+    '- always check it before saving); save creates or revises; ' +
+    'close marks one answered; dismiss stops asking. Save one when ' +
+    'the user shares a plan or dated event worth asking about ' +
+    'later; close it when they report the outcome.',
+  tools: [followups],
 };
 
 /**

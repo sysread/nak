@@ -112,7 +112,7 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   opening/acted/reaction writes to `intent_employments`, the
   efficacy-firewall check, and the minter consuming the telemetry.
 - [followup-capture](./use-cases/followup-capture.md) - both
-  follow-up writers (volitional `followup_create`, reflection
+  follow-up writers (volitional save op, reflection
   backfill), the reschedule verb, the reflection close backstop, and
   the dedup between the writers.
 - [followup-semantic-recall](./use-cases/followup-semantic-recall.md) -

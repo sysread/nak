@@ -119,4 +119,4 @@ Optionally delete the two test threads from the drawer.
 
 | Date | Env | Commit | Result | Notes |
 |---|---|---|---|---|
-| - | - | - | - | Feature not yet built; no runs. |
+| 2026-11-03 | local, wt-nak/tool-combos | f0f19a58+ (pre-M6 baseline) | PASS steps 1-5, 8; steps 6/7/9 BLOCKED (reflection day gate - threads created today are unclaimable; backdate via service-role SQL or wait a day) | Baseline before followup_* -> `followups` combo. Tool ledger captured: the dedup shape is followup_list (no args) before every write; create = followup_save without id (question/context/relevant_after); reschedule = with id; close = id + resolution (status -> answered). F1: the save schema's wire-required `question` rejects a pure reschedule ({id, context, relevant_after}) - the combo drop of that required FIXES this (the handler's create-side check owns it). F2: the chat model closes follow-ups itself when the outcome is volunteered (doc says only reflection does - doc needs rewording). F3: model side effects (recipe + record) - cleanup must cover them. F4: relevant_after stores UTC midnight (day boundary is UTC, not the user's tz). |

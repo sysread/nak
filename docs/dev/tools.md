@@ -188,10 +188,11 @@ surface lives in the always-on set above.
   `record_delete`, the file tools `record_file_attach` /
   `record_file_remove`, and the cross-link tools
   `record_link_create` / `record_link_delete`). See `./wiki.md`.
-- **`followups`** - follow-up writes: `followup_save` (create, or
-  reschedule by id) / `followup_close` / `followup_dismiss`, the
-  lifecycle of the pending questions the model saves for itself.
-  The read (`followup_list`) stays always-on. See `./followups.md`.
+- **`followups`** - the follow-up combination tool (list / save /
+  close / dismiss behind one op enum): the lifecycle of the pending
+  questions the model saves for itself; the list op rides inside it
+  (one tool cannot split across always-on and a write toolbox). See
+  `./followups.md`.
 - **`library`** - the `docs` combination tool (list / get / grep /
   read / save / delete): the read ops browse and search inside
   documents; op=save promotes a file the user attached into a
