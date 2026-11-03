@@ -36,7 +36,7 @@ Two knowledge surfaces with deliberately different shapes:
   inline by the chat-loop's recall pipeline.
 - **Wiki** (this doc) - longer-form encyclopedic articles, **never
   auto-injected** into the chat. The main LLM reaches them only
-  through the always-on `wiki_search` tool.
+  through the always-on the wiki tool (op=search) tool.
 
 Articles are titled, single-level (no nesting), and unique per
 `(user_id, title)`. The voice is encyclopedic third-person prose -
@@ -210,8 +210,8 @@ Edge function (`supabase/functions/venice/`):
   `budgetMs` wall-clock bound - opt-in per agent, currently only
   deep-sleep. See `./tools.md` for why rounds alone are the wrong
   bound; the wiki librarian has not needed one.
-- `tools/wiki_save.ts`,
-  `tools/wiki_delete.ts` - the write tools (char caps, best-effort
+- `tools/wiki op=save.ts`,
+  `tools/wiki op=delete.ts` - the write tools (char caps, best-effort
   changelog + source attribution, unique-violation rephrasing).
   b-strict throughout: the service-role client bypasses RLS, so every
   query stamps or filters `user_id` explicitly.
@@ -220,7 +220,7 @@ Edge function (`supabase/functions/venice/`):
   `findExistingThreadIds` (validates model-supplied
   `source_thread_ids` against the user's own threads - the explicit
   `user_id` filter is what RLS would otherwise provide).
-- `tools/wiki_search.ts`, `tools/wiki_get.ts`, `tools/wiki_list.ts` -
+- `tools/wiki op=search.ts`, `tools/wiki op=get.ts`, `tools/wiki op=list.ts` -
   the chat-facing read surfaces.
 - `agents/wiki_librarian.ts` - the librarian, all three trigger
   paths: `runWikiLibrarianSweepTick` (scheduled; claims one user per
@@ -321,22 +321,21 @@ Browser data layer:
 
 Browser tools:
 
-- `src/lib/tools/wiki_search.schema.ts`, `wiki_list.schema.ts`,
-  `wiki_get.schema.ts`, `wiki_recall.schema.ts` - server-side read
-  tools, schema-only on the browser side (`wiki_search` rides in
-  `src/lib/tools/index.ts`'s `alwaysOnToolbox` via `serverSideTool`).
-  There are no browser wiki tool implementations - every wiki tool
-  executes in the venice function. The browser
+- `src/lib/tools/wiki.schema.ts` +
+  `src/lib/tools/wiki_recall.schema.ts` - the combination tool's wire
+  schema (one op-switch def over search / list / get / save / delete)
+  and the recall agent's schema, schema-only on the browser side
+  (both ride `src/lib/tools/index.ts` via `serverSideTool`; the combo
+  is bundled in the `wikiToolbox`, not always-on - the reads ride
+  inside it). There are no browser wiki tool implementations - every
+  wiki tool executes in the venice function. The browser
   `conversation_search` / `memory_search` impls that remain in
   `src/lib/tools/` belong to the memory-librarian fleet
-  (deep-sleep / rem), not to any wiki feature.
-- `src/lib/tools/wiki_save.schema.ts`,
-  `wiki_delete.schema.ts` - the direct article-write schemas the chat
-  model sees, schema-only like the reads (the impls + registration
-  live in the venice function). Kept aligned with the agent-side wire
-  schemas in `agents/wiki.ts`; the chat schemas omit the
-  librarian-only `source_thread_ids` (the chat turn's current thread
-  auto-attaches as the source).
+  (deep-sleep / rem), not to any wiki feature. The combo's schema is
+  kept aligned with the agent-side combo wires in `agents/wiki.ts` +
+  `agents/wiki_librarian.ts` (descriptions deliberately drift; the
+  chat schema omits the librarian-only `source_thread_ids` - the
+  chat turn's current thread auto-attaches as the source).
 - `src/lib/tools/wiki_librarian.schema.ts` + the `wikiToolbox`
   entry in `src/lib/tools/index.ts` - the main-chat wiki write
   surface: the article CRUD above, this librarian delegation, and the
@@ -617,7 +616,7 @@ Tests:
   (anti-name-fabrication, profile-block rendering rules).
 - `supabase/functions/tests/wiki_librarian.test.ts` - the
   librarian's composition guards: toolbox membership (the four
-  reads plus wiki_save / wiki_delete; no create form, no memory
+  reads plus wiki op=save / wiki op=delete; no create form, no memory
   writes, no `ask_user`), the prompt's variant selection (custom
   instructions swap in the bounded body; whitespace falls back to
   the standard five-step sweep), and the corrective profile-block
@@ -696,7 +695,7 @@ Docs:
   propose (hallucinated-id rejection); `noop` means body unchanged
   AND no record ops. Writes nothing - the browser persists the
   article + records on Accept.
-- `wiki_search` tool - registered in `alwaysOnToolbox.tools` so
+- the wiki tool (op=search) tool - registered in `alwaysOnToolbox.tools` so
   every chat request can reach it without a toolbox toggle.
 
 Per claimed thread, the agent slices history at the claimed terminal
@@ -731,7 +730,7 @@ conversation.
 - `created_at`, `updated_at timestamptz default now()`
 - `unique (user_id, title)` - the agent's save tool
   surfaces a unique-violation as actionable text so the autonomous
-  agent reads the conflict and falls through to `wiki_search` +
+  agent reads the conflict and falls through to the wiki tool (op=search) +
   a save by id.
 - Index `(user_id, lower(title))` for the alphabetical drawer
   listing.
@@ -1295,19 +1294,19 @@ browser persists, the autonomous flow's tool calls ARE the writes).
 ### Tool toolbox split
 
 - `alwaysOnToolbox` (browser, `src/lib/tools/index.ts`) includes the
-  read surfaces - `wiki_search` (semantic + substring), `wiki_list`
-  (alphabetical projection with head-of-content excerpts), `wiki_get`
+  read surfaces - the wiki tool (op=search) (semantic + substring), the wiki tool (op=list)
+  (alphabetical projection with head-of-content excerpts), the wiki tool (op=get)
   (primary-key body fetch), and `wiki_recall` (sub-agent that
   synthesises a topic note). All four ride every chat request; reads
   are idempotent and cheap, and the wiki blurb in the system prompt
   tells the model which one to reach for in which case.
 - `wikiToolbox` (browser, main-chat registry) groups every wiki
   write. It carries the
-  article save + delete (`wiki_save` / `wiki_delete`),
+  article save + delete (the wiki tool (op=save) / the wiki tool (op=delete)),
   the `wiki_librarian` delegation (the server-side sub-agent for
   multi-article consolidations - merge / split / rewrite across the
   whole wiki), AND the record writes (see "Record toolbox split"
-  below). The chat model reaches for a one-shot `wiki_save` when a
+  below). The chat model reaches for a one-shot the wiki tool (op=save) when a
   targeted edit is enough and delegates to the librarian when the job
   needs a read-everything-then-plan pass over many articles. The
   direct article writes wrap the same registered tool impls the
@@ -1315,7 +1314,7 @@ browser persists, the autonomous flow's tool calls ARE the writes).
   attached as the article's source automatically (the chat schemas
   omit the librarian-only `source_thread_ids`).
 - The autonomous agent's toolbox (`buildWikiToolbox` in
-  `supabase/functions/venice/agents/wiki.ts`) bundles wiki_search +
+  `supabase/functions/venice/agents/wiki.ts`) bundles wiki op=search +
   create + update + delete plus READ-ONLY `memory_search`, each
   wrapped via `asAgentTool` so the agent calls the same registered
   tool impls the rest of the function uses. The agent receives
@@ -1328,9 +1327,9 @@ browser persists, the autonomous flow's tool calls ARE the writes).
   gets memory write tools. Composition is asserted in
   `supabase/functions/tests/wiki.test.ts`.
 - The librarian's toolbox (`buildLibrarianToolbox` in
-  `agents/wiki_librarian.ts`) bundles four reads (wiki_search,
+  `agents/wiki_librarian.ts`) bundles four reads (wiki op=search,
   conversation_search, conversation_get, memory_search) plus
-  wiki_save + wiki_delete - **the save tool cannot create** (the librarian
+  wiki op=save + wiki op=delete - **the save tool cannot create** (the librarian
   consolidates what exists, it never invents) and no memory writes.
   `conversation_search` returns only title + topic summary, so the
   attribution pass (workflow step 3c) and the stale-fact pass (step
@@ -1368,7 +1367,7 @@ mental model (wiki editing covers articles and records alike).
 - The extraction agent's toolbox (`buildWikiRecordsToolbox` in
   `agents/wiki_records.ts`) is read-heavy with three writes,
   `record_create` + `record_link_create` + `record_file_attach`:
-  `wiki_search` + `wiki_list` find the home article, `record_list`
+  the wiki tool (op=search) + the wiki tool (op=list) find the home article, `record_list`
   dedupes, read-only `memory_search` grounds, and `analyze_image` lets
   the text-tier model verify a posted photo before attaching it. It
   conservatively
@@ -1508,11 +1507,11 @@ mental model (wiki editing covers articles and records alike).
   Broadcast topic (`_shared/agent-progress.ts`), which follows the
   same transport + flush-before-respond contract as the log relay.
 - **Chat / tools** (`docs/dev/chat.md`, `docs/dev/tools.md`) -
-  `wiki_search` and the other read tools (plus the record reads
+  the wiki tool (op=search) and the other read tools (plus the record reads
   `record_list` / `record_get` / `record_search`) are always-on in
   every chat request. The gated `wikiToolbox` is the single toggle for
-  every chat-driven write: article save + delete (`wiki_save` /
-  `wiki_delete`), the `wiki_librarian` delegation for
+  every chat-driven write: article save + delete (the wiki tool (op=save) /
+  the wiki tool (op=delete)), the `wiki_librarian` delegation for
   multi-article consolidations, and the record writes
   (`record_create` / `record_update` / `record_delete` plus the file +
   link tools).
@@ -1585,7 +1584,7 @@ mental model (wiki editing covers articles and records alike).
   so a future assistant can tell what the user worked out from what
   the user was handed and kept. This pairs with
   the dual-purpose framing (biographical record for the user + context
-  a future assistant loads via wiki_search) - both readers want what
+  a future assistant loads via wiki op=search) - both readers want what
   is true of the user, not a transcript. Don't soften it; "document
   the user's learning" framings are exactly what reintroduce the
   conflation (the assistant teaching X is not the user knowing X).
@@ -1607,7 +1606,7 @@ mental model (wiki editing covers articles and records alike).
   `wikiLibrarianEnabled` with the identical shape, for the identical
   reason.
 - **Wiki write tools are registered but not chat-reachable.**
-  `wiki_save` / `wiki_delete` live in
+  the wiki tool (op=save) / the wiki tool (op=delete) live in
   performToolCall's global registry (the barrel imports in
   `supabase/functions/venice/tools/index.ts`) so `asAgentTool` can
   wrap the registered impls, but they are deliberately absent from
@@ -1629,7 +1628,7 @@ mental model (wiki editing covers articles and records alike).
   should land with seam-driven coverage, not live verification.
 - **Build agent toolboxes from the registered tool ports; never
   inline private copies.** The librarian's write tools are the
-  registered `wiki_save` / `wiki_delete` executes wrapped via
+  registered the wiki tool (op=save) / the wiki tool (op=delete) executes wrapped via
   `asAgentToolNoThread`. An inlined copy drifts silently: an earlier
   inlined pair carried validation caps of 300 title / 50000 content
   chars while the real tools enforce 200 / 16000, so the same write
@@ -1686,15 +1685,15 @@ mental model (wiki editing covers articles and records alike).
   messages lateral keeps the predicate stable against future bumps
   to `threads.updated_at` from unrelated writes.
 - **`unique(user_id, title)` + the rephrased violation.** The
-  autonomous agent is told to always `wiki_search` before writing,
+  autonomous agent is told to always the wiki tool (op=search) before writing,
   but a near-duplicate title can still slip through (the search
   returned an unrelated article, or caching missed). The unique
   constraint surfaces the collision as a tool error the agent reads
-  as "fall through to wiki_search + a save by id". The raw Postgres
+  as "fall through to wiki op=search + a save by id". The raw Postgres
   `duplicate key value violates unique constraint` message is opaque
-  to the model, so the function-side `wiki_save` rephrases it as
-  "An article titled X already exists. Run wiki_search to find its
-  id, then call wiki_save with that id." Removing the constraint would silently
+  to the model, so the function-side the wiki tool (op=save) rephrases it as
+  "An article titled X already exists. Run wiki op=search to find its
+  id, then call wiki op=save with that id." Removing the constraint would silently
   allow duplicate articles.
 - **Manual agent must NOT discard facts unless told to.** The
   "rewrite for tone" / "fix paragraph 2" / "add a sentence" patterns
@@ -1784,7 +1783,7 @@ mental model (wiki editing covers articles and records alike).
 - **Favorited articles are locked from agent edits.** The
   `wiki_articles.favorite` flag (which also drives offline caching)
   doubles as an agent-edit lock. When `favorite` is true, the
-  `wiki_save` and `wiki_delete` tools refuse the call with a
+  the wiki tool (op=save) and the wiki tool (op=delete) tools refuse the call with a
   clear error, and `runWikiManualUpdate` returns `kind:'error'`
   before the agent even runs. This blocks all three agent paths
   (autonomous sweep, librarian, manual per-article update) from
@@ -1793,8 +1792,8 @@ mental model (wiki editing covers articles and records alike).
   the user can still edit a favorited article themselves. The
   autonomous and librarian prompts tell the model to skip locked
   articles; the librarian's article list annotates them with
-  `[locked]`. The read tools (`wiki_search`, `wiki_list`,
-  `wiki_get`) all surface `favorite` so the agents can see the lock
+  `[locked]`. The read tools (the wiki tool (op=search), the wiki tool (op=list),
+  the wiki tool (op=get)) all surface `favorite` so the agents can see the lock
   status before attempting an edit.
 
 ## Verification
@@ -1867,7 +1866,7 @@ End-to-end manual smoke test:
     articles) gets a `reviewed` outcome with a tool-call count; a
     freshly-stamped user yields `no-user` on the next tick.
 16. **Recall tool.** Ask the chat "what do you know about my green
-    tea preference?" - the model issues `wiki_search` and grounds
+    tea preference?" - the model issues the wiki tool (op=search) and grounds
     its answer.
 17. **Embeddings filled.** New article -> `embedding is null`
     initially, populates after the next backfill tick.

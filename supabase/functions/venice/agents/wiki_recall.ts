@@ -13,7 +13,7 @@
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
 import { registerTool, requireThreadId, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
-import { wikiSearch } from '../tools/wiki_search.ts';
+import { wiki } from '../tools/wiki.ts';
 import {
   runHeadlessAgent,
   type AgentTool,
@@ -33,7 +33,7 @@ import { WIKI_RECALL_MODEL } from '../../_shared/agent-models.ts';
 const WIKI_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'wiki_search',
+    name: 'wiki',
     description:
       "Semantic search over the user's wiki - encyclopedic articles " +
       "about projects, people, places, and topics in their life. " +
@@ -41,6 +41,11 @@ const WIKI_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
     parameters: {
       type: 'object',
       properties: {
+        op: {
+          type: 'string',
+          enum: ['search'],
+          description: "REQUIRED. The only op this tool carries: semantic wiki search.",
+        },
         query: {
           type: 'string',
           description: 'Natural-language query. Embedding match (paraphrases work).',
@@ -153,10 +158,10 @@ async function runWikiRecall(
     convo.push({ role: 'user', content: buildPrompt(topic) });
 
     const recallSearch: AgentTool = {
-      name: 'wiki_search',
+      name: 'wiki',
       wire: WIKI_SEARCH_WIRE_SCHEMA,
       async execute(args, agentCtx) {
-        return await wikiSearch.execute(args, {
+        return await wiki.execute({ op: 'search', ...args }, {
           adminClient: agentCtx.adminClient,
           userId: agentCtx.userId,
           threadId: agentCtx.threadId,

@@ -106,8 +106,7 @@ describe('tool registry', () => {
     // record writes (records + files + links). Reads stay in
     // always-on.
     expect(wikiToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
-      'wiki_save',
-      'wiki_delete',
+      'wiki',
       'wiki_librarian',
       'record_create',
       'record_update',
@@ -129,9 +128,6 @@ describe('tool registry', () => {
       'wiki_recall',
       'memory_search',
       'conversation_search',
-      'wiki_search',
-      'wiki_list',
-      'wiki_get',
       'research_docs',
       'web_search',
       'update_title',

@@ -6,7 +6,7 @@ The chat model's direct write access to the wiki
 ([dev: tools](../../dev/tools.md), "The write toolboxes";
 [dev: wiki](../../dev/wiki.md), "Tool toolbox split").
 Specifically the chat-dispatched `wiki_create` / `wiki_update` /
-`wiki_delete` article tools and the record write tools grouped with
+the wiki tool (op=delete) article tools and the record write tools grouped with
 them (`record_create` / `record_update` / `record_delete`), and the
 changelog rows every chat-driven write lands. The `wiki_librarian`
 delegation living alongside the direct tools is exercised by
@@ -62,7 +62,7 @@ delegation living alongside the direct tools is exercised by
    ```
 
 6. **Delete.** Ask: `Delete the QA Sandbox article.` Confirm
-   `wiki_delete` fires, the row is gone, its records cascade away, and a
+   the wiki tool (op=delete) fires, the row is gone, its records cascade away, and a
    `delete`-kind changelog row survives with the title snapshot:
 
    ```sql

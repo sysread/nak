@@ -40,9 +40,7 @@ Deno.test('wiki toolbox is wiki CRUD + full record management + memory_search, i
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
-      'wiki_search',
-      'wiki_save',
-      'wiki_delete',
+      'wiki',
       'record_list',
       'record_create',
       'record_update',

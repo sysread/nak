@@ -22,7 +22,7 @@ import { createEdgeLogger } from '../../_shared/edge-log.ts';
 import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
-import { wikiSearch } from '../tools/wiki_search.ts';
+import { wiki as wikiTool } from '../tools/wiki.ts';
 import { followups as followupsTool } from '../tools/followups.ts';
 import { logPreview } from './_recall_helpers.ts';
 
@@ -179,7 +179,7 @@ export const contextTool: ToolDef = {
           { query, limit: CONTEXT_CONVERSATION_LIMIT },
           ctx,
         ),
-        wikiSearch.execute({ query, limit: CONTEXT_WIKI_LIMIT }, ctx),
+        wikiTool.execute({ op: 'search', query, limit: CONTEXT_WIKI_LIMIT }, ctx),
         followupsTool.execute({ op: 'list' }, ctx),
       ]);
 

@@ -26,8 +26,7 @@ Deno.test('extraction toolbox is reads + record_create/link/attach + analyze_ima
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
-      'wiki_search',
-      'wiki_list',
+      'wiki',
       'record_list',
       'record_create',
       'record_link_create',

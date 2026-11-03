@@ -78,7 +78,7 @@ function probeDocuments(ctx: ToolContext) {
       .from('documents')
       .select('id, filename')
       .eq('user_id', ctx.userId)
-      // % wildcards: see the matching comment in wiki_save.ts - a bare
+      // % wildcards: see the matching comment in the wiki combo's save op - a bare
       // ilike pattern only matches the exact string, hiding near-matches
       // from the fuzzy branch.
       .ilike('filename', `%${probeValue}%`)

@@ -5,7 +5,7 @@
 The agent-edit lock on favorited wiki articles
 ([dev: wiki](../../dev/wiki.md), "Favorited articles are locked from
 agent edits"). The `wiki_articles.favorite` flag doubles as a lock:
-when true, the `wiki_update` and `wiki_delete` tools refuse the call,
+when true, the `wiki_update` and the wiki tool (op=delete) tools refuse the call,
 the `runWikiManualUpdate` per-article agent returns an error before
 running, and the autonomous wiki agent and librarian are instructed
 to skip locked articles. The user's own direct edits through the UI
@@ -47,8 +47,8 @@ themselves.
     where title = 'QA Lock Article';
    ```
 
-5. **Chat-driven wiki_delete is refused.** In the same thread, ask:
-   `Delete the QA Lock article.` Confirm `wiki_delete` fails with the
+5. **Chat-driven wiki op=delete is refused.** In the same thread, ask:
+   `Delete the QA Lock article.` Confirm the wiki tool (op=delete) fails with the
    "favorited (locked)" error. Verify the row still exists:
 
    ```sql
@@ -68,7 +68,7 @@ themselves.
 
 8. **Read tools surface the flag.** From a chat thread with the Wiki
    toolbox on, ask: `Search the wiki for "QA Lock".` Confirm the
-   `wiki_search` results include a `favorite` field (true while
+   the wiki tool (op=search) results include a `favorite` field (true while
    locked, false after unlocking). The librarian's article list
    annotates locked articles with `[locked]` - this is covered by
    the Deno unit test in `wiki_librarian.test.ts`, not this case.
@@ -85,13 +85,13 @@ themselves.
 - (4) The chat model's `wiki_update` tool call fails with an error
   containing "favorited (locked)". The article body is unchanged
   in the DB.
-- (5) The chat model's `wiki_delete` tool call fails with an error
+- (5) The chat model's the wiki tool (op=delete) tool call fails with an error
   containing "favorited (locked)". The article row still exists.
 - (6) The "Ask agent to update" button is disabled with the lock
   tooltip; the agent cannot run on a locked article.
 - (7) After unlocking, `wiki_update` succeeds - the body grows by
   the requested sentence. The lock is lifted.
-- (8) The `wiki_search` tool returns a `favorite` boolean for each
+- (8) The the wiki tool (op=search) tool returns a `favorite` boolean for each
   hit. While locked, the field is `true`; after unlocking, `false`.
 
 ## Cleanup
