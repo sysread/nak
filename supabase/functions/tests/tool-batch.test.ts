@@ -36,7 +36,12 @@ const recipeDelete = {
     recipes.execute({ op: 'delete', ...args }, ctx),
 };
 import { recordDelete } from '../venice/tools/record_delete.ts';
-import { recipeRecordDelete } from '../venice/tools/recipe_record_delete.ts';
+// Dispatch seam: the retired verb tool became the recipe_records
+// combination tool (op=delete) - assertions unchanged.
+const recipeRecordDelete = {
+  execute: (args: Record<string, unknown>, ctx: ToolContext) =>
+    recipes.execute({ op: 'delete', ...args }, ctx),
+};
 import { recordLinkDelete } from '../venice/tools/record_link_delete.ts';
 
 // --- stub harness ------------------------------------------------------

@@ -98,8 +98,7 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
 - Direct reads across every store: `memory_search` / `memory_get`,
   `conversation_search` / `conversation_get`, `wiki_search` /
   `wiki_list` / `wiki_get` plus the wiki record reads `record_list` /
-  `record_get` / `record_search`, plus the cooking-log reads `recipe_record_list` / `recipe_record_get` /
-  `recipe_record_search`, and `doc_list` / `doc_get` / `doc_grep` /
+  `record_get` / `record_search`, and `doc_list` / `doc_get` / `doc_grep` /
   `doc_read`. The `*_get` trio (`memory_get` / `conversation_get` /
   `wiki_get`) is the by-id drill-down behind the recall block's
   `^N^` citations.
@@ -170,8 +169,9 @@ surface lives in the always-on set above.
   save / delete - the browse ops are read-only but ride here), the
   photo combination tool (`recipe_photos` - attach / remove /
   reorder / label behind one op enum), and the cooking-log record
-  writes (`recipe_record_create` / `recipe_record_update` /
-  `recipe_record_delete` - dated entries for what happened when the
+  (the cooking log rides the recipe_records combination tool:
+  list / get / search / create / update / delete - dated entries for
+  what happened when the
   user cooked a recipe; the capture trigger rides this toolbox's
   description, which is the catalog-visible surface). See
   `./cookbook.md`.

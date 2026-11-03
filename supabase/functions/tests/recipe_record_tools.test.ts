@@ -16,14 +16,25 @@
 import { assertEquals, assertRejects, assertStringIncludes } from '@std/assert';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ToolContext } from '../venice/performToolCall.ts';
-import { recipeRecordCreate } from '../venice/tools/recipe_record_create.ts';
-import { recipeRecordUpdate } from '../venice/tools/recipe_record_update.ts';
-import { recipeRecordDelete } from '../venice/tools/recipe_record_delete.ts';
-import { recipeRecordList } from '../venice/tools/recipe_record_list.ts';
-import { recipeRecordGet } from '../venice/tools/recipe_record_get.ts';
-import { recipeRecordSearch } from '../venice/tools/recipe_record_search.ts';
-import { recipeRecordCreateSchema } from '../../../src/lib/tools/recipe_record_create.schema.ts';
-import { recipeRecordUpdateSchema } from '../../../src/lib/tools/recipe_record_update.schema.ts';
+import { recipeRecords } from '../venice/tools/recipe_records.ts';
+import { recipeRecordsSchema } from '../../../src/lib/tools/recipe_records.schema.ts';
+
+// Dispatch seam: the six verb tools became the recipe_records
+// combination tool - every test drives execute() with op in args so
+// per-op assertions survive envelope changes unchanged.
+const recipeRecordCreate = seam('create');
+const recipeRecordUpdate = seam('update');
+const recipeRecordDelete = seam('delete');
+const recipeRecordList = seam('list');
+const recipeRecordGet = seam('get');
+const recipeRecordSearch = seam('search');
+
+function seam(op: string) {
+  return {
+    execute: (args: Record<string, unknown>, ctx: ToolContext) =>
+      recipeRecords.execute({ op, ...args }, ctx),
+  };
+}
 
 // --- localEmbed seam ---------------------------------------------------
 //
@@ -626,8 +637,8 @@ Deno.test('recipe_record_search clamps the limit to 1..30', async () => {
 
 // --- prompt invariants ---------------------------------------------------
 
-Deno.test('create description carries the capture trigger and the check-list-first dedup guard', () => {
-  const d = recipeRecordCreateSchema.description;
+Deno.test('combo description carries the capture trigger and the check-list-first dedup guard', () => {
+  const d = recipeRecordsSchema.description;
   // WHEN-to-log trigger: capture is prompt-driven (no sweep), so this
   // sentence is the capture path's brain. It must survive rewording.
   assertStringIncludes(d, 'reports having cooked a recipe and how it went');
@@ -636,9 +647,9 @@ Deno.test('create description carries the capture trigger and the check-list-fir
   assertStringIncludes(d, 'ask instead of guessing');
   // The guard is check-list-first: list, match the EVENT (not the
   // date), update instead of stacking.
-  assertStringIncludes(d, 'recipe_record_list');
+  assertStringIncludes(d, 'list or search the log first');
   assertStringIncludes(d, 'same EVENT, not the same date');
-  assertStringIncludes(d, 'recipe_record_update');
+  assertStringIncludes(d, 'op=update that record');
   // The spurious-null hazard on the optional outcome.
   assertStringIncludes(d, 'omit unless setting or clearing');
 });
@@ -651,8 +662,8 @@ Deno.test('create description carries the capture trigger and the check-list-fir
 // schema SHAPE is pinned here instead. House pattern for nullable
 // params: type: ['string','null'] + enum including null
 // (followup_save, recipe_save).
-Deno.test('update schema admits null outcome through the wire validator', () => {
-  const o = recipeRecordUpdateSchema.parameters.properties.outcome as unknown as {
+Deno.test('combo schema admits null outcome through the wire validator (update state)', () => {
+  const o = recipeRecordsSchema.parameters.properties.outcome as unknown as {
     type: readonly string[];
     enum: readonly unknown[];
   };
@@ -661,8 +672,8 @@ Deno.test('update schema admits null outcome through the wire validator', () => 
   assertEquals(o.enum.includes(null), true);
 });
 
-Deno.test('create schema admits null outcome through the wire validator', () => {
-  const o = recipeRecordCreateSchema.parameters.properties.outcome as unknown as {
+Deno.test('combo schema admits null outcome through the wire validator (create state)', () => {
+  const o = recipeRecordsSchema.parameters.properties.outcome as unknown as {
     type: readonly string[];
     enum: readonly unknown[];
   };

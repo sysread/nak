@@ -2,8 +2,11 @@
 
 Status: IN PROGRESS. M1 (`recipe_photos`) SHIPPED to main as squash
 f0f19a58 on 2026-11-02 (Tests + Deploy green). M2 (`image`) SHIPPED
-2026-11-03. M3-M9 pending. One cluster per milestone; each milestone
-ships as its own deploy.
+as ce0926d9 (green). M3 (`recipes`) SHIPPED as 563bdefc (green).
+M4-M9 pending. One cluster per milestone; each milestone ships as
+its own deploy. Standing merge authorization from Jeff: merge as QA
+completes per milestone, coordinating serve windows through the
+intake desk (guard-5-00021).
 
 Read [`../tools.md`](../tools.md) first - this plan assumes its
 vocabulary (`ToolDef`, `buildToolList`, `performToolCall`, agent

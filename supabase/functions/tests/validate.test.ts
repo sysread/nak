@@ -170,6 +170,24 @@ Deno.test('validateToolArgs: rejects value not in enum', () => {
   assertStringIncludes(err.message, 'color must be one of: red, green, blue');
 });
 
+Deno.test('validateToolArgs: renders null in the enum message as the literal word', () => {
+  // The nullable-enum house pattern (['string','null'] + enum incl
+  // null) carries the clear-state semantics; a rejection message that
+  // stringifies null to '' hides the legal value behind a dangling
+  // ', '.
+  const s = schema({
+    outcome: { type: ['string', 'null'], enum: ['success', 'mixed', 'failure', null] },
+  }, ['outcome']);
+  const err = assertThrows(
+    () => validateToolArgs(s, { outcome: 'excellent' }),
+    Error,
+  );
+  assertStringIncludes(
+    err.message,
+    'outcome must be one of: success, mixed, failure, null',
+  );
+});
+
 Deno.test('validateToolArgs: accepts value in enum', () => {
   const s = schema({
     color: { type: 'string', enum: ['red', 'green', 'blue'] },
