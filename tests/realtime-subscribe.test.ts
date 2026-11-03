@@ -43,18 +43,24 @@ interface FakeClient {
   topics: string[];
   /** Every callback registered through channel.on(), in order. */
   handlers: BroadcastHandler[];
+  /** Every subscribe-status callback registered through channel.subscribe(). */
+  subscribeCbs: Array<(status: string, err?: unknown) => void>;
   removeChannel: ReturnType<typeof vi.fn>;
 }
 
 function makeClient(): FakeClient {
   const topics: string[] = [];
   const handlers: BroadcastHandler[] = [];
+  const subscribeCbs: Array<(status: string, err?: unknown) => void> = [];
   const channel = {
     on: (_type: string, _filter: unknown, cb: BroadcastHandler) => {
       handlers.push(cb);
       return channel;
     },
-    subscribe: () => channel,
+    subscribe: (cb?: (status: string, err?: unknown) => void) => {
+      if (cb) subscribeCbs.push(cb);
+      return channel;
+    },
   };
   const removeChannel = vi.fn(async () => 'ok');
   const client = {
@@ -64,7 +70,7 @@ function makeClient(): FakeClient {
     },
     removeChannel,
   } as unknown as SupabaseClient;
-  return { client, topics, handlers, removeChannel };
+  return { client, topics, handlers, subscribeCbs, removeChannel };
 }
 
 const noop = (): void => {};
@@ -109,6 +115,35 @@ describe('postgres_changes helpers', () => {
       for (const topic of topics) expect(topic.startsWith(helper.prefix)).toBe(true);
     });
   }
+
+  it('subscribeToMessages passes the subscribe-status callback through and forwards status events', () => {
+    const { client, subscribeCbs } = makeClient();
+    const statuses: Array<[string, unknown]> = [];
+    subscribeToMessages(client, 'thread-1', noop, (status, err) => statuses.push([status, err]));
+    // The status callback reached channel.subscribe().
+    expect(subscribeCbs).toHaveLength(1);
+    subscribeCbs[0]('SUBSCRIBED');
+    subscribeCbs[0]('CHANNEL_ERROR', new Error('boom'));
+    expect(statuses).toEqual([
+      ['SUBSCRIBED', undefined],
+      ['CHANNEL_ERROR', expect.any(Error)],
+    ]);
+    // A subscription without a status callback registers none.
+    const plain = makeClient();
+    subscribeToMessages(plain.client, 'thread-1', noop);
+    expect(plain.subscribeCbs).toHaveLength(0);
+  });
+
+  it('subscribeToMessages keeps the fresh-topic contract for the four-arg call', () => {
+    const { client, topics } = makeClient();
+    const onStatus = noop;
+    const unsubscribe = subscribeToMessages(client, 'thread-1', noop, onStatus);
+    unsubscribe();
+    subscribeToMessages(client, 'thread-1', noop, onStatus);
+    expect(topics).toHaveLength(2);
+    expect(topics[0]).not.toBe(topics[1]);
+    for (const topic of topics) expect(topic.startsWith('messages:thread-1:')).toBe(true);
+  });
 });
 
 describe('Broadcast helpers', () => {

@@ -89,11 +89,22 @@ function uniqueTopic(base: string): string {
  * also receives an echo of its own write, and a race can push the
  * echo ahead of the promise resolution for `addMessage`. Dedupe by
  * `Message.id` at the append site handles both orderings.
+ *
+ * `onStatus`, when given, receives the channel's subscribe-status
+ * transitions verbatim. Paired-read convention (module header): the
+ * SUBSCRIBED ack is the signal that the channel can deliver, and the
+ * caller pairs it with a catch-up read - any row inserted between
+ * the opening fetch and the join is in neither and needs the
+ * refetch. Failure statuses (CHANNEL_ERROR / TIMED_OUT) mean the
+ * channel never joined or died; a caller that ignores them gets
+ * silence (the pre-onStatus behavior, and the shape of the
+ * second-tab deafness sighting).
  */
 export function subscribeToMessages(
   client: SupabaseClient,
   threadId: string,
-  onMessage: (msg: Message) => void
+  onMessage: (msg: Message) => void,
+  onStatus?: (status: 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED', err: unknown) => void
 ): () => void {
   // Defend the realtime channel: if the consumer throws, the
   // postgres_changes subscription dies silently and the transcript
@@ -159,7 +170,7 @@ export function subscribeToMessages(
         dispatch(payload.new);
       }
     )
-    .subscribe();
+    .subscribe(onStatus);
   return () => {
     // removeChannel returns a promise but we don't care to await —
     // the caller is teardown path, and stray events after this

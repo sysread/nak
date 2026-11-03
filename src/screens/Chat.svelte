@@ -72,6 +72,7 @@
     type TopicVocabulary,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat/loop';
+  import { messagesSubscribeDecision } from '$lib/chat/realtime-recovery';
   import { withForkPointMarker } from '$lib/chat/prompt-assembly';
   import { slopNoticeCopy } from '$lib/ui/slop-notice';
   import CopyButton from '../components/CopyButton.svelte';
@@ -1990,10 +1991,40 @@
   // that re-fetch instead of landing it live. subscribeToMessages
   // also suffixes its topic per subscription so a fast resubscribe on
   // the same thread can never collide.
+  // Messages-channel subscribe bookkeeping (see the subscribe effect
+  // below): the tick re-runs the effect for a bounded resubscribe;
+  // the streak counter is component scope keyed to the thread so it
+  // survives the tick re-run but resets on a thread switch.
+  let msgSubResubscribeTick = $state(0);
+  let msgSubAttempts = 0;
+  let msgSubAttemptsFor: string | null = null;
+  // The opening per-thread transcript fetches still in flight, keyed
+  // by thread id. The SUBSCRIBED catch-up awaits the entry so it
+  // cannot lose to the opening fetch's later, staler assignment
+  // (selectThread sets activeThreadId before its fetch resolves).
+  // Each selectThread call registers its own entry and the entry is
+  // deleted when it settles, so the map self-drains.
+  const inflightThreadFetches = new Map<string, Promise<void>>();
+
   $effect(() => {
     if (!app.supabase || !activeThreadId) return;
     if (activeThreadIsDraft) return;
     const threadId = activeThreadId;
+    // A failed join resubscribes by bumping this tick: reading it here
+    // makes the effect depend on it, so the bump tears the dead channel
+    // down and opens a fresh one (a fresh topic per subscription - see
+    // uniqueTopic). A healthy channel is never torn down: only the
+    // resubscribe decision mutates the tick.
+    const resubscribeTick = msgSubResubscribeTick;
+    void resubscribeTick;
+    // The failure-streak counter is per thread: reset it when the
+    // effect starts subscribing to a different thread. Component scope
+    // (not effect scope) so the streak survives the tick re-run - a
+    // second consecutive failure must stop the churn, not reset it.
+    if (threadId !== msgSubAttemptsFor) {
+      msgSubAttempts = 0;
+      msgSubAttemptsFor = threadId;
+    }
     return app.supabase.subscribeToMessages(threadId, (msg) => {
       // Ignore echoes for threads we've since left — the effect's
       // teardown will run, but a message queued in-flight may still
@@ -2046,6 +2077,29 @@
           .catch(() => {
             // Swallowed intentionally — best-effort hydration, see above.
           });
+      }
+    }, (status, err) => {
+      // Subscribe-status handling: the decision module owns the policy
+      // (docs/dev/plans/realtime-delivery-fixes-plan.md, STATE AND
+      // TRANSITION MATRIX). SUBSCRIBED pairs the channel with the
+      // catch-up read - any row inserted between the opening
+      // listMessages snapshot and this join is in neither (the
+      // fetch-then-async-join race) and only the refetch lands it.
+      const decision = messagesSubscribeDecision(status, msgSubAttempts);
+      msgSubAttempts = decision.nextAttempts;
+      if (decision.action === 'catch-up') {
+        log.debug(`messages channel joined for ${threadId}; running catch-up reconcile`);
+        void catchUpAfterSubscribe(threadId);
+      } else if (decision.action === 'resubscribe') {
+        log.warn(`messages channel ${status} for ${threadId}; resubscribing once`, err ?? '');
+        msgSubResubscribeTick++;
+      } else if (decision.action === 'log-warn') {
+        log.warn(
+          `messages channel ${status} again for ${threadId}; transcript reconciles carry delivery`,
+          err ?? '',
+        );
+      } else {
+        log.debug(`messages channel ${status} for ${threadId}`);
       }
     });
   });
@@ -2778,7 +2832,19 @@
           log.warn('thread stream-state point read failed', err);
           return null;
         });
-      const fetched = await app.supabase.listMessages(id);
+      const fetchedListPromise = app.supabase.listMessages(id);
+      // Track the opening fetch for the messages channel's SUBSCRIBED
+      // catch-up: the catch-up awaits this entry so a fast channel join
+      // cannot reconcile an older snapshot and then lose to this
+      // fetch's later, staler assignment (activeThreadId was already
+      // set, so the join races this await). Never rejects - the
+      // try/catch below owns surfacing fetch failures.
+      const trackedFetch = fetchedListPromise.then(() => {}).catch(() => {});
+      inflightThreadFetches.set(id, trackedFetch);
+      void trackedFetch.finally(() => {
+        if (inflightThreadFetches.get(id) === trackedFetch) inflightThreadFetches.delete(id);
+      });
+      const fetched = await fetchedListPromise;
       const streamState = await streamStatePromise;
       // The user may have hopped threads while we were awaiting - guard
       // against a late response stomping newer state.
@@ -3081,11 +3147,38 @@
     try {
       const fetched = await supabase.listMessages(threadId);
       if (activeThreadId !== threadId) return;
+      // Strip an in-flight streaming row exactly like selectThread:
+      // the streaming bubble owns mid-flight rendering, and merging
+      // the row bare would double-paint the answer (bubble +
+      // transcript row). The SUBSCRIBED catch-up caller reconciles on
+      // a thread possibly opened mid-turn, where the snapshot can
+      // carry the row.
+      const streamingTail = fetched.find(
+        (m) => m.role === 'assistant' && m.status === 'streaming',
+      );
+      const visibleFetched = streamingTail
+        ? fetched.filter((m) => m.id !== streamingTail.id)
+        : fetched;
       const bufferedRows = exchangeStore.peek(threadId)?.persistedRows ?? [];
-      messages = mergeMessagesById(fetched, bufferedRows, threadId);
+      messages = mergeMessagesById(visibleFetched, bufferedRows, threadId);
     } catch (err) {
       log.warn(`${why} reconcile failed`, err);
     }
+  }
+
+  /**
+   * The messages channel's SUBSCRIBED catch-up: order behind the
+   * opening fetch for this thread (when one is in flight), then
+   * refetch the transcript. The fetch-then-async-join race means a
+   * row inserted between the opening snapshot and the channel join is
+   * in neither - this refetch is what lands it. Awaiting the tracked
+   * entry (never rejects) keeps the catch-up's fresher snapshot from
+   * being overwritten by the opening fetch's staler assignment.
+   */
+  async function catchUpAfterSubscribe(threadId: string): Promise<void> {
+    const inflight = inflightThreadFetches.get(threadId);
+    if (inflight) await inflight;
+    await reconcileTranscript(threadId, 'post-subscribe-catch-up');
   }
 
   // Active thread's cached intuition payload, coerced from the

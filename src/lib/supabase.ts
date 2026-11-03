@@ -1601,9 +1601,10 @@ export class SupabaseService {
 
   subscribeToMessages(
     threadId: string,
-    onMessage: (msg: Message) => void
+    onMessage: (msg: Message) => void,
+    onStatus?: (status: 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED', err: unknown) => void
   ): () => void {
-    return realtimeApi.subscribeToMessages(this.client, threadId, onMessage);
+    return realtimeApi.subscribeToMessages(this.client, threadId, onMessage, onStatus);
   }
 
   async getMessage(id: string): Promise<Message | null> {
