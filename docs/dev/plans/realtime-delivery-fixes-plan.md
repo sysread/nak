@@ -1,10 +1,15 @@
 # Realtime Delivery Fixes Plan
 
-Status: DRAFT r2 2026-11-03. Bug-intake dispatched fix session
-(realtime-delivery-fixes worktree, base f0f19a58, one commit ahead of
-the dispatch's stated 07eca2c4 and one behind current main ce0926d9;
-all citations verified at f0f19a58 - no cited file is touched by
-ce0926d9). Owner: the fix session; reviewer/coordinator:
+Status: DRAFT r3 2026-11-03. Bug-intake dispatched fix session
+(realtime-delivery-fixes worktree; base moved to origin/main
+ce0926d9 per the coordinator's base-drift instruction - the drift's
+diff on this plan's surface is comment-only and line-count-neutral
+in Chat.svelte, plus the image-tool consolidation in
+generated-image.ts / message-blocks.ts / the function-side tools
+directory, none of which touches a cited line range; the image tool
+is now ONE `image` combination tool with an `op` parameter, not four
+separate tools - rider (b)'s recipe is updated accordingly).
+Owner: the fix session; reviewer/coordinator:
 guard-5-00021.
 
 ## SYNOPSIS
@@ -115,8 +120,11 @@ generated images before publishing the tool response).
 ## VERIFIED PREMISES
 
 Every citation below was read and confirmed in this session at base
-f0f19a58 (the evidence-audit lens independently re-swept all of them;
-round-1 corrections are folded in).
+f0f19a58 (the evidence and round-2/3 review lenses independently
+re-swept all of them; round-1 corrections are folded in), and
+re-confirmed against origin/main ce0926d9 after the base drift: the
+drift's diff on every cited file is either absent or comment-only
+with 1:1 line replacement, so all line ranges hold at ce0926d9.
 
 | # | Premise | Citation |
 | --- | --- | --- |
@@ -447,9 +455,11 @@ so the fix is not purely QA-verified.
 `docs/qa/use-cases/chat-regenerate-from-here.md:33-40`: replace the
 "ask something that triggers memory or web search" recipe with one
 that reliably dispatches a tool on z-ai-glm-5-3-flash: enable the
-Images toolbox and ask for a generated picture (`generate_image` is
-the reliable slow-tool trigger the doc's own 2026-08-21 findings row
-recommends, `:113`). For the general tool-turn precondition, ask the
+Images toolbox and ask for a generated picture (the `image`
+combination tool with `op=generate` is the reliable slow-tool
+trigger the doc's own 2026-08-21 findings row recommends, `:113`;
+that row predates the image-tool consolidation and its
+`generate_image` name is history, not a target). For the general tool-turn precondition, ask the
 model to save a specific fact to memory (the memory tools dispatch
 deterministically on an explicit save request). Update the
 precondition wording and note the model dependence.
