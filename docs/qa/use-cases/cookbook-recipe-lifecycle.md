@@ -108,11 +108,13 @@ open panel.
   width evenly and share one height; no tab strip shows. Below 720px
   an `Edit` / `Preview` tab strip appears and only the selected pane
   shows, full width. A typed edit shows up on the `Preview` tab.
-  `Save` is blocked with an inline
-  error until `What changed?` is non-empty; with a message it
-  persists and the panel flips to the detail pane. The saved row
-  appears at the top of the drawer's "All recipes" list (updated
-  sort).
+  `Save` is blocked by the browser's native required-field
+  validation (a bubble on the empty `What changed?` field), not by
+  an app inline error. The app inline error fires only for a
+  whitespace-only message, which the bubble does not catch. With a
+  message, the save persists and the panel flips to the detail
+  pane. The saved row appears at the top of the drawer's "All recipes" list
+  (updated sort).
 - (4) `History` lazy-loads on first detail open and shows exactly one
   row - the create - badged `current`. Its `change_message` is the
   `create qa cornbread` message you typed (the tool-path default
@@ -128,9 +130,11 @@ open panel.
   change writes a version like any content edit.
 - (7) Photos upload (downscale + dedup), `Save` is disabled while an
   upload is in flight, the caption and the new order persist, and
-  `History` gains an `add photos` row. The detail pane shows a photo
-  strip above the rendered recipe with the caption under the first
-  thumbnail.
+  `History` gains an `add photos` row. Re-picking a photo that was
+  already added (in this edit or on the recipe) adds no second
+  thumbnail and shows an `already added` note under the photo grid.
+  The detail pane shows a photo strip above the rendered recipe with
+  the caption under the first thumbnail.
 - (8) The lightbox opens to the clicked photo, pages with the arrow /
   key / swipe and loops at the ends, shows the caption and an `N / M`
   counter, and `Escape` (or a click on the dim surround) dismisses
@@ -184,3 +188,5 @@ open panel.
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-11-03 | local stack, wt-nak/tool-combos | de7fddc5 (post-M3, `recipes` combo) | PASS, 4 deviations: baseline's 3 unchanged + 2 NEW combo-specific | All 12 steps at parity with the baseline. Step 11's save = two calls: the first omitted `op` (full correct payload otherwise) - rejected `missing required parameter: op`, self-corrected next round with byte-identical args (5th sighting of the first-call op-omission across every combo run; the sharpened schema did not prevent it; cost: one wasted round + a red chip). NEW minor: the tool chip now reads just `recipes` - the verb is invisible until the chip expands (pre-rename it read `recipe_save`; the activity line may still disambiguate - worth a look at the chip rendering in a later milestone). Realtime drawer refresh under 10s (baseline 28s). Intra-add duplicate-image RLS leak not retested (tracked defect, per instruction). |
+| 2026-11-03 | local (dev@nak.local, cookbook-photo-fixes worktree) | 5eee96fa (pre-change baseline) | PASS with the four defects observed | Photo-focused partial run (steps 1-9 of the photo path only, no chat turns). Defect 2 repro: same-key re-upload via the storage API returned HTTP 400 `new row violates row-level security policy` (the exact raw string the then-frontend leaked to the UI); the pre-change frontend's intra-batch duplicate pick double-uploaded (dedup absent at 5eee96fa). Defect 1 state observed: Save binding read only `saving` (no disabled during upload); defect 4 state observed: use case wording said "inline error" while the real gate is native. Environment note: schema re-apply happened AFTER this baseline, inside the coordinator's serialization window. |
+| 2026-11-03 | local (dev@nak.local, cookbook-photo-fixes worktree) | 0dba6f3c + 9e28358b (post-change) | PASS (photo path 6/6) | (a) Intra-batch duplicate pick (two byte-identical files, one dialog): ONE upload, ONE draft, `alpha-copy.png: this photo was already added.` note, no error, one `recipe_images` row in dev-sql. (b) Cross-batch re-pick: redundant upload ran silently through the new UPDATE policy (no raw RLS string anywhere), note shown, still one draft. (c) Distinct file uploaded + appended normally. (d) Same-key storage PUT after the schema re-apply: 200 (was 400 RLS at baseline); grocery-item-images POST/PUT probe also 200 (update path open), probe deleted. (e) Save disabled while an upload was in flight (sampled `disabled: true` twice mid-pipeline, enabled after). (f) Export of a recipe with a section named `Instructions`: header appears once, no `== Instructions ==` marker, sibling markers intact. Native-save-gate check: empty `What changed?` + Save -> submit blocked, zero app inline errors (browser constraint validation, `novalidate` false). |

@@ -613,7 +613,11 @@ export async function deleteGroceryProduct(
  * Upload photo bytes to the `grocery-item-images` bucket at the
  * content-addressed key `<user_id>/<sha256>`. Idempotent
  * (upsert:true) - re-uploading the same image is a harmless
- * overwrite. Returns the object key.
+ * overwrite, which only holds while the bucket's storage.objects
+ * UPDATE policy exists ("grocery-item-images bucket is
+ * self-updatable"): an upsert of an existing object takes the
+ * UPDATE path, and without that policy it RLS-fails with the raw
+ * Postgres error. Returns the object key.
  */
 export async function uploadGroceryItemImageObject(
   client: SupabaseClient,

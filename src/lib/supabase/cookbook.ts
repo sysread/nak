@@ -584,8 +584,12 @@ export async function upsertRecipeImage(
 /**
  * Upload image bytes to the `recipe-images` bucket at the content-
  * addressed key `<user_id>/<sha256>`. Idempotent (upsert:true), so a
- * re-upload of the same image is a harmless overwrite. Returns the
- * object key. Shared by upsertRecipeImage and the one-time migrate.
+ * re-upload of the same image is a harmless overwrite - which only
+ * holds while the bucket's storage.objects UPDATE policy exists
+ * ("recipe-images bucket is self-updatable"): an upsert of an
+ * existing object takes the UPDATE path, and without that policy it
+ * RLS-fails with the raw Postgres error. Returns the object key.
+ * Called through upsertRecipeImage.
  */
 export async function uploadRecipeImageObject(
   client: SupabaseClient,

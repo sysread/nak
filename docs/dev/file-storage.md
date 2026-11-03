@@ -19,14 +19,20 @@ images were migrated onto the same pattern. The win: lighter reads,
 smaller backups, and the model's vision input can fetch an image URL
 directly instead of us inlining megabytes of base64 per turn.
 
-## The three buckets
+## The buckets
 
 All `public = false`; reachable only via signed URLs or an authenticated
-download. Each has three `storage.objects` RLS policies (select / insert
-/ delete) scoped to the caller's own top-level folder:
-`(storage.foldername(name))[1] = auth.uid()::text`. Defined + created
+download. Each carries `storage.objects` RLS policies scoped to the
+caller's own top-level folder:
+`(storage.foldername(name))[1] = auth.uid()::text`. The two
+content-addressed buckets (see the table) carry all four - select /
+insert / update / delete - because their `upsert: true` uploads map a
+re-upload of already-stored bytes onto the UPDATE path. The row-id
+buckets carry three (select / insert / delete): a re-upload there
+gets a distinct key and never takes UPDATE. Defined + created
 idempotently in `supabase/schema.sql` (`insert into storage.buckets ...
-on conflict do nothing`).
+on conflict do nothing`); the four-op standard for content-addressed
+buckets is pinned by `tests/schema-storage-policies.test.ts`.
 
 | Bucket | Holds | Object key | Lifecycle |
 | --- | --- | --- | --- |
@@ -34,6 +40,7 @@ on conflict do nothing`).
 | `attachments` | chat message files + generated images | `<user_id>/<attachment_id>/<filename>` | persistent; deleted by the user (Artifacts tab) or reclaimed when orphaned |
 | `attachments` | rasterized PDF pages | `<user_id>/<attachment_id>/pages/<nnnn>.jpg` | deleted with their attachment; reclaimed when orphaned |
 | `recipe-images` | cookbook photos | `<user_id>/<sha256>` (content-addressed) | persistent; reclaimed when orphaned |
+| `grocery-item-images` | grocery product photos | `<user_id>/<sha256>` (content-addressed) | persistent; reclaimed when orphaned |
 | `wiki-record-files` | files attached to wiki records | `<user_id>/<file_id>/<filename>` | persistent; reclaimed when orphaned |
 
 The key's top folder is always `<user_id>` - that's what the RLS policy
@@ -105,6 +112,13 @@ and deployed via its own line in `.github/workflows/deploy.yml`.
   `delete_orphan_recipe_images`; the delete re-checks "still no link" to
   skip a row re-linked mid-sweep. Replaced the old in-transaction orphan
   trigger, which could only delete the row, never the object.
+- **`grocery-image-gc`** (every 6h): deletes `grocery_item_images` rows
+  claimed by no product AND their `grocery-item-images` bucket object.
+  Orphanage is simpler than the recipe sweep's (a product photo has one
+  claimant, so the anti-join is on `grocery_products.image_id`), but the
+  drain loop is the same one (the function reuses the recipe sweep's
+  pure driver). Backed by `list_orphan_grocery_item_images` /
+  `delete_orphan_grocery_item_images`.
 - **`wiki-record-file-gc`** (daily): deletes wiki-record-files bucket
   objects with no `wiki_record_files` row - the orphans a record/article
   delete cascade leaves behind (the cascade drops the rows; SQL can't drop

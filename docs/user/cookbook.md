@@ -409,8 +409,12 @@ same caption, or none at all.
   bloat the recipe row. Caption edits stay in memory until you click
   **Save** - the entire photo set (additions, removals, reorders,
   and caption changes) lands in one save with one change message,
-  not one save per keystroke. Photo edits land in the History panel
-  under the same change message as everything else in the save.
+  not one save per keystroke. A photo that was already added (earlier
+  in this edit, or already on the recipe) is skipped with a note
+  instead of being added a second time. If an upload fails, an
+  error line shows under the photo grid. Photo edits land in the
+  History panel under the same change message as everything else in
+  the save.
 - **Asking the model**: tell Nak which photos to add and it will
   attach them, optionally with a caption per photo ("attach the
   cookies photo with the caption 'finished plate'"). The photos

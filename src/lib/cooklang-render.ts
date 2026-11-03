@@ -929,7 +929,8 @@ function plainTextStepLines(num: number, text: string): string[] {
  * the paste area as a buyable item - a stray "Finishing" row would
  * sit in the shopping list forever. Instructions are human-readable
  * prose, so section markers there are informational rather than
- * hazardous.
+ * hazardous. A section actually named "Instructions" gets no marker:
+ * it would repeat the block header printed directly above it.
  */
 export function recipeToPlainText(title: string, recipe: Recipe): string {
   const lines: string[] = [];
@@ -962,7 +963,12 @@ export function recipeToPlainText(title: string, recipe: Recipe): string {
       for (const bucket of groupStepsBySection(recipe)) {
         const bucketInstructions = bucket.steps.filter((s) => s.kind === 'instruction');
         if (bucketInstructions.length === 0) continue;
-        if (bucket.name !== null) {
+        // Skip the marker when the section is itself named
+        // "Instructions": the block header printed above would be
+        // followed by an identical "== Instructions ==" line. Exact
+        // match only - a differently-cased section emits a visually
+        // distinct marker and keeps it.
+        if (bucket.name !== null && bucket.name !== 'Instructions') {
           lines.push(`== ${bucket.name} ==`);
         }
         bucketInstructions.forEach((step, i) => {

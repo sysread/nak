@@ -304,6 +304,48 @@ export function photoDecodeErrorLine(name: string): string {
 }
 
 /**
+ * Verdict for a picked file whose imageId is known - fresh from the
+ * upsert RPC, or reused from the batch's sha map. A skip means the
+ * same image would be linked twice; the link table's composite PK
+ * (recipe_version_id, image_id) forbids that, so the duplicate is
+ * refused here with a visible note instead of failing the save later.
+ * Exported as the named return shape of `photoDuplicateVerdict` -
+ * no consumer imports it by name today; the screen dispatches on
+ * the string literals. Not dead code.
+ */
+export type PhotoDuplicateVerdict =
+  | { kind: 'append' }
+  | { kind: 'skip'; note: string };
+
+export function photoDuplicateVerdict(args: {
+  name: string;
+  imageId: string;
+  photos: readonly DraftPhoto[];
+}): PhotoDuplicateVerdict {
+  if (args.photos.some((p) => p.imageId === args.imageId)) {
+    return { kind: 'skip', note: `${args.name}: this photo was already added.` };
+  }
+  return { kind: 'append' };
+}
+
+/**
+ * Error line for a file whose upload or RPC round-trip failed.
+ * Storage-level RLS refusals surface as raw Postgres strings ("new
+ * row violates row-level security policy") - meaningless to a user,
+ * so they map to actionable copy. Every other failure passes its
+ * message through: RPC validation errors are intentional copy, not
+ * leaks. The caller logs the raw error to the console; this only
+ * shapes the UI line, and the failure stays visible either way.
+ */
+export function photoUploadErrorLine(name: string, err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes('row-level security')) {
+    return `${name}: could not upload photo. Try re-adding it.`;
+  }
+  return `${name}: ${message}`;
+}
+
+/**
  * Move the photo at `index` one slot left (`dir` -1) or right (+1),
  * returning a new array; returns the input untouched when the move
  * would fall off either end, so the edge buttons are no-ops rather

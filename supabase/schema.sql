@@ -36,6 +36,11 @@
 --     stay unreachable through the Data API. Enforced by
 --     tests/schema-grants.test.ts: every create-table statement
 --     must stay above the block.
+--   - Content-addressed Storage buckets (recipe-images,
+--     grocery-item-images) carry all four storage.objects policies -
+--     select / insert / update / delete, each with the self-prefix
+--     predicate - because upsert:true re-uploads take the UPDATE
+--     path. Enforced by tests/schema-storage-policies.test.ts.
 --
 -- If you add a statement that can't be made idempotent, stop and
 -- fix that before merging — the next `mise run sync` on a
@@ -2932,6 +2937,26 @@ create policy "recipe-images bucket is self-writable" on storage.objects
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
+-- Upsert re-uploads of an existing object take the UPDATE path, and
+-- the content-addressed key (<user_id>/<sha256>) makes every re-add
+-- of a stored photo exactly that - without this policy the re-upload
+-- RLS-fails and leaks the raw Postgres error to the UI. USING gates
+-- which rows may be updated. WITH CHECK gates the new row version.
+-- The key never changes owner, so both carry the same self-prefix
+-- predicate. The grocery-item-images bucket below carries the
+-- identical policy for the same reason.
+drop policy if exists "recipe-images bucket is self-updatable" on storage.objects;
+create policy "recipe-images bucket is self-updatable" on storage.objects
+  for update to authenticated
+  using (
+    bucket_id = 'recipe-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  )
+  with check (
+    bucket_id = 'recipe-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
 drop policy if exists "recipe-images bucket is self-deletable" on storage.objects;
 create policy "recipe-images bucket is self-deletable" on storage.objects
   for delete to authenticated
@@ -4528,6 +4553,22 @@ create policy "grocery-item-images bucket is self-readable" on storage.objects
 drop policy if exists "grocery-item-images bucket is self-writable" on storage.objects;
 create policy "grocery-item-images bucket is self-writable" on storage.objects
   for insert to authenticated
+  with check (
+    bucket_id = 'grocery-item-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- Same upsert re-upload path as recipe-images above: the
+-- content-addressed key means every re-pick of a stored photo is an
+-- UPDATE, which row-level security refused before this policy
+-- existed.
+drop policy if exists "grocery-item-images bucket is self-updatable" on storage.objects;
+create policy "grocery-item-images bucket is self-updatable" on storage.objects
+  for update to authenticated
+  using (
+    bucket_id = 'grocery-item-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  )
   with check (
     bucket_id = 'grocery-item-images'
     and (storage.foldername(name))[1] = auth.uid()::text

@@ -837,6 +837,21 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   rows. The LLM tools surface these ids in the get op's
   `photos: [{id, position}, ...]` projection so the model can
   chain a photo-remove call against the same id it just saw.
+- **Picking a photo twice is refused with a note, not double-linked.**
+  The pick loop dedupes: byte-identical files in one Add-photo action
+  share a single upload (a batch-local sha map keyed on the
+  downscaled bytes - what the storage key uses), and a file whose
+  image is already in the draft set (added earlier in this edit or
+  already on the recipe) is skipped with a visible "already added"
+  note. The guard is load-bearing on the UI path: the versioned save
+  RPCs insert photo ids unconditionally, so a duplicate draft would
+  PK-fail the save against the link table's composite key. The LLM
+  path has its own net there: the attach RPC skips duplicate ids
+  server-side. The composite PK upholds the integrity either way.
+  Storage-level failures map to friendly copy ("could not upload
+  photo") with the filename prefix. A raw Postgres RLS string must
+  never reach the UI, and the failure stays visible as an error line
+  under the photo grid.
 - **Photo lifecycle is link-driven.** Recipe delete cascades
   through `recipe_versions` to `recipe_version_images`; the
   AFTER-DELETE trigger on the link table reclaims the image row

@@ -755,14 +755,6 @@ export class SupabaseService {
     return cookbookApi.upsertRecipeImage(this.client, sha256, mimeType, sizeBytes, dataBase64);
   }
 
-  async uploadRecipeImageObject(
-    sha256: string,
-    dataBase64: string,
-    mimeType: string
-  ): Promise<string> {
-    return cookbookApi.uploadRecipeImageObject(this.client, sha256, dataBase64, mimeType);
-  }
-
   async listRecipePhotos(recipeId: string): Promise<RecipePhoto[]> {
     return cookbookApi.listRecipePhotos(this.client, recipeId);
   }

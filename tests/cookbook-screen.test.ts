@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../src/lib/recipe-limits';
+import { SupabaseError } from '../src/lib/supabase/error';
 import type { Recipe, RecipePhoto } from '../src/lib/supabase';
 import {
   MAX_PHOTO_UPLOAD_MB,
@@ -22,8 +23,10 @@ import {
   moveDraftPhoto,
   newRecipeDraft,
   photoDecodeErrorLine,
+  photoDuplicateVerdict,
   photoLinkPayload,
   photoPickVerdict,
+  photoUploadErrorLine,
   ratingChangeMessage,
   recipeDeleteConfirmMessage,
   recipeSaveError,
@@ -292,6 +295,57 @@ describe('photoPickVerdict', () => {
     expect(photoDecodeErrorLine('dish.jpg')).toBe(
       'dish.jpg: could not decode image.'
     );
+  });
+});
+
+describe('photoDuplicateVerdict', () => {
+  const drafted = [makeDraftPhoto({ imageId: 'a' }), makeDraftPhoto({ imageId: 'b' })];
+
+  it('appends an image not yet in the draft set', () => {
+    expect(photoDuplicateVerdict({ name: 'dish.jpg', imageId: 'c', photos: drafted })).toEqual({
+      kind: 'append',
+    });
+  });
+
+  it('skips with a visible note when the image is already drafted', () => {
+    // Covers both an intra-batch duplicate (the same bytes picked
+    // twice in one dialog) and a re-pick of a photo already on the
+    // recipe (seeded drafts carry the same imageId).
+    expect(photoDuplicateVerdict({ name: 'dish.jpg', imageId: 'a', photos: drafted })).toEqual({
+      kind: 'skip',
+      note: 'dish.jpg: this photo was already added.',
+    });
+  });
+
+  it('appends when the draft set is empty', () => {
+    expect(photoDuplicateVerdict({ name: 'dish.jpg', imageId: 'a', photos: [] })).toEqual({
+      kind: 'append',
+    });
+  });
+});
+
+describe('photoUploadErrorLine', () => {
+  it('maps a storage RLS refusal to friendly copy, keeping the filename', () => {
+    const err = new SupabaseError('new row violates row-level security policy');
+    expect(photoUploadErrorLine('dish.jpg', err)).toBe(
+      'dish.jpg: could not upload photo. Try re-adding it.'
+    );
+  });
+
+  it('passes non-RLS messages through with the filename prefix', () => {
+    // RPC validation messages are intentional copy - forwarding them
+    // is the point, not a leak.
+    const err = new SupabaseError('image upsert returned no id');
+    expect(photoUploadErrorLine('dish.jpg', err)).toBe(
+      'dish.jpg: image upsert returned no id'
+    );
+  });
+
+  it('flattens non-Error rejections', () => {
+    expect(photoUploadErrorLine('dish.jpg', 'new row violates row-level security policy')).toBe(
+      'dish.jpg: could not upload photo. Try re-adding it.'
+    );
+    expect(photoUploadErrorLine('dish.jpg', 'boom')).toBe('dish.jpg: boom');
   });
 });
 

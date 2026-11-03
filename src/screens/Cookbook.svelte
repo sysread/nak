@@ -71,8 +71,10 @@
     moveDraftPhoto,
     newRecipeDraft,
     photoDecodeErrorLine,
+    photoDuplicateVerdict,
     photoLinkPayload,
     photoPickVerdict,
+    photoUploadErrorLine,
     ratingChangeMessage,
     recipeDeleteConfirmMessage,
     recipeSaveError,
@@ -555,7 +557,11 @@
   //   5. append to draftPhotos
   // Errors per file land in `photoErrors` so a partial batch still
   // lets the good ones through. Sets `photosUploading` while the
-  // batch is in flight so save is gated on completion.
+  // batch is in flight so save is gated on completion. Byte-identical
+  // files within one batch share one upload (sha map below); a file
+  // whose image is already drafted is refused with a note - the link
+  // table's composite PK forbids double-linking, so the duplicate
+  // would fail the save later.
   async function onPickPhotos(e: Event): Promise<void> {
     if (!app.supabase) return;
     const input = e.target as HTMLInputElement;
@@ -563,6 +569,14 @@
     if (!files || files.length === 0) return;
     photoErrors = [];
     photosUploading = true;
+    // sha256 (of the downscaled bytes - what the storage key uses) ->
+    // imageId, filled only after the upsert RPC succeeds so a failed
+    // upload never poisons a sha. Batch-local on purpose: stored
+    // photos carry no sha on read, so a cross-batch map could never
+    // be seeded. Cross-batch duplicates are still caught: the upsert
+    // RPC dedups by sha and returns the existing imageId, which the
+    // already-drafted check then finds and skips with a note.
+    const batchShas = new Map<string, string>();
     try {
       for (const file of Array.from(files)) {
         // Pre-upload gates (photo cap, images only, size cap) live in
@@ -591,12 +605,23 @@
           const buffer = await downscaled.arrayBuffer();
           const base64 = arrayBufferToBase64(buffer);
           const sha = await sha256Hex(buffer);
-          const imageId = await app.supabase.upsertRecipeImage(
+          const knownId = batchShas.get(sha);
+          const imageId = knownId ?? (await app.supabase.upsertRecipeImage(
             sha,
             downscaled.type,
             downscaled.size,
             base64
-          );
+          ));
+          if (!knownId) batchShas.set(sha, imageId);
+          const dup = photoDuplicateVerdict({
+            name: file.name,
+            imageId,
+            photos: draftPhotos,
+          });
+          if (dup.kind === 'skip') {
+            photoErrors = [...photoErrors, dup.note];
+            continue;
+          }
           draftPhotos = [
             ...draftPhotos,
             {
@@ -613,10 +638,13 @@
             },
           ];
         } catch (err) {
-          photoErrors = [
-            ...photoErrors,
-            `${file.name}: ${errMsg(err)}`,
-          ];
+          // Storage/RLS refusals arrive as raw Postgres strings - the
+          // mapping primitive turns those into actionable copy while
+          // every other failure passes its message through. The raw
+          // error goes to the console for diagnosis; the UI failure
+          // stays visible either way.
+          console.error(err);
+          photoErrors = [...photoErrors, photoUploadErrorLine(file.name, err)];
         }
       }
     } finally {
@@ -2187,7 +2215,7 @@
           </div>
           {#if editError}<p class="error">{editError}</p>{/if}
           <div class="cookbook-actions">
-            <button type="submit" class="primary" disabled={saving}>
+            <button type="submit" class="primary" disabled={saving || photosUploading}>
               {saving ? 'Saving…' : 'Save'}
             </button>
             <button

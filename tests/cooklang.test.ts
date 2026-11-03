@@ -643,6 +643,22 @@ Stir in @butter{2%tbsp}.`;
     expect(instructionsBlock).toContain('1. Simmer lentils.');
     expect(instructionsBlock).toContain('1. Stir in butter.');
   });
+
+  it('suppresses the marker when a section is itself named Instructions', () => {
+    // The block header plus a literal "== Instructions ==" right
+    // under it reads as a doubled header - the only case where the
+    // marker is dropped. Sibling sections keep theirs.
+    const src = `# Instructions
+Preheat the oven.
+
+# Finishing
+Glaze with @honey{2%tbsp}.`;
+    const text = recipeToPlainText('Glazed Ham', parseCooklang(src));
+    expect(text.match(/Instructions/g)).toHaveLength(1);
+    expect(text).not.toContain('== Instructions ==');
+    expect(text).toContain('== Finishing ==');
+    expect(text).toContain('1. Preheat the oven.');
+  });
 });
 
 describe('parseCooklang — declaration lines', () => {
