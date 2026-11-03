@@ -12507,7 +12507,7 @@ $$;
 --      anchors. Per-fact provenance is lost; article-level provenance
 --      is gained and is more honest about what we actually know.
 --
--- Tools (wiki_create / wiki_update) populate these rows on every
+-- Tools (the wiki combination tool, op=save) populate these rows on every
 -- successful write. The autonomous agent's wrapper auto-attaches the
 -- current thread id (it processes exactly one thread per cycle). The
 -- librarian (which synthesises from `conversation_search` results)
