@@ -70,3 +70,22 @@ export function persistedRowIds(
   );
   return ids.filter((id) => !synthetic.has(id));
 }
+
+/**
+ * The hover-preview half of the .regen-target class source: the
+ * previewed range renders only while NO send is in flight on the
+ * thread. Once a turn starts, the click path hands the class to
+ * pendingDeleteIds alone (regenerateFrom clears the hover set at
+ * click); this gate extends the same single-source invariant to the
+ * whole send window, so a hover whose mouseleave was lost (the
+ * hovered row leaving the DOM mid-send) cannot keep painting
+ * .regen-target on rows after the turn settles. The previews cannot
+ * START during a send (previewRegenerateFrom guards on sending), so
+ * gating the render source clears exactly the stale ones.
+ */
+export function hoverRegenIdsForRender(
+  ids: readonly string[],
+  sending: boolean,
+): string[] {
+  return sending ? [] : [...ids];
+}

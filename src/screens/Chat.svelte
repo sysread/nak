@@ -251,7 +251,7 @@
     rateLimitRemainingSeconds,
     sendHintLabel,
   } from '$lib/ui/chat-screen';
-  import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
+  import { computeRegenerateRangeIds, hoverRegenIdsForRender, persistedRowIds } from '$lib/ui/regenerate';
   import { computeDeleteFromRangeIds } from '$lib/ui/message-delete';
   import { findDraftMessage } from '$lib/ui/draft-message';
   import {
@@ -986,7 +986,15 @@
    * border on every row that would be replaced before committing.
    */
   let hoverRegenerateIds = $state<string[]>([]);
-  const hoverRegenerateSet = $derived(new Set(hoverRegenerateIds));
+  // The render source is gated on "no send in flight" (see
+  // hoverRegenIdsForRender): the click path hands .regen-target to
+  // pendingDeleteSet alone, and a hover whose mouseleave was lost
+  // (the hovered row leaving the DOM mid-send) must not keep painting
+  // the outline after the turn settles. This was the intermittent
+  // ".regen-target stuck on the rebuilt transcript" QA finding.
+  const hoverRegenerateSet = $derived.by(
+    () => new Set(hoverRegenIdsForRender(hoverRegenerateIds, activeSlot?.sending === true)),
+  );
 
   /**
    * Set the hover-preview range for a given assistant message id.
@@ -5512,6 +5520,12 @@
         window.clearTimeout(reasoningCloseTimer);
         reasoningCloseTimer = 0;
       }
+      // Drop any hover-preview outline a lost mouseleave left behind:
+      // the preview cannot start during a send (previewRegenerateFrom
+      // guards), so whatever is in the set here is stale. The render
+      // gate (hoverRegenIdsForRender) already hides it while sending;
+      // clearing the state keeps it from resurfacing on the next idle.
+      hoverRegenerateIds = [];
     }
     // The turn has fully settled, including the finally's claim release -
     // so anything the user queued while it ran can go out now. Fired
