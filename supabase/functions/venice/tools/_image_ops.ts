@@ -17,6 +17,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { requireThreadId, type ToolContext } from '../performToolCall.ts';
+import { base64FromBytesChunked } from '../../_shared/venice.ts';
 import {
   GENERATED_IMAGE_RESULT_KEY,
   type GeneratedImagePayload,
@@ -142,11 +143,7 @@ export async function attachmentObjectAsBase64(
     throw new Error(`${label} could not be downloaded. Try again.`);
   }
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return { base64: btoa(binary), mimeType };
+  return { base64: await base64FromBytesChunked(bytes), mimeType };
 }
 
 // --- Output-size guard ------------------------------------------------------

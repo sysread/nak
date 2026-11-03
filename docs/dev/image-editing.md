@@ -110,6 +110,26 @@ unpriced model. The Settings picker hides over-cap models
 (`filterEditCatalogByCap`) and shows the stale-pick note; the tool-side
 403 is the boundary.
 
+## Generate sizing: per-model constraints
+
+The generate op's wire shape comes from the model's live catalog
+constraints (`_shared/image-model-constraints.ts`, read through the same
+TTL-cached raw `/models?type=image` fetch the price cap uses - one
+catalog fetch per isolate per 15 minutes). The discriminator is
+`constraints.aspectRatios`: a non-empty list marks a **ratio-based**
+model (qwen-image class), which receives `aspect_ratio` and NO
+dimensions - those models reject fixed width/height outright with a
+deterministic 400. A **pixel** model (only `widthHeightDivisor`) gets
+the hardcoded table dims (tuned to venice-sd35's 1280px cap) rounded to
+the divisor. No constraints / unreachable catalog / unlisted id fails
+open to the table exactly as v1 did. A 400 that still names
+width/height triggers one strip-and-retry with the resolved ratio, and
+a second failure surfaces the honest remedy (switch models in Settings
+-> AI -> Image generation) - the failure is deterministic, never "retry
+later". Ratio-mode results decode the OUTPUT dimensions for the
+descriptor (the request carried none); the card's square-placeholder
+path covers an undecodable result.
+
 ## Provenance split in `<thread_attachments>`
 
 The block's "directly visible to you" phrasing was false for
@@ -135,6 +155,17 @@ inline, analyze first. Role, not filename prefix: a user upload named
   edits can still end at the 380s wall deadline. Degradation is clean
   at every step; if slow turns become common, the lever is a smaller
   bound, not a larger one.
+- **The response conversion must never block the event loop.** The
+  2026-11-03 turn deaths ("live stream disconnected mid-turn" at
+  ~60s, no attachment) were NOT provider latency alone: the old
+  per-character base64 expansion of a multi-MB response blocked the
+  edge isolate's event loop for minutes (a 64MB pass exceeded 230s),
+  starving the 15s liveness heartbeat. The 60s-staleness probe then
+  buried a LIVE turn and the sweep's residue-clear nulled the
+  heartbeat mid-op, permanently silencing the guarded beat write.
+  `base64FromBytesChunked` yields between slices, keeping the
+  heartbeat serviced through any conversion. Full diagnosis:
+  `./plans/upscaler-liveness-image-models-plan.md` (M2 findings).
 - **Local dev stack + uploaded images.** Chat inlines user images as
   signed URLs pointing at `127.0.0.1:54321`, which Venice cannot
   fetch - any turn carrying an upload 400s locally (fine in prod).

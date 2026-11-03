@@ -181,7 +181,8 @@ tool uses.
   You still ask for pictures the same way; the model you pick changes
   the style, cost, and content policy of what comes back. You don't
   pick the size or style preset here - the assistant decides those per
-  request from what you asked for.
+  request from what you asked for. Nak sends each model the sizing
+  format it accepts, so every model in the dropdown works.
 - Leaving it untouched uses Nak's built-in default. The list is fetched
   live from Venice the first time you open the AI pane, so it always
   reflects the models currently available.

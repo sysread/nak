@@ -16,8 +16,8 @@
 //
 // generate: the base64 image does NOT go into the model-visible
 // result. What the model sees back is the descriptor (filename +
-// dimensions), enough to reference the image with analyze_image on
-// a later turn.
+// dimensions when known), enough to reference the image with
+// analyze_image on a later turn.
 //
 // edit: the edit model is the user's configured
 // profiles.settings.editImageModel (Settings picker, ?type=inpaint
@@ -51,16 +51,16 @@ import {
 } from '../../_shared/price-cap.ts';
 import { isBlockedModelId } from '../../_shared/blocked-models.ts';
 import {
-  veniceEditImage,
-  veniceGenerateImage,
-  veniceRemoveBackground,
-  veniceUpscaleImage,
-} from '../../_shared/venice.ts';
+  loadImageModelConstraints,
+  type ImageModelConstraints,
+} from '../../_shared/image-model-constraints.ts';
+import { VeniceError, veniceEditImage, veniceGenerateImage, veniceRemoveBackground, veniceUpscaleImage } from '../../_shared/venice.ts';
 import { GENERATED_IMAGE_RESULT_KEY, base64ToBytes } from './_generated_image.ts';
 import {
   assertResultStorable,
   attachmentObjectAsBase64,
   buildImageOpResult,
+  decodeImageDimensions,
   findImageAttachmentByFilename,
   mintImageFilename,
   upscalePreFlightMessage,
@@ -147,14 +147,12 @@ async function resolveEditImageModel(ctx: ToolContext): Promise<string> {
  * pairs stay within the 1280px-per-edge cap and land near a ~1MP budget
  * so generation cost + latency stay comparable across ratios.
  *
- * These dimensions are model-agnostic in the common case - most Venice
- * image models accept this range - but a user-picked model with a tighter
- * cap or a stricter width/height divisor could in principle reject them.
- * v1 of the configurable-image-model feature deliberately keeps one
- * dimension table rather than fetching each model's constraints; if a
- * pick proves incompatible the generation surfaces Venice's error. A
- * per-model constraint lookup is the follow-up if that becomes a real
- * problem.
+ * This table is the FAIL-OPEN baseline: generateOp consults the model's
+ * live catalog constraints first (loadImageModelConstraints) - ratio-based
+ * models get `aspect_ratio` on the wire instead of dimensions, pixel
+ * models get these dims rounded to the catalog's widthHeightDivisor. When
+ * the catalog is unreachable or the id is unlisted, the table stands
+ * alone.
  */
 function dimensionsForAspectRatio(
   ratio: string,
@@ -172,6 +170,43 @@ function dimensionsForAspectRatio(
     default:
       return { width: 1024, height: 1024 };
   }
+}
+
+/**
+ * Resolve the generate wire sizing for the picked model.
+ *
+ * - Ratio model (catalog advertises aspectRatios): send `aspect_ratio` and
+ *   NO dimensions. The requested label rides when the model lists it;
+ *   otherwise the model's defaultAspectRatio; otherwise the field is
+ *   omitted entirely (Venice defaults it).
+ * - Pixel model (widthHeightDivisor only): the table dims rounded to the
+ *   divisor. `fallbackRatio` carries the requested label for the reactive
+ *   retry - a pixel-classified model that still 400s on dimensions is
+ *   ratio-native in fact, and the retry's best guess for its ratio is the
+ *   label the request came with.
+ * - No constraints (catalog unreachable / id unlisted): legacy table
+ *   behavior, unchanged.
+ */
+function resolveGenerateSizing(
+  requestedRatio: string | undefined,
+  c: ImageModelConstraints | null,
+): { mode: 'ratio'; aspectRatio?: string } | {
+  mode: 'pixel';
+  width: number;
+  height: number;
+  fallbackRatio: string;
+} {
+  const requested = requestedRatio ?? '1:1';
+  if (c?.mode === 'ratio') {
+    const aspectRatio = c.aspectRatios?.includes(requested)
+      ? requested
+      : c.defaultAspectRatio;
+    return { mode: 'ratio', aspectRatio };
+  }
+  const dims = dimensionsForAspectRatio(requested);
+  const width = c?.divisor ? Math.round(dims.width / c.divisor) * c.divisor : dims.width;
+  const height = c?.divisor ? Math.round(dims.height / c.divisor) * c.divisor : dims.height;
+  return { mode: 'pixel', width, height, fallbackRatio: requested };
 }
 
 /**
@@ -199,9 +234,8 @@ async function generateOp(args: Record<string, unknown>, ctx: ToolContext) {
     typeof args.negative_prompt === 'string' ? args.negative_prompt.trim() : '';
   const stylePreset =
     typeof args.style_preset === 'string' ? args.style_preset.trim() : '';
-  const aspectRatio =
-    typeof args.aspect_ratio === 'string' ? args.aspect_ratio : '1:1';
-  const { width, height } = dimensionsForAspectRatio(aspectRatio);
+  const requestedRatio =
+    typeof args.aspect_ratio === 'string' ? args.aspect_ratio : undefined;
 
   const apiKey = await readVeniceKey(ctx.adminClient);
   if (!apiKey) {
@@ -209,6 +243,11 @@ async function generateOp(args: Record<string, unknown>, ctx: ToolContext) {
   }
 
   const model = await resolveImageModel(ctx);
+
+  // Per-model sizing constraints from the live catalog (shared with the
+  // price cap's fetch). Null on catalog trouble -> legacy table behavior.
+  const constraints = (await loadImageModelConstraints(apiKey))?.get(model) ?? null;
+  const sizing = resolveGenerateSizing(requestedRatio, constraints);
 
   // Enforce the project-global per-image price cap (app_config.max_image_usd,
   // seeded by `mise run setup`). The Settings picker already hides over-cap
@@ -222,21 +261,60 @@ async function generateOp(args: Record<string, unknown>, ctx: ToolContext) {
     caps: await readPriceCaps(ctx.adminClient),
   });
 
-  const result = await veniceGenerateImage({
+  const genOpts = {
     apiKey,
     model,
     prompt,
     negativePrompt: negativePrompt || undefined,
     stylePreset: stylePreset || undefined,
-    width,
-    height,
-    format: 'webp',
+    ...(sizing.mode === 'ratio'
+      ? { aspectRatio: sizing.aspectRatio }
+      : { width: sizing.width, height: sizing.height }),
+    format: 'webp' as const,
     // Suppress the Venice watermark - the image is the user's
     // content in their conversation, not Venice marketing. Venice
     // may still force the watermark on plans that do not allow
     // hiding it, in which case this is a silent no-op.
     hideWatermark: true,
-  });
+  };
+
+  let result;
+  try {
+    result = await veniceGenerateImage(genOpts);
+  } catch (err) {
+    // Reactive backstop for a ratio-native model the catalog did not
+    // advertise (catalog drift, offline constraint fetch): Venice rejects
+    // fixed dimensions with a 400 naming them. One strip-and-retry with
+    // the resolved ratio, then either result or an honest error - never a
+    // "try again later" implication, the failure is deterministic.
+    const dimsRejected =
+      err instanceof VeniceError && err.kind === 'http' && err.status === 400 &&
+      /width|height/i.test(err.message);
+    if (!dimsRejected || sizing.mode === 'ratio') throw err;
+    console.warn(
+      `[image] model "${model}" rejected fixed dimensions; retrying with aspect_ratio`
+    );
+    try {
+      result = await veniceGenerateImage({
+        ...genOpts,
+        aspectRatio: sizing.fallbackRatio,
+        width: undefined,
+        height: undefined,
+      });
+    } catch (retryErr) {
+      if (
+        retryErr instanceof VeniceError && retryErr.kind === 'http' && retryErr.status === 400 &&
+        /width|height/i.test(retryErr.message)
+      ) {
+        throw new Error(
+          `The image model "${model}" rejected both pixel dimensions and an aspect ` +
+            `ratio. Switch image models in Settings -> AI -> Image generation and ` +
+            `try again. (${retryErr.message})`
+        );
+      }
+      throw retryErr;
+    }
+  }
 
   const ext = result.mimeType.split('/')[1] ?? 'webp';
   // Timestamped filename so multiple generations in one thread stay
@@ -245,10 +323,15 @@ async function generateOp(args: Record<string, unknown>, ctx: ToolContext) {
   const filename = `generated-${Date.now()}.${ext}`;
   const size_bytes = base64ByteLength(result.imageBase64);
 
+  // The descriptor always decodes the OUTPUT bytes: identical to the
+  // request dims on the normal path (pixel models honor them), and honest
+  // after a reactive retry, where the request's pixel dims were rejected
+  // and never produced anything.
+  const outDims = decodeImageDimensions(base64ToBytes(result.imageBase64)) ?? undefined;
+
   return {
     filename,
-    width,
-    height,
+    ...(outDims ? { width: outDims.width, height: outDims.height } : {}),
     format: ext,
     // The orchestrator attaches the image to the reply; tell the
     // model so it describes the picture in prose rather than trying

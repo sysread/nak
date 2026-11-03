@@ -186,7 +186,7 @@ async function doUpdate(
   if (error) throw new Error(`followup_save (revise) failed: ${error.message}`);
   if (!row) {
     throw new Error(
-      'followup not found or not open - only open follow-ups can be revised (use the list op to check status)',
+      'followup not found or not open - only open follow-ups can be revised (use followup_list to check status)',
     );
   }
   return row;
@@ -244,7 +244,7 @@ async function closeOp(args: Record<string, unknown>, ctx: ToolContext) {
   const resolution = typeof args.resolution === 'string' ? args.resolution.trim() : '';
 
   const errs = new ArgErrors();
-  if (!id) errs.add('id is required (from the list op)');
+  if (!id) errs.add('id is required (from followup_list)');
   if (!resolution) errs.add('resolution is required - one line on what the answer was');
   else if (resolution.length > MAX_FOLLOWUP_RESOLUTION_CHARS) {
     errs.add(
@@ -271,7 +271,7 @@ async function closeOp(args: Record<string, unknown>, ctx: ToolContext) {
   if (error) throw new Error(`followup_close failed: ${error.message}`);
   if (!row) {
     throw new Error(
-      'followup not found or already closed (use the list op to check status)',
+      'followup not found or already closed (use followup_list to check status)',
     );
   }
   return row;
@@ -284,7 +284,7 @@ async function closeOp(args: Record<string, unknown>, ctx: ToolContext) {
 async function dismissOp(args: Record<string, unknown>, ctx: ToolContext) {
   const id = typeof args.id === 'string' ? args.id.trim() : '';
   const errs = new ArgErrors();
-  if (!id) errs.add('id is required (from the list op)');
+  if (!id) errs.add('id is required (from followup_list)');
   errs.throwIfAny();
 
   // RLS OFF: filter by userId. Only open loops are dismissable.
@@ -299,7 +299,7 @@ async function dismissOp(args: Record<string, unknown>, ctx: ToolContext) {
   if (error) throw new Error(`followup_dismiss failed: ${error.message}`);
   if (!row) {
     throw new Error(
-      'followup not found or not open (use the list op to check status)',
+      'followup not found or not open (use followup_list to check status)',
     );
   }
   return row;

@@ -28,7 +28,7 @@
 // price cap. The only hard stop is a model whose published price is
 // above a configured ceiling.
 
-import { VeniceError, veniceFetchModels } from './venice.ts';
+import { VeniceError, resetRawCatalogCache, veniceFetchModels, veniceRawCatalogCached } from './venice.ts';
 
 /** A per-1M-token USD ceiling. null on a dimension means "no cap there". */
 export interface ModelPriceCaps {
@@ -245,7 +245,10 @@ async function loadImagePrices(
 ): Promise<Map<string, number | null>> {
   const now = Date.now();
   if (imagePriceCache && now - imagePriceCacheAt < PRICE_CACHE_TTL_MS) return imagePriceCache;
-  const raw = await veniceFetchModels({ apiKey, type: 'image', fetchImpl });
+  // The raw catalog is shared with the image-constraint lookup
+  // (image-model-constraints.ts) via veniceRawCatalogCached, so a generate
+  // call pays one catalog fetch per TTL, not one per consumer.
+  const raw = await veniceRawCatalogCached(apiKey, 'image', fetchImpl);
   imagePriceCache = extractImageModelPrices(raw);
   imagePriceCacheAt = now;
   return imagePriceCache;
@@ -473,7 +476,10 @@ export async function assertUpscaleModelWithinCap(opts: {
 }
 
 // Test-only hook: reset the module-scope price caches between cases. Kept
-// out of the production surface per CLAUDE.md's test-hook convention.
+// out of the production surface per CLAUDE.md's test-hook convention. Also
+// drops the shared raw-catalog cache (venice.ts) - the image prices and
+// the image constraints both read through it, and tests stub a different
+// catalog per case.
 export const __test = {
   resetCache(): void {
     priceCache = null;
@@ -484,5 +490,6 @@ export const __test = {
     inpaintPriceCacheAt = 0;
     upscalePriceCache = null;
     upscalePriceCacheAt = 0;
+    resetRawCatalogCache();
   },
 };

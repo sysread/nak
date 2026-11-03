@@ -520,6 +520,12 @@ export interface VeniceGenerateImageOptions {
   stylePreset?: string;
   width?: number;
   height?: number;
+  /**
+   * Ratio-based models only (catalog `constraints.aspectRatios`): sent as
+   * `aspect_ratio`, mutually exclusive with width/height - those models
+   * reject pixel dimensions outright.
+   */
+  aspectRatio?: string;
   seed?: number;
   steps?: number;
   cfgScale?: number;
@@ -571,6 +577,7 @@ export async function veniceGenerateImage(
   };
   if (typeof opts.width === 'number') body.width = opts.width;
   if (typeof opts.height === 'number') body.height = opts.height;
+  if (typeof opts.aspectRatio === 'string') body.aspect_ratio = opts.aspectRatio;
   if (opts.negativePrompt) body.negative_prompt = opts.negativePrompt;
   if (opts.stylePreset) body.style_preset = opts.stylePreset;
   if (typeof opts.seed === 'number') body.seed = opts.seed;
@@ -718,16 +725,52 @@ async function imageOpResponseToBase64(
       'parse'
     );
   }
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
-  }
   return {
-    imageBase64: btoa(binary),
+    imageBase64: await base64FromBytesChunked(bytes),
     // Detected from the output bytes by the endpoint; fall back to png,
     // the response format of the fixed-model endpoints.
     mimeType: res.headers.get('Content-Type')?.split(';')[0] ?? 'image/png',
   };
+}
+
+// Incremental base64 encode. Slices are 24,576 bytes - a multiple of 3, so
+// per-slice btoa output concatenates to exactly the one-shot encoding with
+// padding only in the final slice.
+const BASE64_CHUNK_BYTES = 24_576;
+
+/**
+ * Encode bytes to base64 without blocking the event loop: chunked
+ * `String.fromCharCode.apply` + `btoa` per 24,576-byte slice, awaiting a
+ * macrotask between slices. The yield is load-bearing - the chat
+ * orchestrator's liveness heartbeat is a 15s setInterval, and a
+ * synchronous conversion of a multi-MB image blocks the loop long enough
+ * to starve it, which buried live chat turns as dead (the
+ * upscaler-liveness plan's M2 repro). ~2,700 yields across a 64MB output
+ * cost ~3s of wall time, noise against the 180s op budget. The inner
+ * 0x8000 walk never iterates twice at the current slice size - it guards
+ * apply's argument count if BASE64_CHUNK_BYTES is ever raised past the
+ * engine's practical limit.
+ * Padding only in the final slice; concatenation is byte-identical to a
+ * one-shot encode.
+ */
+export async function base64FromBytesChunked(
+  bytes: Uint8Array,
+  yieldBetweenSlices: () => Promise<void> = () => new Promise((r) => setTimeout(r, 0)),
+): Promise<string> {
+  const parts: string[] = [];
+  for (let start = 0; start < bytes.length; start += BASE64_CHUNK_BYTES) {
+    const slice = bytes.subarray(start, Math.min(start + BASE64_CHUNK_BYTES, bytes.length));
+    let binary = '';
+    for (let i = 0; i < slice.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(
+        null,
+        slice.subarray(i, Math.min(i + 0x8000, slice.length)) as unknown as number[],
+      );
+    }
+    parts.push(btoa(binary));
+    if (start + BASE64_CHUNK_BYTES < bytes.length) await yieldBetweenSlices();
+  }
+  return parts.join('');
 }
 
 export interface VeniceEditImageOptions {
@@ -1300,4 +1343,36 @@ export async function veniceFetchModels(opts: VeniceModelsOptions): Promise<unkn
   } catch {
     throw new VeniceError('Failed to parse Venice models response.', 'parse');
   }
+}
+
+// TTL cache over the raw /models catalog, shared by every function-side
+// consumer of the same slice (the price caps and the image-constraint
+// lookup) so a cold isolate pays ONE catalog fetch per type per TTL
+// instead of one per consumer. 15 minutes - the same cadence price-cap
+// established; catalog drift on that scale is acceptable for caps and
+// sizing constraints alike.
+const RAW_CATALOG_TTL_MS = 15 * 60 * 1000;
+const rawCatalogCache = new Map<VeniceModelType, { raw: unknown; at: number }>();
+
+/**
+ * Raw (uncoerced) /models?type=<type> body, cached per type. Callers
+ * extract the shape they need (prices, constraints). Throws on catalog
+ * failure - fail-open posture belongs to the consumer.
+ */
+export async function veniceRawCatalogCached(
+  apiKey: string,
+  type: VeniceModelType,
+  fetchImpl?: typeof fetch
+): Promise<unknown> {
+  const now = Date.now();
+  const hit = rawCatalogCache.get(type);
+  if (hit && now - hit.at < RAW_CATALOG_TTL_MS) return hit.raw;
+  const raw = await veniceFetchModels({ apiKey, type, fetchImpl });
+  rawCatalogCache.set(type, { raw, at: now });
+  return raw;
+}
+
+/** Test isolation: drop every cached catalog slice. */
+export function resetRawCatalogCache(): void {
+  rawCatalogCache.clear();
 }

@@ -144,6 +144,7 @@ function stubFetch(opts: {
   inpaintCatalog?: unknown;
   upscaleCatalog?: unknown;
   imageCatalog?: unknown;
+  imageCatalogThrows?: boolean;
   imageOpBody: (url: string, body: Record<string, unknown>) => Response;
 }): { calls: Array<{ url: string; body: Record<string, unknown> }>; restore: () => void } {
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -163,6 +164,9 @@ function stubFetch(opts: {
       );
     }
     if (u.includes('/models?type=image')) {
+      if (opts.imageCatalogThrows) {
+        return Promise.reject(new Error('catalog unreachable'));
+      }
       return Promise.resolve(
         new Response(JSON.stringify(opts.imageCatalog ?? { data: [] }), { status: 200 })
       );
@@ -409,6 +413,225 @@ Deno.test('image op=generate falls back to the default model when settings carry
     await image.execute({ op: 'generate', prompt: 'a lighthouse' }, ctx);
     const genCall = calls.find((c) => c.url.includes('/image/generate'));
     assertEquals(genCall?.body.model, 'venice-sd35');
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+// --- generate sizing: per-model constraints ---------------------------------
+
+// A ratio-based catalog entry (qwen-image class): aspectRatios present,
+// no width/height accepted.
+const ratioModel = (over: Record<string, unknown> = {}): unknown => ({
+  id: 'qwen-image',
+  model_spec: {
+    constraints: { aspectRatios: ['1:1', '16:9'], defaultAspectRatio: '1:1' },
+    pricing: { generation: { usd: 0.02 } },
+    ...over,
+  },
+});
+
+Deno.test('generate on a ratio-based model sends aspect_ratio and no dimensions', async () => {
+  capTest.resetCache();
+  const ctx = fakeCtx({ settings: { imageModel: 'qwen-image' } });
+  const { calls, restore } = stubFetch({
+    imageCatalog: { data: [ratioModel()] },
+    imageOpBody: (u) =>
+      u.includes('/image/generate') ? generateJsonResponse() : pngOpResponse(),
+  });
+  try {
+    const out = (await image.execute(
+      { op: 'generate', prompt: 'a lighthouse', aspect_ratio: '16:9' },
+      ctx,
+    )) as Record<string, unknown>;
+    const genCall = calls.find((c) => c.url.includes('/image/generate'));
+    assertEquals(genCall?.body.aspect_ratio, '16:9');
+    assertEquals(genCall?.body.width, undefined);
+    assertEquals(genCall?.body.height, undefined);
+    // The request dims were never known; the descriptor decodes the output
+    // bytes instead - 'QUJD' is not a decodable header, so both are omitted.
+    assertEquals(out.width, undefined);
+    assertEquals(out.height, undefined);
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+Deno.test('generate on a ratio model maps an off-list ratio to the model default', async () => {
+  capTest.resetCache();
+  const ctx = fakeCtx({ settings: { imageModel: 'qwen-image' } });
+  const { calls, restore } = stubFetch({
+    imageCatalog: { data: [ratioModel()] },
+    imageOpBody: (u) =>
+      u.includes('/image/generate') ? generateJsonResponse() : pngOpResponse(),
+  });
+  try {
+    await image.execute(
+      { op: 'generate', prompt: 'a lighthouse', aspect_ratio: '3:4' },
+      ctx,
+    );
+    assertEquals(calls.find((c) => c.url.includes('/image/generate'))?.body.aspect_ratio, '1:1');
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+Deno.test('generate on a pixel model rounds the table dims to the catalog divisor', async () => {
+  capTest.resetCache();
+  const ctx = fakeCtx({ settings: { imageModel: 'venice-sd35' } });
+  const { calls, restore } = stubFetch({
+    imageCatalog: {
+      data: [{
+        id: 'venice-sd35',
+        model_spec: {
+          constraints: { widthHeightDivisor: 64 },
+          pricing: { generation: { usd: 0.02 } },
+        },
+      }],
+    },
+    imageOpBody: (u) =>
+      u.includes('/image/generate') ? generateJsonResponse() : pngOpResponse(),
+  });
+  try {
+    const out = (await image.execute(
+      { op: 'generate', prompt: 'a lighthouse', aspect_ratio: '16:9' },
+      ctx,
+    )) as Record<string, unknown>;
+    const genCall = calls.find((c) => c.url.includes('/image/generate'));
+    // 16:9 table dims 1280x720 rounded to multiples of 64.
+    assertEquals(genCall?.body.width, 1280);
+    assertEquals(genCall?.body.height, 704);
+    assertEquals(genCall?.body.aspect_ratio, undefined);
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+Deno.test('generate fails open to the legacy dimension table when the catalog is unreachable', async () => {
+  capTest.resetCache();
+  const ctx = fakeCtx({ settings: { imageModel: 'qwen-image' } });
+  const { calls, restore } = stubFetch({
+    imageCatalogThrows: true,
+    imageOpBody: (u) =>
+      u.includes('/image/generate') ? generateJsonResponse() : pngOpResponse(),
+  });
+  try {
+    await image.execute({ op: 'generate', prompt: 'a lighthouse' }, ctx);
+    const genCall = calls.find((c) => c.url.includes('/image/generate'));
+    // Legacy table 1:1 dims, no aspect_ratio - the fail-open wire shape.
+    assertEquals(genCall?.body.width, 1024);
+    assertEquals(genCall?.body.height, 1024);
+    assertEquals(genCall?.body.aspect_ratio, undefined);
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+Deno.test('generate retries once with aspect_ratio when a model rejects fixed dimensions', async () => {
+  capTest.resetCache();
+  const ctx = fakeCtx({ settings: { imageModel: 'venice-sd35' } });
+  // Catalog advertises NO constraints for the model (stale/missing slice),
+  // so the first attempt ships the legacy dims; Venice's deterministic
+  // rejection names them; the retry strips dims and sends the ratio.
+  // The retry's JSON response is a decodable 2048x1536 PNG header, pinning
+  // that the descriptor reports the OUTPUT dims (not the rejected request
+  // dims) after a successful retry.
+  const png = new Uint8Array(24);
+  png.set([0x89, 0x50, 0x4e, 0x47], 0);
+  png[16] = 0x00; png[17] = 0x00; png[18] = 0x08; png[19] = 0x00; // width 2048
+  png[20] = 0x00; png[21] = 0x00; png[22] = 0x06; png[23] = 0x00; // height 1536
+  const pngB64 = btoa(String.fromCharCode(...png));
+  const { calls, restore } = stubFetch({
+    imageOpBody: (u, body) => {
+      if (!u.includes('/image/generate')) return pngOpResponse();
+      if (body.width !== undefined) {
+        return new Response(
+          JSON.stringify({ error: 'width and height are no longer supported for this model. Use aspect_ratio instead.' }),
+          { status: 400 },
+        );
+      }
+      return new Response(JSON.stringify({ id: 'g1', images: [pngB64] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+  try {
+    const out = (await image.execute(
+      { op: 'generate', prompt: 'a lighthouse', aspect_ratio: '16:9' },
+      ctx,
+    )) as Record<string, unknown>;
+    const genCalls = calls.filter((c) => c.url.includes('/image/generate'));
+    assertEquals(genCalls.length, 2);
+    assertEquals(genCalls[0].body.width, 1280);
+    assertEquals(genCalls[1].body.width, undefined);
+    assertEquals(genCalls[1].body.aspect_ratio, '16:9');
+    assertEquals((out.filename as string).startsWith('generated-'), true);
+    // The retry succeeded on a ratio-based body: the descriptor decodes the
+    // OUTPUT dims instead of reporting the rejected request dims.
+    assertEquals(out.width, 2048);
+    assertEquals(out.height, 1536);
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+Deno.test('generate surfaces the Settings-switch remedy when both dimension attempts fail', async () => {
+  capTest.resetCache();
+  const ctx = fakeCtx({ settings: { imageModel: 'venice-sd35' } });
+  const dims400 = (): Response =>
+    new Response(
+      JSON.stringify({ error: 'width and height are no longer supported for this model. Use aspect_ratio instead.' }),
+      { status: 400 },
+    );
+  const { restore } = stubFetch({
+    imageOpBody: (u) => (u.includes('/image/generate') ? dims400() : pngOpResponse()),
+  });
+  try {
+    const err = await assertRejects(
+      () => image.execute({ op: 'generate', prompt: 'a lighthouse', aspect_ratio: '16:9' }, ctx),
+    ) as Error;
+    assertEquals(err.message.includes('Settings -> AI -> Image generation'), true);
+    assertEquals(err.message.toLowerCase().includes('try again later'), false);
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+Deno.test('generate descriptor decodes the output dimensions in ratio mode', async () => {
+  capTest.resetCache();
+  // 24-byte fake PNG: magic + IHDR with 2048x1536 at the fixed offsets.
+  const png = new Uint8Array(24);
+  png.set([0x89, 0x50, 0x4e, 0x47], 0);
+  png[16] = 0x00; png[17] = 0x00; png[18] = 0x08; png[19] = 0x00; // width 2048
+  png[20] = 0x00; png[21] = 0x00; png[22] = 0x06; png[23] = 0x00; // height 1536
+  const b64 = btoa(String.fromCharCode(...png));
+  const ctx = fakeCtx({ settings: { imageModel: 'qwen-image' } });
+  const { restore } = stubFetch({
+    imageCatalog: { data: [ratioModel()] },
+    imageOpBody: (u) =>
+      u.includes('/image/generate')
+        ? new Response(JSON.stringify({ id: 'g1', images: [b64] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        : pngOpResponse(),
+  });
+  try {
+    const out = (await image.execute(
+      { op: 'generate', prompt: 'a lighthouse', aspect_ratio: '16:9' },
+      ctx,
+    )) as Record<string, unknown>;
+    // Decoded from the OUTPUT bytes - the request carried no dimensions.
+    assertEquals(out.width, 2048);
+    assertEquals(out.height, 1536);
   } finally {
     restore();
     capTest.resetCache();

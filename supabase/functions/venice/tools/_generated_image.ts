@@ -12,8 +12,8 @@
 // tool string. So the tool stashes the heavy payload under
 // GENERATED_IMAGE_RESULT_KEY; the orchestrator harvests it for the DB
 // attach and strips it before encoding the model-visible tool result,
-// leaving only the compact descriptor (filename + dimensions) the
-// model needs to reference the image on later turns.
+// leaving only the compact descriptor (filename + dimensions when known)
+// the model needs to reference the image on later turns.
 
 export const GENERATED_IMAGE_RESULT_KEY = '__generated_image';
 

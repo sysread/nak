@@ -7,6 +7,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { toolComplete } from './_venice_complete.ts';
+import { base64FromBytesChunked } from '../../_shared/venice.ts';
 
 // Vision queries run against the primary model first and retry once against
 // the uncensored fallback on any failure.
@@ -78,11 +79,12 @@ export async function attachmentObjectAsDataUrl(
     throw new Error(`${label} could not be downloaded for analysis. Try again.`);
   }
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return `data:${mimeType};base64,${btoa(binary)}`;
+  // Chunked + yielding: the vision tools share the orchestrator isolate
+  // with the chat turn, and analyzing an upscaled image means converting
+  // the same 25-80MB output the upscale just produced - a synchronous
+  // encode here would starve the liveness heartbeat exactly as the
+  // upscale conversion once did (upscaler-liveness plan).
+  return `data:${mimeType};base64,${await base64FromBytesChunked(bytes)}`;
 }
 
 /**

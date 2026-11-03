@@ -902,7 +902,17 @@ A chat turn goes:
   against twice the wall deadline (~12.7 min): a killed turn's
   throbber spun for that long, Stop published a cancel nobody heard,
   and Regenerate attached to the corpse through the duplicate-send
-  guard.
+  guard. A second burial vector surfaced 2026-11-03 (instrumented
+  repro, `./plans/upscaler-liveness-image-models-plan.md`): the image
+  ops' per-character base64 conversion blocked the isolate's event
+  loop for minutes, starving the heartbeat interval while the turn
+  lived - the server probe buried the turn and the cron sweep's
+  residue-clear nulled `stream_heartbeat_at` mid-op, which the beat
+  write can never undo (each refresh only writes while the column is
+  still set, so a mid-op null silences every later beat). The
+  conversion now yields between chunks (`base64FromBytesChunked`,
+  `_shared/venice.ts`); the four-reader op-deadline extension remains
+  a documented standby in the plan if burial ever recurs.
 - **The heartbeat also covers the pre-row window.** The streaming
   row only exists from the first content delta, so it cannot
   represent the priming stage (samskara / intuition / context recall)

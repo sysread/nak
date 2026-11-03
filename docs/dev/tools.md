@@ -96,10 +96,12 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   synthesized note from one store. The targeted, more-expensive
   drill-down tier above the deterministic `context` survey.
 - Direct reads across every store: `memory_search` / `memory_get`,
-  `conversation_search` / `conversation_get`. The `*_get` trio
-  (`memory_get` / `conversation_get` / the wiki tool (op=get)) is the
-  by-id drill-down behind the recall block's `^N^` citations. (The
-  wiki-record reads live in the records combination tool.) (The Library and cookbook reads moved into their
+  `conversation_search` / `conversation_get`, the wiki tool (op=search) /
+  the wiki tool (op=list) / the wiki tool (op=get) plus the wiki record reads `record_list` /
+  `record_get` / `record_search`. The `*_get` trio (`memory_get` /
+  `conversation_get` /
+  the wiki tool (op=get)) is the by-id drill-down behind the recall block's
+  `^N^` citations. (The Library and cookbook reads moved into their
   combos - `docs` and `recipes` - whose list/get ops are read-only.)
 - `research_docs` - one-shot sub-completion whose system prompt
   bundles the user-facing doc corpus (`docs/user/`), answering
@@ -237,12 +239,11 @@ surface lives in the always-on set above.
   (`venice-sd35`, mirrored from `VENICE_DEFAULT_IMAGE_MODEL` in
   `src/lib/models/index.ts`) when unset or on any read error - a missing
   preference must never block an image. The choice is made in Settings ->
-  AI -> Image generation (see `./settings.md`). Aspect-ratio -> pixel
-  sizing stays a single table tuned to the default model's 1280px cap; v1
-  deliberately does not fetch per-model size constraints, so an exotic
-  pick with a tighter cap surfaces Venice's error rather than being
-  pre-validated. A per-model constraint lookup is the follow-up if that
-  bites.
+  AI -> Image generation (see `./settings.md`). Wire sizing comes from
+  the model's live catalog constraints (aspect_ratio for ratio-based
+  models, divisor-rounded table dims for pixel models; the constraint
+  lookup shares the price cap's catalog cache) - see
+  `./image-editing.md`, "Generate sizing: per-model constraints".
 
 - **`image` ops `edit` / `upscale` / `remove_bg`** (`images`
   toolbox) - operate on an image already in the thread (user
