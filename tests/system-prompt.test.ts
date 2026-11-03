@@ -469,6 +469,6 @@ describe('every tool available every turn', () => {
   it('keeps the wiki and library guidance, minus the enable step', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(/call wiki_librarian with concrete instructions/);
-    expect(prompt).toMatch(/call doc_save without an id \(identify the file/);
+    expect(prompt).toMatch(/call op=save without an id \(identify the file/);
   });
 });

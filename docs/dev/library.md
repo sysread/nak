@@ -26,11 +26,11 @@ cron sweeps before a fresh doc was searchable). The corpus is a few
 dozen documents, not millions, so the model works a document the way an
 agent works a large source file:
 
-- **`doc_list`** - pick which document (titles + descriptions).
-- **`doc_grep`** - `grep -n` over the stored text (regex, line numbers,
+- **`op=list`** - pick which document (titles + descriptions).
+- **`op=grep`** - `grep -n` over the stored text (regex, line numbers,
   context) to find the exact clause. The primary search path.
-- **`doc_read`** - read a line range around the hit.
-- **`doc_get`** - a document's metadata + total line count (no text).
+- **`op=read`** - read a line range around the hit.
+- **`op=get`** - a document's metadata + total line count (no text).
 
 All grep/read runs in Postgres over `documents.extracted_text`; only
 matching snippets or the requested line range cross the wire, and it
@@ -45,7 +45,8 @@ Schema:
   over the text returning line numbers with context; its `lines` CTE is
   MATERIALIZED so a big doc's split runs once) and `read_document_lines`
   (a numbered line range plus the total count), the text-free
-  `document_stat` (metadata + line count for `doc_get`), the private
+  `document_stat` (metadata + line count; the get op inlines the same
+  SELECT service-side), the private
   `documents` Storage bucket, and the three `storage.objects` RLS
   policies that scope the bucket to each user's `<user_id>/...` prefix.
   All three text RPCs split the text on the fly
@@ -66,7 +67,7 @@ Data layer:
   grep/read pair `grepDocument` / `readDocumentLines`, the
   `getDocumentStat` overview, the Storage helpers `uploadDocumentFile` /
   `createDocumentDownloadUrl`, and `findAttachmentByFilenameInThread`
-  (the any-mime attachment lookup `doc_save` promotes from).
+  (the any-mime attachment lookup the save op promotes from).
 - `src/lib/documents.ts` - `ingestDocument` (the browser upload
   pipeline: create row -> upload binary -> extract text -> store) and
   the length / size ceilings. No chunking; the extracted text is stored
@@ -81,15 +82,16 @@ Data layer:
 
 Tools:
 
-- `src/lib/tools/doc_list.{schema.,}ts`, `doc_get.{schema.,}ts`,
-  `doc_grep.{schema.,}ts`, `doc_read.{schema.,}ts` - the always-on read
-  surfaces (registered in `alwaysOnToolbox`). `doc_list` picks the
-  document; `doc_grep` + `doc_read` are the grep-then-read pair;
-  `doc_get` is the text-free overview (metadata + total line count) that
+- `src/lib/tools/docs.schema.ts` +
+  `supabase/functions/venice/tools/docs.ts` - the Library combination
+  tool (one op-switch def over list / get / grep / read / save /
+  delete; the reads ride inside it rather than always-on - the skills
+  precedent). op=list picks the
+  document; op=grep + op=read are the grep-then-read pair;
+  op=get is the text-free overview (metadata + total line count) that
   tells the model how many lines it can address.
-- `src/lib/tools/doc_save.{schema.,}ts`,
-  `doc_delete.{schema.,}ts` - the gated
-  write tools, bundled in the `library` toolbox in
+- (the save + delete ops ride the same combo - no separate files);
+  the whole combo is bundled in the `library` toolbox in
   `src/lib/tools/index.ts`.
 
 Prompt:
@@ -125,13 +127,13 @@ Docs:
   metadata row, uploads the original to the bucket, and extracts text
   via `VeniceClient.extractText`. The text is searchable immediately;
   there is no embedding step.
-- **Assistant works a document** - the grep-then-read loop: `doc_list`
-  picks the document, `doc_grep` (regex -> `grep_documents` RPC) finds
-  the exact lines and their numbers, then `doc_read`
+- **Assistant works a document** - the grep-then-read loop: op=list
+  picks the document, op=grep (regex -> `grep_documents` RPC) finds
+  the exact lines and their numbers, then op=read
   (-> `read_document_lines`) pulls the surrounding range, capped at
   `DOC_READ_MAX_SPAN` lines per call so it pages rather than dumping the
-  whole doc. `doc_get` (-> `document_stat`) gives the total line count.
-- **Assistant saves a pasted file** - `doc_save` finds the named
+  whole doc. op=get (-> `document_stat`) gives the total line count.
+- **Assistant saves a pasted file** - the save op finds the named
   attachment in the current thread
   (`findAttachmentByFilenameInThread`), reuses its already-parsed
   `extracted_text`, and copies the binary into the bucket when still
@@ -173,10 +175,10 @@ per-row `user_id` scoping.
   downloadable doc marked `failed` rather than losing the upload.
 - **grep / read agree on line numbers.** Both split `extracted_text` on
   `E'\n'` with `regexp_split_to_table ... with ordinality`, so a line
-  number from `doc_grep` indexes the same line in `doc_read`.
-  `doc_read` clamps its span to `DOC_READ_MAX_SPAN`; `doc_grep` caps
+  number from op=grep indexes the same line in op=read.
+  op=read clamps its span to `DOC_READ_MAX_SPAN`; op=grep caps
   matches and rephrases an invalid-regex error as `{error}` guidance.
-- **doc_save requires extractable text.** A promoted attachment with
+- **The save op requires extractable text.** A promoted attachment with
   empty `extracted_text` is rejected with actionable text rather than
   creating an unsearchable document. An expired attachment (binary
   reclaimed) can still be promoted from its surviving text - the doc is
@@ -188,14 +190,14 @@ per-row `user_id` scoping.
 
 ## Interactions
 
-- **Attachments** (`docs/dev/attachments.md`) - `doc_save` promotes
+- **Attachments** (`docs/dev/attachments.md`) - the save op promotes
   an attachment into a document, reusing its `extracted_text` and
   binary. Both ride the shared bucket model in
   [`./file-storage.md`](./file-storage.md): a live attachment's bytes
   are downloaded from the `attachments` bucket and re-uploaded into
   `documents` (an expired attachment still promotes, just text-only).
-- **Tools** (`docs/dev/tools.md`) - `doc_list` / `doc_get` / `doc_grep`
-  / `doc_read` ride always-on; the `library` toolbox carries the writes.
+- **Tools** (`docs/dev/tools.md`) - the docs combination tool rides the
+  `library` toolbox (its read ops ride inside it).
 - **Chat-prompt** (search `LIBRARY_BLOCK`) - tells the model the Library
   exists and teaches the list -> grep -> read loop.
 - **Embeddings** (`docs/dev/embeddings.md`) - the Library is
@@ -206,24 +208,24 @@ per-row `user_id` scoping.
 ## Gotchas
 
 - **No semantic search - and that was a deliberate removal.** Search is
-  exact regex (`doc_grep`) plus metadata routing (`doc_list`). Before
+  exact regex (op=grep) plus metadata routing (op=list). Before
   re-adding embeddings, read why they were dropped (Role section): they
   underperformed against the operative text and cost a heavy per-chunk
   backfill at a corpus size that doesn't need it. If large libraries
   ever make routing hard, a *single embedding per document* (routing
   only, not per-chunk) is the cheap thing to add - not chunk search.
-- **`doc_get` does NOT return the text.** It's the text-free stat
+- **op=get does NOT return the text.** It's the text-free stat
   (metadata + line count). Pulling a multi-MB document's text into a
-  tool result blows the context window; `doc_read` exists precisely so
+  tool result blows the context window; op=read exists precisely so
   the model pages it in bounded line ranges. Don't add a text field to
-  `doc_get`.
+  op=get.
 - **Line numbers are computed on the fly, not stored.** grep / read /
   stat each split `extracted_text` on `E'\n'` the same way, so their
   line numbers agree - but there is no persisted line index, so a future
   change to how extracted text is normalised shifts every line number.
   That's fine (the model always greps fresh before reading), just don't
   cache line numbers across an extraction change.
-- **A bad regex from the model is not a tool failure.** `doc_grep`
+- **A bad regex from the model is not a tool failure.** op=grep
   catches Postgres's "invalid regular expression" and returns it as
   `{error: ...}` guidance so the model fixes the pattern and retries,
   rather than the tool throwing.
@@ -245,12 +247,12 @@ End-to-end manual smoke test:
    original is downloadable, and the text is searchable immediately (no
    embedding wait).
 3. Ask the chat a question answered deep in the PDF -> the model uses
-   `doc_list` -> `doc_grep` -> `doc_read` and answers from the right
+   op=list -> op=grep -> op=read and answers from the right
    lines, citing the doc.
 4. Drawer search by a phrase from the doc -> the doc appears in the
    listing.
 5. Edit the description, download the original, then delete -> the row
    and the bucket object are gone.
 6. Attach a text file to a chat and ask Nak to "save this to my
-   library" -> `doc_save` promotes it; it appears in the tab.
+   library" -> op=save promotes it; it appears in the tab.
 7. `mise run check` green; no `(!)` build warnings.
