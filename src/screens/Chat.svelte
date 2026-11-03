@@ -5529,6 +5529,24 @@
     // of reaching here; that path hands off to reconnectInflightTurn,
     // whose own tail drains.
     maybeDrainQueuedMessages(ctx.threadId);
+    // END-time transcript reconcile: the edge function is the only
+    // writer of tool rows and generated-image attachments, so the
+    // sending tab's live view must not depend on the messages echo for
+    // them. One refetch after settle lands whatever the echo missed -
+    // a deaf echo otherwise hides the turn's tool cards and image cards
+    // until a reload. Fire-and-forget: awaiting it would delay the
+    // queued drain above; the merge is idempotent and the swap window
+    // self-heals on the next reconcile. Unconditional on outcome
+    // (completed, aborted, errored, suspended all refetch server
+    // truth); a conflict settle's refetch may deliver the foreign
+    // rows while the conflict banner is up - desired. The
+    // StreamDisconnectedError branch is covered by
+    // reconnectInflightTurn's own transcript refetch. Background
+    // exchanges (user navigated away) skip this on purpose: their
+    // slot's persistedRows merge on thread re-entry.
+    if (activeThreadId === ctx.threadId) {
+      void reconcileTranscript(ctx.threadId, 'post-turn');
+    }
   }
 
   /**
