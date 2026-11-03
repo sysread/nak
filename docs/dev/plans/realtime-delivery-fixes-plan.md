@@ -1,7 +1,16 @@
 # Realtime Delivery Fixes Plan
 
-Status: DRAFT r3 2026-11-03. Bug-intake dispatched fix session
-(realtime-delivery-fixes worktree; base moved to origin/main
+Status: IMPLEMENTED 2026-11-03 (branch realtime-delivery-fixes,
+rebased on ce0926d9; M1-M7 commits a1f63640, 5aee1802, 58d2afc8,
+411ad6ff, ac18a2cb, 14bd76a4, af07f32a; QA M0 baseline + M8 post-
+change rows in chat-streaming-turn.md, chat-generated-image-card.md,
+chat-regenerate-from-here.md, settings-image-model-picker.md - the
+M8 runs show the observer tab reaching full transcript parity via the
+cross-tab backstop and image cards landing live on the sender, both
+previously broken). The text below is the as-proposed record; the
+implementation matched it with no design deltas. Session context:
+bug-intake dispatched fix session (realtime-delivery-fixes worktree;
+base moved to origin/main
 ce0926d9 per the coordinator's base-drift instruction - the drift's
 diff on this plan's surface is comment-only and line-count-neutral
 in Chat.svelte, plus the image-tool consolidation in
