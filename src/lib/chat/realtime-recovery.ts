@@ -3,7 +3,9 @@
  * function. Companion to subscribeToMessages
  * (src/lib/supabase/realtime.ts), which gained an optional status
  * callback; the Chat.svelte effect wires this decision to its
- * catch-up reconcile and resubscribe tick.
+ * catch-up reconcile and resubscribe tick. The status union is the
+ * channel layer's own (imported type-only from there - the data layer
+ * must not import upward into chat/).
  *
  * Why a decision module: the caller's reaction to a status event is
  * policy (one catch-up per SUBSCRIBED, one resubscribe per
@@ -11,17 +13,11 @@
  * policy lives in a state-and-transition matrix that is unit-tested
  * here - Chat.svelte itself is not mountable in tests (too coupled to
  * the live app state), so every decision that matters is extracted.
- *
- * The full matrix lives in
- * docs/dev/plans/realtime-delivery-fixes-plan.md ("STATE AND
- * TRANSITION MATRIX").
+ * The matrix is graduated into docs/dev/chat.md's gotcha "The
+ * messages channel's echo can die while the threads channel lives".
  */
 
-export type MessageChannelStatus =
-  | 'SUBSCRIBED'
-  | 'CHANNEL_ERROR'
-  | 'TIMED_OUT'
-  | 'CLOSED';
+import type { MessageChannelStatus } from '../supabase/realtime';
 
 /**
  * What the caller should do about a status event:

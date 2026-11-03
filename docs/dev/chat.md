@@ -741,14 +741,29 @@ A chat turn goes:
   pairs the join with a refetch that also closes the
   fetch-then-async-join race between `selectThread`'s opening
   snapshot and the join; (2) the cross-tab backstop - a threads
-  UPDATE echo for the active thread whose holder is foreign or null
-  schedules a trailing-debounce reconcile (the threads echo is the
-  one signal that survives the messages echo dying); (3) the END-time
-  reconcile in `runExchange`'s settled tail for the sending tab.
+  UPDATE echo for the active thread while this tab isn't itself
+  sending schedules a trailing-debounce reconcile (the threads echo
+  is the one signal that survives the messages echo dying; the
+  trigger is `!exchangeStore.peek(id)?.sending`, NOT a holder
+  comparison - `holderId` is device-level on purpose, so two
+  same-origin sibling tabs share it and a sibling's turn reads as
+  our own); (3) the END-time reconcile in `runExchange`'s settled
+  tail for the sending tab (skipped when a queued drain is about to
+  fire - the drained turn's own settle is that window's heal).
   Resubscribe policy: one per consecutive-failure streak, then warn
   logs only - a channel that never joins must not churn, and the
   reconciles carry correctness without it. `CLOSED` is debug-only
-  (own teardown echoes through it).
+  (own teardown echoes through it). The channel's state-and-
+  transition matrix, as implemented in `messagesSubscribeDecision`:
+
+  | State | Entered when | Actions on entry |
+  | --- | --- | --- |
+  | JOINING | effect run; no status ack yet | streak counter unchanged (per-thread, survives resubscribe re-runs) |
+  | SUBSCRIBED | status `SUBSCRIBED` | streak resets; ONE catch-up reconcile; debug log |
+  | RESUBSCRIBE_PENDING | failure, streak was 0 | warn log; resubscribe tick bumped (fresh channel + topic) |
+  | FAILED | failure, streak already >= 1 | warn log only; reconciles carry correctness |
+  | removed | effect teardown | `removeChannel`; pending cross-tab debounce cleared |
+
 - **Auto-titling runs server-side, not from `Chat.svelte`.**
   The curation tail in the venice function
   (`supabase/functions/venice/agents/auto_title.ts`) claims

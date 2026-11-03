@@ -117,8 +117,8 @@ indicator until the claim clears.
     "preempted" banner instead of the silent-stop the
     user-initiated abort path uses.
   - Streaming handlers (in the `runChatLoop` call's `handlers`
-    bundle) write to `slot.X` fields. Two persisted-row
-    handlers do **double duty**: always
+    bundle) write to `slot.X` fields. The persisted-row handler
+    (`onAssistantPersisted`) does **double duty**: always
     `slot.recordPersistedRow(msg)` (so the buffer captures
     every row), but only `appendMessage(msg)` when
     `ctx.threadId === activeThreadId` (so the active view's

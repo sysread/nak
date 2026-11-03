@@ -162,3 +162,23 @@ export function mergeMessagesById(
   });
   return inherited.concat(own);
 }
+
+/**
+ * Remove an in-flight streaming assistant row (status='streaming')
+ * from a fetched snapshot before it is assigned to the screen's
+ * `messages`. The streaming bubble (slot.streamingText) owns
+ * mid-flight rendering; merging the row bare would double-paint the
+ * answer - once as the live bubble, once as a transcript row. The
+ * realtime echo handler applies the same filter; every caller that
+ * assigns a listMessages snapshot to the view (selectThread,
+ * reconcileTranscript) strips first. Returns the input array when
+ * there is no streaming row.
+ */
+export function stripStreamingRow(fetched: Message[]): Message[] {
+  const streamingTail = fetched.find(
+    (m) => m.role === 'assistant' && m.status === 'streaming',
+  );
+  return streamingTail
+    ? fetched.filter((m) => m.id !== streamingTail.id)
+    : fetched;
+}

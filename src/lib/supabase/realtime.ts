@@ -8,7 +8,9 @@
  * and agent-run progress, and the profiles-row relays for the
  * in-flight lease and last-run outcome), plus the point reads paired
  * with those
- * channels (getMessage for the end-of-turn hydration race, the
+ * channels (the paired-read convention: a subscribe is only half of
+ * delivery - the point read covers what the channel missed while
+ * joining; getMessage for the end-of-turn hydration race, the
  * on-mount lease-expiry and last-run-outcome reads that recover state
  * a closed tab missed).
  *
@@ -91,20 +93,29 @@ function uniqueTopic(base: string): string {
  * `Message.id` at the append site handles both orderings.
  *
  * `onStatus`, when given, receives the channel's subscribe-status
- * transitions verbatim. Paired-read convention (module header): the
- * SUBSCRIBED ack is the signal that the channel can deliver, and the
- * caller pairs it with a catch-up read - any row inserted between
- * the opening fetch and the join is in neither and needs the
- * refetch. Failure statuses (CHANNEL_ERROR / TIMED_OUT) mean the
- * channel never joined or died; a caller that ignores them gets
- * silence (the pre-onStatus behavior, and the shape of the
- * second-tab deafness sighting).
+ * transitions verbatim (the status union is defined below as
+ * MessageChannelStatus - the single definition; the policy companion
+ * that decides what to do about each status is
+ * `src/lib/chat/realtime-recovery.ts`). The SUBSCRIBED ack is the
+ * signal that the channel can deliver, and the caller pairs it with a
+ * catch-up read - any row inserted between the opening fetch and the
+ * join is in neither and needs the refetch (the same paired-read
+ * pattern the lease and last-run-outcome pairs below follow).
+ * Failure statuses (CHANNEL_ERROR / TIMED_OUT) mean the channel
+ * never joined or died; a caller that ignores them gets silence -
+ * the shape of the second-tab deafness sighting.
  */
+export type MessageChannelStatus =
+  | 'SUBSCRIBED'
+  | 'CHANNEL_ERROR'
+  | 'TIMED_OUT'
+  | 'CLOSED';
+
 export function subscribeToMessages(
   client: SupabaseClient,
   threadId: string,
   onMessage: (msg: Message) => void,
-  onStatus?: (status: 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED', err: unknown) => void
+  onStatus?: (status: MessageChannelStatus, err: unknown) => void
 ): () => void {
   // Defend the realtime channel: if the consumer throws, the
   // postgres_changes subscription dies silently and the transcript

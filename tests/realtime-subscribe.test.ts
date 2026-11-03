@@ -1,6 +1,6 @@
 /**
- * Unit tests for the realtime helpers' channel-topic contract. Three
- * halves:
+ * Unit tests for the realtime helpers' channel contracts. Four
+ * concerns:
  *
  *   - postgres_changes helpers open a FRESH topic per subscription.
  *     realtime-js returns the existing channel for a repeated topic
@@ -17,6 +17,9 @@
  *     across concurrent consumers, closing it only when the last one
  *     leaves, because a second same-topic subscriber would otherwise
  *     get the first's channel and lose it on the first's teardown.
+ *   - subscribeToMessages' optional subscribe-status callback reaches
+ *     channel.subscribe() verbatim (the policy companion is
+ *     src/lib/chat/realtime-recovery.ts).
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';

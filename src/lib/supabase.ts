@@ -72,6 +72,7 @@ import type { RenderedPdfPage } from './pdf-pages';
 // Realtime domain slice (subscribe* channels + their paired point
 // reads), same delegation pattern.
 import * as realtimeApi from './supabase/realtime';
+import type { MessageChannelStatus } from './supabase/realtime';
 // Samskara domain slice, same delegation pattern.
 import * as samskaraApi from './supabase/samskara';
 // Skills domain slice, same delegation pattern.
@@ -1602,7 +1603,7 @@ export class SupabaseService {
   subscribeToMessages(
     threadId: string,
     onMessage: (msg: Message) => void,
-    onStatus?: (status: 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED', err: unknown) => void
+    onStatus?: (status: MessageChannelStatus, err: unknown) => void
   ): () => void {
     return realtimeApi.subscribeToMessages(this.client, threadId, onMessage, onStatus);
   }
