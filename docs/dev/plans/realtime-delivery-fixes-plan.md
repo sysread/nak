@@ -133,7 +133,7 @@ round-1 corrections are folded in).
 | P11 | The edge function is the writer-of-record for `role='tool'` rows and generated-image attachments | `docs/dev/architecture.md:423, 427` |
 | P12 | The Broadcast stream channel already uses a subscribe-status callback for disconnect handling, with first-SUBSCRIBED-only semantics and own-teardown CLOSED suppression (in-file precedent for fixes 1-2) | `src/lib/chat/stream-transport.ts:338, 595-623` (`setupStreamSubscription`; the plan's earlier `venice.ts` attribution was inherited from a stale pointer at `docs/dev/chat.md:910-911`, to be corrected in M6) |
 | P13 | postgres_changes channels can take a unique topic per subscription; resubscribe is safe | `src/lib/supabase/realtime.ts:55-78` |
-| P14 | A threads UPDATE echo reaches the browser per user-row insert (browser bumps `updated_at`) and per terminal commit (RPC bumps it); heartbeat refreshes do NOT bump it (direct column write; the only trigger on `public.threads` is `clear_thread_embedding_on_change`) | `src/lib/supabase/messages.ts:552`; `supabase/schema.sql:13985-13993, 1646`; `supabase/functions/venice/getStreamingResponse.ts:404-408` |
+| P14 | A threads UPDATE echo reaches the browser per user-row insert (browser bumps `updated_at`) and per terminal commit (RPC bumps it); heartbeat refreshes do NOT bump it (direct column write); NO active trigger remains on `public.threads` (the last one, `clear_thread_embedding_on_change`, is retired by the drop statement) | `src/lib/supabase/messages.ts:552`; `supabase/schema.sql:13985-13993, 1646`; `supabase/functions/venice/getStreamingResponse.ts:404-408` |
 | P15 | The paired-read pattern (point read covering a channel's join window) is the module's documented convention | `src/lib/supabase/realtime.ts:8-13`; `subscribeToInflightLease`/`getInflightLeaseExpiry` pair at `:306-361` |
 | P16 | `.regen-target` is driven by `pendingDeleteSet` OR `hoverRegenerateSet` at three class sites | `src/screens/Chat.svelte:8246, 8333, 8383` |
 | P17 | `.regen-target.fading-out` runs the fade animation | `src/styles.css:2676-2679` |
@@ -319,7 +319,10 @@ Precedence rules:
 New pure module `src/lib/chat/realtime-recovery.ts`:
 
 - `messagesSubscribeDecision(status, attempts): { action: 'catch-up' | 'resubscribe' | 'log-warn' | 'log-debug', nextAttempts: number }`
-  - pure, node-testable; encodes the STATE MATRIX table exactly.
+  - pure, node-testable; encodes the STATE MATRIX table exactly. The
+    `catch-up` action bundles the SUBSCRIBED row's three effects
+    (reset attempts to 0, run the catch-up reconcile, log at debug);
+    the caller receives no separate signals.
 
 `src/screens/Chat.svelte` (messages effect, `:1993-2051`):
 
@@ -334,8 +337,9 @@ New pure module `src/lib/chat/realtime-recovery.ts`:
   `catch-up` -> await any in-flight `selectThread` fetch for this
   thread (component-scoped map, see DECISIONS), then
   `void reconcileTranscript(threadId, 'post-subscribe-catch-up')`;
-  `resubscribe` -> warn log + tick bump; `log-warn` -> warn log only;
-  `log-debug` -> debug log only.
+  `resubscribe` -> warn log (carrying the thread id) + tick bump;
+  `log-warn` -> warn log (thread id included) only; `log-debug` ->
+  debug log only.
 - The dedup/merge invariants are untouched: the catch-up flows through
   `reconcileTranscript`, which is thread-guarded and idempotent (P4).
 
@@ -363,9 +367,13 @@ Tests (node-env, no DOM):
 - Inside the existing `onUpdate` callback (P24): if the updated
   thread `id === activeThreadId` and `response_holder_id !== holderId`,
   schedule the trailing debounce for that thread id (2s).
-- Hand-rolled debounce: one module-scope (component-scope) timer
-  variable + pending thread id; a newer trigger clears and re-arms;
-  teardown (effect cleanup / thread switch) clears the timer.
+- Hand-rolled debounce: one component-INSTANCE-scope timer variable +
+  pending thread id (NOT `<script module>` scope - that state is
+  shared across component instances); a newer trigger clears and
+  re-arms. Teardown hook: the messages effect's cleanup function
+  clears the pending timer (it runs on both thread switch and
+  unmount; the threads subscription effect does not tear down on
+  thread switches, so it cannot own the cleanup).
 - On fire: `void reconcileTranscript(threadId, 'cross-tab-threads-echo')`.
 - Comment: names the sighting (c) shape it heals (a foreign turn whose
   message echoes never arrived) and the real trigger budget (P14 +
@@ -425,7 +433,11 @@ Fix shape (applied once the repro names the holder): clear
 half of the class binding off while a send is in flight on the
 thread (the click path already hands the class to
 `pendingDeleteSet` alone, `:5904-5908` - this extends the same
-invariant to the whole send window). The gating predicate is
+invariant to the whole send window). Visible behavior change to
+record for M8's QA: hovering a regenerate button DURING an in-flight
+send no longer previews the range - acceptable because the buttons
+are disabled mid-send anyway, but it must not be logged as a
+regression. The gating predicate is
 extracted into `src/lib/ui/regenerate` and pinned in
 `tests/regenerate.test.ts` (which already pins the range math there)
 so the fix is not purely QA-verified.
@@ -553,6 +565,13 @@ exit codes; run it unpiped).
 - **A conflict settle's reconcile** may deliver the foreign user's
   rows while the conflict banner is up. Desired server-truth
   behavior; noted so it is not mistaken for a bug during QA.
+- **A FAILED channel is silent to the user.** After two consecutive
+  subscribe failures the channel stays dead until a thread switch or
+  reload; the warn log (with thread id) is the only signal. A
+  user-visible surface was considered and cut on purpose - the
+  reconciles carry transcript correctness without it, and
+  sight-of-failure in the Logs drawer is enough for this defect's
+  scope.
 - **Thread-open cost is two `listMessages`** (opening fetch + catch-up)
   plus the streamState point read. Accepted for a single-user stack;
   the swap window (P25) means the layered triggers, not any single
