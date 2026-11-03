@@ -70,8 +70,8 @@ Deno.test('extraction prompt draws the body-vs-records line and excludes non-eve
   assertStringIncludes(p, 'journey');
   // It must tell the model to attach to an EXISTING article only.
   assertStringIncludes(p, 'EXISTING article');
-  // And to dedupe via record_list before creating.
-  assertStringIncludes(p, 'record_list');
+  // And to dedupe via the records combo's list op before creating.
+  assertStringIncludes(p, 'op=list');
 });
 
 Deno.test('extraction prompt carries the one-event-one-record dedup discipline', () => {

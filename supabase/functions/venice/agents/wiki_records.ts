@@ -2,11 +2,11 @@
 //
 // Scans a settled conversation for discrete, dated events - a bake, a
 // doctor visit, a milestone, an experiment, an observation - and logs
-// each as a record on the matching wiki article via record_create.
+// each as a record on the matching wiki article via the records tool (op=create).
 // Records document the topic's JOURNEY; the article body (maintained by
 // the separate wiki agent + librarian) owns its CURRENT STATE. This
 // agent never touches article bodies: it finds the right article with
-// wiki_search / wiki_list and hangs dated records off it.
+// the wiki tool (op=search) / the wiki tool (op=list) and hangs dated records off it.
 //
 // Drive shape mirrors the wiki agent's cron path: pg_cron fires
 // nak_trigger_wiki_records_sweep() (supabase/schema.sql), which POSTs
@@ -89,9 +89,9 @@ const WIKI_SEARCH_DEFAULT_LIMIT = 5;
 const WIKI_SEARCH_MAX_LIMIT = 20;
 
 // ---------------------------------------------------------------------------
-// Wire schemas for the extraction toolbox. wiki_search / wiki_list find
-// the article a record attaches to; record_list is the dedupe check;
-// record_create is the only write. memory_search rides read-only for
+// Wire schemas for the extraction toolbox. the wiki tool (op=search) / the wiki tool (op=list) find
+// the article a record attaches to; the records tool (op=list) is the dedupe check;
+// the records tool (op=create) is the only write. memory_search rides read-only for
 // grounding (its schema lives in _agent_tools.ts).
 // ---------------------------------------------------------------------------
 
@@ -191,18 +191,18 @@ const RECORD_LINK_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
       'logged to the PRIOR record it continues. Use ONLY when the ' +
       'conversation explicitly frames the new event as a follow-up to a ' +
       'specific earlier one ("same as last time but...", "attempt 3"). ' +
-      'Get the prior record id from record_list and the new id from ' +
-      'record_create. Never invent a relationship the user did not state.',
+      'Get the prior record id from the records tool (op=list) and the new id from ' +
+      'the records tool (op=create). Never invent a relationship the user did not state.',
     parameters: {
       type: 'object',
       properties: {
         from_record_id: {
           type: 'string',
-          description: 'UUID of the new/derived record (from record_create).',
+          description: 'UUID of the new/derived record (from the records tool (op=create)).',
         },
         to_record_id: {
           type: 'string',
-          description: 'UUID of the prior record it builds on (from record_list).',
+          description: 'UUID of the prior record it builds on (from the records tool (op=list)).',
         },
         label: {
           type: 'string',
@@ -228,7 +228,7 @@ const RECORD_FILE_ATTACH_WIRE_SCHEMA: AgentTool['wire'] = {
     description:
       'Attach a file the user posted in THIS conversation (by its exact ' +
       'filename) to a record - one you just logged, or the existing record ' +
-      'that already documents this event (from record_list) - copying it ' +
+      'that already documents this event (from the records tool (op=list)) - copying it ' +
       'into permanent record storage so it outlives the chat attachment. ' +
       'Use for a photo ' +
       'or scan the user shared that documents the event - a crumb shot, a ' +
@@ -241,8 +241,8 @@ const RECORD_FILE_ATTACH_WIRE_SCHEMA: AgentTool['wire'] = {
         record_id: {
           type: 'string',
           description:
-            'UUID of the record to attach to (from record_create, or from ' +
-            'record_list when the event was already recorded).',
+            'UUID of the record to attach to (from the records tool (op=create), or from ' +
+            'the records tool (op=list) when the event was already recorded).',
         },
         filename: {
           type: 'string',
@@ -279,13 +279,13 @@ The wiki has two layers, and you only touch one of them. Each article's BODY is 
 
 1. Read the conversation and ask: did the USER do, try, observe, or experience a specific dated event? Most conversations contain zero. That is a correct outcome - produce no records and stop.
 
-2. For each genuine event, find the article it belongs to. Call wiki_search with the topic (the recipe, the hobby, the person, the project). If search is thin, call wiki_list to survey what exists. Records attach to an EXISTING article only - if no article fits, skip the event (the article agent will create the article later, and a future extraction pass can log the record then).
+2. For each genuine event, find the article it belongs to. Call the wiki tool (op=search) with the topic (the recipe, the hobby, the person, the project). If search is thin, call the wiki tool (op=list) to survey what exists. Records attach to an EXISTING article only - if no article fits, skip the event (the article agent will create the article later, and a future extraction pass can log the record then).
 
-3. Before logging, call record_list on that article and check whether the event is already recorded. **One event, one record.** An event that already has a record - same date, same happening - gets NO second record, no matter which conversation produced the first one: the same event routinely comes back around (a second conversation covers it, or this conversation keeps discussing it and you meet it again in tomorrow's pass), and it is ALREADY CAPTURED. When the conversation adds material to an already-recorded event (an outcome, a reaction, a photo), do not re-narrate it as a new record - attach the photo to the EXISTING record (step 6 takes any record id from record_list) and leave prose amendments to the maintenance agents. The same rule applies within a single pass: several aspects of one event (started it, how it went, who reacted) are ONE record, not one record per aspect. A new record is warranted only for a genuinely distinct happening - a new attempt, a new day's event, a different subject.
+3. Before logging, call the records tool (op=list) on that article and check whether the event is already recorded. **One event, one record.** An event that already has a record - same date, same happening - gets NO second record, no matter which conversation produced the first one: the same event routinely comes back around (a second conversation covers it, or this conversation keeps discussing it and you meet it again in tomorrow's pass), and it is ALREADY CAPTURED. When the conversation adds material to an already-recorded event (an outcome, a reaction, a photo), do not re-narrate it as a new record - attach the photo to the EXISTING record (step 6 takes any record id from the records tool (op=list)) and leave prose amendments to the maintenance agents. The same rule applies within a single pass: several aspects of one event (started it, how it went, who reacted) are ONE record, not one record per aspect. A new record is warranted only for a genuinely distinct happening - a new attempt, a new day's event, a different subject.
 
-4. Call record_create with the article_id, the event's date (ISO "YYYY-MM-DD" - read it from the conversation; use the message timestamps when the user doesn't state a date), a short Markdown description of what happened and what was learned, and a few filtering tags.
+4. Call the records tool (op=create) with the article_id, the event's date (ISO "YYYY-MM-DD" - read it from the conversation; use the message timestamps when the user doesn't state a date), a short Markdown description of what happened and what was learned, and a few filtering tags.
 
-5. **Cross-link a continuation (only when explicit).** If the conversation frames the new event as a direct follow-up to a SPECIFIC earlier record you can see in record_list ("attempt 3", "same dough as last week but wetter", "the rematch"), call record_link_create from the new record's id to that prior record's id, with a short label ("based on", "supersedes"). This is the exception, not the rule: most records stand alone. Never link on a vague thematic resemblance, never invent a relationship the user did not state, and never link to a record you did not actually find via record_list. When unsure, skip the link.
+5. **Cross-link a continuation (only when explicit).** If the conversation frames the new event as a direct follow-up to a SPECIFIC earlier record you can see in the records tool (op=list) ("attempt 3", "same dough as last week but wetter", "the rematch"), call record_link_create from the new record's id to that prior record's id, with a short label ("based on", "supersedes"). This is the exception, not the rule: most records stand alone. Never link on a vague thematic resemblance, never invent a relationship the user did not state, and never link to a record you did not actually find via the records tool (op=list). When unsure, skip the link.
 
 6. **Attach a photo the user posted (when one documents the event).** The live files the user shared in this conversation are listed in a <thread_attachments> note above (if any). You CANNOT see images yourself. If a listed image plausibly documents this exact record - a crumb shot of the loaf they just baked, a photo of the finished dish, a scanned card - first call analyze_image(filename, query) to confirm what it actually shows, ESPECIALLY when more than one image is present (do not guess which is which). Once confirmed, call record_file_attach with the record's id - the one you just created, or the EXISTING record from step 3 when the event was already captured - and that exact filename so the evidence lives with the record permanently. Use ONLY a filename from the <thread_attachments> note; never invent one, and never attach an image you have not verified belongs to the record. Most records have no photo - that is fine; only attach when the user actually shared one for this event.
 
@@ -634,10 +634,10 @@ export async function runWikiRecordsSweepTick(
 
 // Test-only surface. The toolbox composition is a safety invariant - the
 // extraction agent gets read-only memory + image access (memory_search,
-// analyze_image) and three write tools (record_create + record_link_create
+// analyze_image) and three write tools (the records tool (op=create) + record_link_create
 // + record_file_attach: it creates a record from a live event, so it can
 // verify a photo the user posted in the same conversation and hang it on
-// the record). It never gets wiki_save / memory writes -
+// the record). It never gets the wiki tool (op=save) / memory writes -
 // article bodies and memory stay off-limits.
 export const __test = {
   buildWikiRecordsToolbox,

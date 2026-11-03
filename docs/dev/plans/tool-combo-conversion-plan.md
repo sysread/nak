@@ -6,10 +6,12 @@ as ce0926d9 (green). M3 (`recipes`) SHIPPED as 563bdefc (green).
 M4 (`recipe_records`) SHIPPED as 855eb947 (green). M5 (`docs`)
 SHIPPED as 3e9807cf + docs 61a63abe (green). M6 (`followups`)
 SHIPPED as 8282bacc (green). M7 (`wiki`) SHIPPED as 54f05d67
-(green). M8-M9 pending. One cluster per milestone; each milestone
-ships as its own deploy. Standing merge authorization from Jeff:
-merge as QA completes per milestone, coordinating serve windows
-through the intake desk (guard-5-00021).
+(green). M8 (`records`) SHIPPED as 47434c2f + fix a2817d7c
+(green). M9 (audit + close-out) IN PROGRESS. One cluster per
+milestone; each milestone ships as its own deploy. Standing merge
+authorization from Jeff: merge as QA completes per milestone,
+coordinating serve windows through the intake desk
+(guard-5-00021).
 
 Read [`../tools.md`](../tools.md) first - this plan assumes its
 vocabulary (`ToolDef`, `buildToolList`, `performToolCall`, agent

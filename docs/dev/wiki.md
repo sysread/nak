@@ -210,7 +210,7 @@ Edge function (`supabase/functions/venice/`):
   `budgetMs` wall-clock bound - opt-in per agent, currently only
   deep-sleep. See `./tools.md` for why rounds alone are the wrong
   bound; the wiki librarian has not needed one.
-- `tools/wiki op=save.ts`,
+- `tools/wiki.ts`,
   `tools/wiki op=delete.ts` - the write tools (char caps, best-effort
   changelog + source attribution, unique-violation rephrasing).
   b-strict throughout: the service-role client bypasses RLS, so every
@@ -610,13 +610,13 @@ Tests:
 
 - `supabase/functions/tests/wiki.test.ts` - the safety-critical
   composition guards: toolbox membership (wiki CRUD + full record
-  management `record_list`/`create`/`update`/`delete` + read-only
+  management (the records combo's CRUD ops) + read-only
   memory_search, no memory writes, no ask_user), the content-filter
   sentinel match staying narrow, and the prompt invariants
   (anti-name-fabrication, profile-block rendering rules).
 - `supabase/functions/tests/wiki_librarian.test.ts` - the
   librarian's composition guards: toolbox membership (the four
-  reads plus wiki op=save / wiki op=delete; no create form, no memory
+  reads plus the wiki combo's save/delete ops; no create form, no memory
   writes, no `ask_user`), the prompt's variant selection (custom
   instructions swap in the bounded body; whitespace falls back to
   the standard five-step sweep), and the corrective profile-block
@@ -662,7 +662,7 @@ Docs:
   `POST /wiki-records-sweep` -> `runWikiRecordsSweepTick(adminClient)`
   in `agents/wiki_records.ts`. Claims settled threads whose owner has
   `wikiRecordExtractionEnabled` and at least one article, and logs
-  discrete dated events as records via `record_create`. Independent
+  discrete dated events as records via the records combo (op=create). Independent
   per-thread pointer (`last_wiki_record_processed_msg_id`) and claim
   columns so it runs concurrently with the article sweep. The dev shim
   ticks this route too.
@@ -846,7 +846,7 @@ cards, PDFs):
 - `id`, `user_id`, `record_id uuid not null references wiki_records on
   delete cascade`, `position int`, `filename`, `mime_type`,
   `size_bytes`, `storage_path text not null`, `extracted_text` (Venice
-  text-parser output for non-image docs, so `record_get` can hand the
+  text-parser output for non-image docs, so the records combo (op=get) can hand the
   model a document's text; null for images), `created_at`.
 - Bytes live in the **persistent** `wiki-record-files` Storage bucket
   (key `<user_id>/<file_id>/<filename>`), following the
@@ -909,16 +909,16 @@ mirrored in `src/lib/wiki.ts` and edge
 `tools/_record_helpers.ts` so the in-app and tool/agent paths read
 identically. They render under the panel's "Edited" chip.
 
-**Reads.** `record_get` returns the record plus its `files` (metadata +
+**Reads.** The records combo (op=get) returns the record plus its `files` (metadata +
 bounded `extracted_text`) and `links` (outgoing/incoming with the other
-endpoint's dated excerpt); `record_list` annotates each row with
+endpoint's dated excerpt); the records combo's op=list annotates each row with
 `file_count` / `link_count` (two batched queries over the listed ids,
 not N+1).
 
 **Embeddings unchanged.** A record's embed input stays `date + content`;
 attached-file text does NOT feed the record vector (a noisy OCR dump
 shouldn't dominate retrieval). Files reach the model through
-`record_get`, not through search ranking.
+the records combo (op=get), not through search ranking.
 
 **UI.** Files + links live in the EXPANDED record body in
 `WikiRecords.svelte` (a new record has no id yet, so management sits
@@ -1329,7 +1329,7 @@ browser persists, the autonomous flow's tool calls ARE the writes).
 - The librarian's toolbox (`buildLibrarianToolbox` in
   `agents/wiki_librarian.ts`) bundles four reads (wiki op=search,
   conversation_search, conversation_get, memory_search) plus
-  wiki op=save + wiki op=delete - **the save tool cannot create** (the librarian
+  the wiki combo's save + delete ops - **the save op cannot create** (the librarian
   consolidates what exists, it never invents) and no memory writes.
   `conversation_search` returns only title + topic summary, so the
   attribution pass (workflow step 3c) and the stale-fact pass (step
@@ -1354,20 +1354,21 @@ one grouping covers the whole chat-driven wiki write surface. They were
 once their own `wiki_records` box; folding them in matches the user's
 mental model (wiki editing covers articles and records alike).
 
-- `alwaysOnToolbox` carries the record READS - `record_list` (one
-  article's timeline), `record_get` (by id), `record_search`
-  (semantic across every article's records). They ride every request
-  like the wiki reads.
-- `wikiToolbox` (`name: 'wiki'`) carries the record WRITES -
-  `record_create` / `record_update` / `record_delete` plus the
+- The records combination tool carries the record READS (op=list =
+  one article's timeline, op=get = by id, op=search = semantic
+  across every article's records) bundled in `wikiToolbox` - one
+  tool cannot split across always-on and a write toolbox (the
+  skills precedent).
+- `wikiToolbox` (`name: 'wiki'`) carries the records combo (the
+  record WRITES ride its create / update / delete ops) plus the
   file + link writes `record_file_attach` / `record_file_remove` /
   `record_link_create` / `record_link_delete` - alongside the article
   writes. The membership tripwire lives in
   `tests/tools.test.ts`.
 - The extraction agent's toolbox (`buildWikiRecordsToolbox` in
   `agents/wiki_records.ts`) is read-heavy with three writes,
-  `record_create` + `record_link_create` + `record_file_attach`:
-  the wiki tool (op=search) + the wiki tool (op=list) find the home article, `record_list`
+  the records combo (op=create) + `record_link_create` + `record_file_attach`:
+  the wiki tool (op=search) + the wiki tool (op=list) find the home article, the records combo's op=list
   dedupes, read-only `memory_search` grounds, and `analyze_image` lets
   the text-tier model verify a posted photo before attaching it. It
   conservatively
@@ -1381,8 +1382,8 @@ mental model (wiki editing covers articles and records alike).
   reverse (`record_link_delete` is the librarian's). Asserted in
   `supabase/functions/tests/wiki_records.test.ts`.
 - The article worker and the librarian both get the full record-
-  management set: `record_list` + `record_create` + `record_update` +
-  `record_delete` + `record_link_create`. Both prompts encode the
+  management set: the records combo (list / create / update /
+  delete) + `record_link_create`. Both prompts encode the
   body/records separation: the article BODY is the current state,
   records are the journey. Behaviours that follow:
   - **Promote - without duplicating**: fold durable learnings from
@@ -1396,16 +1397,16 @@ mental model (wiki editing covers articles and records alike).
   - **Migrate**: relocate inline dated history that legacy bodies
     accreted (the pre-records worker prompt told it to append dated
     entries to the body) OUT into records, then trim the body to
-    current-state prose. `record_create` here is scoped to MIGRATION
+    current-state prose. The create op here is scoped to MIGRATION
     only - neither agent re-extracts new conversation events into
     records (that stays with the extraction agent). The discipline is
-    strict and dedup-first: `record_list` to check the event is not
+    strict and dedup-first: op=list to check the event is not
     already a record (the extraction agent or the user may have logged
-    it), `record_create`, and only THEN trim the body line - never
+    it), op=create, and only THEN trim the body line - never
     drop a dated line before its record exists. The worker also stops
     appending NEW dated entries to bodies; the journey goes to records.
-  - **Clean up**: `record_update` to correct or merge a record,
-    `record_delete` for a true duplicate or clearly-irrelevant entry -
+  - **Clean up**: op=update to correct or merge a record,
+    op=delete for a true duplicate or clearly-irrelevant entry -
     opportunistic on the records of articles the agent is already
     touching. The librarian's pass is wider: its workflow step 7
     explicitly targets the articles with the most recent record
@@ -1413,7 +1414,7 @@ mental model (wiki editing covers articles and records alike).
     record counts + latest record dates to make that actionable),
     and its step 7d names the same-event duplicate shape and the
     merge discipline - see the "Same-event record duplicates"
-    gotcha. The hard rule on both: never `record_delete` a record
+    gotcha. The hard rule on both: never op=delete a record
     because its learning was promoted; records survive promotion.
   - **Link**: `record_link_create` to wire up an explicit continuation
     chain (one record is a revision of / based on / supersedes another)
@@ -1424,7 +1425,7 @@ mental model (wiki editing covers articles and records alike).
     wiki-wide pass).
   The worker scopes its record edits to the article whose subject the
   current conversation is about; the librarian works wiki-wide. Only
-  `record_create`-from-conversation stays carved out to the extraction
+  record-from-conversation capture stays carved out to the extraction
   agent, so the worker and librarian never duplicate its event-capture
   job.
 - **File attach is per-thread, and needs perception plumbing.** The
@@ -1507,13 +1508,13 @@ mental model (wiki editing covers articles and records alike).
   Broadcast topic (`_shared/agent-progress.ts`), which follows the
   same transport + flush-before-respond contract as the log relay.
 - **Chat / tools** (`docs/dev/chat.md`, `docs/dev/tools.md`) -
-  the wiki tool (op=search) and the other read tools (plus the record reads
-  `record_list` / `record_get` / `record_search`) are always-on in
-  every chat request. The gated `wikiToolbox` is the single toggle for
+  the wiki combination tool (all its ops) rides every chat request
+  in the `wikiToolbox` - the read ops are read-only surfaces inside
+  it. The gated `wikiToolbox` is the single grouping for
   every chat-driven write: article save + delete (the wiki tool (op=save) /
   the wiki tool (op=delete)), the `wiki_librarian` delegation for
   multi-article consolidations, and the record writes
-  (`record_create` / `record_update` / `record_delete` plus the file +
+  (the records combo's create / update / delete ops plus the file +
   link tools).
 - **Edge function auth** (`docs/dev/edge-function-auth.md`) - the
   venice function is b-strict: `/wiki-sweep`,
@@ -1751,7 +1752,7 @@ mental model (wiki editing covers articles and records alike).
   same-happening event regardless of source conversation; attach
   new photos to the EXISTING record instead) and the librarian's
   step 7d (merge same-date same-event siblings; the record carrying
-  a file attachment is the keeper because `record_delete` cascades
+  a file attachment is the keeper because op=delete cascades
   attachments away; reconcile contradictions against the source
   conversation, never average). Records on DIFFERENT dates that
   continue one arc are the journey model working - link, don't
