@@ -31,7 +31,13 @@ gate in `src/components/AssistantBody.svelte`, commit path
 
 - Local stack up (`mise run dev-start`), signed in as the dev user.
 - A thread with at least three completed turns, at least one of which
-  invoked a tool (ask something that triggers memory or web search).
+  invoked a tool. On z-ai-glm-5-3-flash the reliable way to stage a
+  tool turn is an explicit tool-shaped ask: enable the Images toolbox
+  and request a generated picture, or ask the model to save a specific
+  fact to memory (explicit save requests dispatch deterministically).
+  Open-ended advice like "ask something that triggers memory or web
+  search" no longer reliably fires a tool call on this model - do not
+  rely on it.
   Note the thread id.
 - For the tool-call-only step: a prompt that reliably starts a
   slow tool call, so Stop can land while the call is still

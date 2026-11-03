@@ -78,7 +78,12 @@ landing tab move together.
   "default" reads as absence; any other pick writes the id via
   `persistImageModel`. See
   [image](./tools.md) for the server-side resolution + the
-  one-dimension-table size assumption.
+  one-dimension-table size assumption. The pane's shared
+  save/status line (`modelInfo`/`modelError` - the "Image generation
+  now uses ..." confirmation and its error twin) renders directly
+  under the **Image editing** picker block, adjacent to both pickers,
+  with `aria-live="polite"`; those selections are fire-and-forget
+  writes whose only feedback is this line.
 
   The **Image editing** subsection is the edit-tool twin: it points the
   `image` tool (op=edit) at a Venice edit model via the same `ImageModelSelect`
