@@ -36,9 +36,13 @@ Six changes, one defect and three riders:
    signal the second tab DID receive becomes a trigger to heal the
    message list.
 4. **END-time transcript reconcile for own sends.** `runExchange`'s
-   settled-turn tail re-fetches the transcript for the active thread
-   on every turn settle (normal sends and regenerates,
-   fire-and-forget). This is the writer-of-record backstop: the edge
+   post-finally settled tail re-fetches the transcript for the active
+   thread on every turn settle (normal sends and regenerates,
+   fire-and-forget; errored settles included - the tail next to the
+   queued-message drain is reached by every settle except the
+   StreamDisconnectedError return, which `reconnectInflightTurn`'s
+   own refetch covers). This is the writer-of-record backstop: the
+   edge
    function is the only writer of tool rows and generated-image
    attachments (`docs/dev/architecture.md:423, 427`), so the sending
    tab stops depending on the realtime echo for rows the browser
@@ -186,9 +190,12 @@ Recorded so a future session does not re-litigate them.
   loop (a channel that repeatedly TIMED_OUTs never reaches SUBSCRIBED,
   so the churn stops after one retry) while a channel that
   successfully joined and later died gets one fresh retry. The
-  counter lives per effect lifetime (per thread-subscription site)
-  and survives the tick re-run; a thread switch tears the effect down
-  and starts fresh.
+  counter is a component-scope (non-reactive) variable keyed to the
+  thread it counts for: the effect resets it to 0 when it observes a
+  different `threadId` (`if (threadId !== attemptsFor) { attempts = 0;
+  attemptsFor = threadId; }`). It survives the tick re-run because it
+  does not live in effect scope; a thread switch resets it through
+  the keyed check, not through re-initialization.
 - **Status-decision logic is extracted to a pure module.** The
   (status, attempts) -> action decision and the resubscribe counting
   live in a small pure module under `src/lib/chat/` (companion-test
@@ -203,7 +210,10 @@ Recorded so a future session does not re-litigate them.
   opening fetch's later, staler assignment. The component keeps a
   per-thread map of in-flight `selectThread` fetch promises; the
   SUBSCRIBED catch-up awaits the map entry (when present) before
-  reconciling. Thread-open cost is two `listMessages` - accepted
+  reconciling. Each `selectThread` call registers its promise under
+  the thread id and deletes the entry when it settles, so the map
+  self-drains and holds at most one entry per concurrently-open
+  fetch. Thread-open cost is two `listMessages` - accepted
   (single-user stack; the second fetch is the price of closing the
   race).
 - **`reconcileTranscript` gains the streaming-row strip.** The catch-up
@@ -228,9 +238,15 @@ Recorded so a future session does not re-litigate them.
   schedules the debounced reconcile. This covers foreign holders AND
   null holders (a bump that raced the claim); our own claimed-turn
   bumps (holder === mine) are skipped - they are covered by the
-  END-time reconcile. Accepted redundancy: our own claim-RELEASE echo
-  (holder -> null) fires the backstop once per own turn; the
-  reconcile is idempotent and cheap.
+  END-time reconcile. Real trigger budget: heartbeat writes ARE row
+  UPDATEs and DO echo (the filter is user_id-scoped, not column-scoped),
+  so a foreign turn on the active thread triggers roughly once per
+  15s heartbeat plus claim/stamp/clear/bump writes - a trailing
+  debounce fires the reconcile about once per quiet 2s gap. That is
+  bounded, idempotent, and beneficial: a foreign turn's rows are
+  healed DURING the turn, not only at its end. Accepted redundancy:
+  our own claim-RELEASE echo (holder -> null) fires the backstop once
+  per own turn; the reconcile is idempotent and cheap.
 - **Debounce is hand-rolled.** No shared debounce helper exists; six
   components hand-roll the setTimeout/clearTimeout pair (e.g.
   `src/components/MemoryList.svelte:42-62`). The backstop is a
@@ -240,12 +256,14 @@ Recorded so a future session does not re-litigate them.
 
 ## STATE AND TRANSITION MATRIX
 
-The messages channel's lifecycle (per effect lifetime - one
-thread-subscription site in `src/screens/Chat.svelte:1993`):
+The messages channel's lifecycle (per thread-subscription site in
+`src/screens/Chat.svelte:1993` - one effect; the attempts counter
+outlives individual channel instances within it, keyed to the thread
+id):
 
 | State | Entered when | Exited when | Actions on entry |
 | --- | --- | --- | --- |
-| JOINING | effect run: `subscribeToMessages` called, no status ack yet | status callback fires with SUBSCRIBED, or a failure status | attempts unchanged (it initializes to 0 once per effect lifetime - a tick re-run re-enters JOINING with the streak counter intact) |
+| JOINING | effect run: `subscribeToMessages` called, no status ack yet | status callback fires with SUBSCRIBED, or a failure status | attempts unchanged (component-scope counter keyed to the thread id; the keyed check resets it to 0 on a thread switch, a tick re-run re-enters JOINING with the streak intact) |
 | SUBSCRIBED | status `SUBSCRIBED` | teardown (thread switch / unmount) | attempts reset to 0; ONE catch-up reconcile (after awaiting any in-flight opening fetch); log at debug |
 | RESUBSCRIBE_PENDING | failure status with attempts == 1 (first of a streak) | tick re-runs effect -> JOINING (new channel, fresh topic) | attempts incremented; log at warn |
 | FAILED | failure status with attempts >= 2 (second consecutive) | teardown only | log at warn; transcript correctness rests on the reconciles (fixes 3-4) |
@@ -265,13 +283,18 @@ Precedence rules:
   and the END-time own-send reconcile are independent triggers of the
   same `reconcileTranscript`; they never compose state, they only
   refetch-and-merge, which is idempotent by id (P4). Ordering against
-  a regenerate's fade-out prune is safe: the prune branch completes
-  (await) before the settled tail runs, and the backstop cannot fire
-  mid-fade because claim exclusivity means no foreign turn overlaps
-  ours.
-- Echo delivery is never gated on subscribe state: JOINING and FAILED
-  tabs still process any echo that arrives. Status handling changes
-  visibility and recovery, not the event path.
+  a regenerate's fade-out prune is safe because the backstop is a
+  TRAILING debounce: it fires 2s after the last trigger, so a burst
+  of echoes during the fade window settles before the reconcile runs;
+  the prune branch itself completes (awaited) before the settled
+  tail's own reconcile. (`holderId` is per-tab, so the user's own
+  second tab counts as a foreign holder - claim exclusivity is NOT
+  the safety argument here; the debounce is.)
+- Echo delivery is never gated on subscribe state: the onMessage
+  handler carries no state gating, so whatever events a channel in
+  any state manages to deliver are processed (dedup handles the
+  rest). Status handling changes visibility and recovery, not the
+  event path.
 
 ## APPROACH
 
@@ -302,10 +325,11 @@ New pure module `src/lib/chat/realtime-recovery.ts`:
 
 - A `$state` resubscribe tick is read inside the effect (making it a
   dependency) and bumped by the decision module's `resubscribe`
-  action. The attempts counter is a plain (non-reactive) variable in
-  the effect's scope... it must SURVIVE the tick re-run, so it lives
-  beside the tick (component scope, keyed to the current effect
-  lifetime; a thread switch re-initializes it).
+  action. The attempts counter is a component-scope plain
+  (non-reactive) variable keyed to the thread id; the effect applies
+  the keyed reset (`if (threadId !== attemptsFor) { attempts = 0;
+  attemptsFor = threadId; }`) - it must survive the tick re-run, so
+  it cannot live in effect scope.
 - `onStatus` handler: consult the decision module.
   `catch-up` -> await any in-flight `selectThread` fetch for this
   thread (component-scoped map, see DECISIONS), then
@@ -344,13 +368,18 @@ Tests (node-env, no DOM):
   teardown (effect cleanup / thread switch) clears the timer.
 - On fire: `void reconcileTranscript(threadId, 'cross-tab-threads-echo')`.
 - Comment: names the sighting (c) shape it heals (a foreign turn whose
-  message echoes never arrived), the trigger budget (P14: at most two
-  echoes per foreign turn), and why the holder test also admits null.
+  message echoes never arrived) and the real trigger budget (P14 +
+  heartbeat echo: heartbeat row UPDATEs DO echo - the filter is
+  user_id-scoped - so a foreign turn triggers about once per 15s
+  heartbeat plus claim/stamp/clear/bump writes; the trailing debounce
+  collapses each quiet 2s gap into at most one reconcile).
 
 ### Fix 4: END-time reconcile for own sends
 
-In `runExchange`'s settled-turn tail (after the fade-out prune branch
-`:5070-5111` and alongside `:5181`):
+In `runExchange`'s POST-FINALLY settled tail (next to the queued
+drain at `:5387`, reached by every settle path except the
+`StreamDisconnectedError` return at `:5228`, which
+`reconnectInflightTurn`'s own refetch covers):
 
 ```ts
 if (activeThreadId === ctx.threadId) {
@@ -362,6 +391,9 @@ if (activeThreadId === ctx.threadId) {
   post-edit-commit site (`:5095-5097`) stays: it is AWAITED there on
   purpose (ordering the edited row above the reply before the view
   settles is load-bearing for that branch).
+- A conflict settle reconciles too: the refetch may deliver the
+  foreign user's rows while the conflict banner is up. That is the
+  desired server-truth behavior, not a bug to flag during QA.
 
 ### Fix 5: dead wiring removal
 
@@ -502,15 +534,25 @@ exit codes; run it unpiped).
   logged at M0 if observed.
 - **The debounce backstop is new surface** (shape: hand-rolled, per
   DECISIONS). Its trigger set is foreign-or-null holder threads
-  UPDATEs on the active thread (P14: at most twice per foreign turn
-  plus claim-lease writes; the schema notes title writes do NOT bump,
-  `supabase/schema.sql:6051-6052`). The 2s trailing debounce bounds
-  any burst; the reconcile itself is a bounded single query. Accepted
-  redundancy: one extra reconcile per own turn (claim-release echo).
+  UPDATEs on the active thread. The real budget: heartbeat row
+  UPDATEs echo too (the subscription filter is user_id-scoped), so a
+  foreign turn triggers about once per 15s heartbeat plus
+  stamp/clear/bump writes; the 2s trailing debounce collapses each
+  quiet gap into at most one reconcile, and the effect is beneficial
+  (a foreign turn's rows heal DURING the turn, not only at its end).
+  The reconcile itself is a bounded single query. Accepted redundancy:
+  one extra reconcile per own turn (claim-release echo).
 - **`CLOSED` status semantics** differ across realtime-js versions;
   treated as debug-only, never a resubscribe trigger, to avoid
-  resubscribing on our own teardown echoes (the stream-transport
-  precedent suppresses self-initiated CLOSED the same way, P12).
+  resubscribing on our own teardown echoes. The stream-transport
+  precedent discriminates self-teardown via a local closed flag
+  (P12, `stream-transport.ts:614-617`) and COULD widen recovery to
+  socket-death-shaped CLOSED events; that is a deliberate scope cut
+  here - the reconciles carry transcript correctness without it, and
+  the status log makes the failure visible either way.
+- **A conflict settle's reconcile** may deliver the foreign user's
+  rows while the conflict banner is up. Desired server-truth
+  behavior; noted so it is not mistaken for a bug during QA.
 - **Thread-open cost is two `listMessages`** (opening fetch + catch-up)
   plus the streamState point read. Accepted for a single-user stack;
   the swap window (P25) means the layered triggers, not any single
