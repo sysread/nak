@@ -1907,6 +1907,15 @@
         {#if hiddenEditModelNote}
           <p class="subtle">{hiddenEditModelNote}</p>
         {/if}
+        <!-- Shared pane-wide save/status line (image-gen + image-edit
+             picks, name, location, emphasis, notifications, timezone).
+             Sits directly under the image pickers: those selections are
+             fire-and-forget writes whose only feedback is this line -
+             rendering it at the pane bottom put it ~600px below the
+             picker, off-viewport. aria-live so screen readers hear the
+             confirmation (the file's own convention for status lines). -->
+        {#if modelError}<p class="error" aria-live="polite">{modelError}</p>{/if}
+        {#if modelInfo}<p class="subtle" aria-live="polite">{modelInfo}</p>{/if}
 
         <h3 class="pane-section">Emphasis markdown</h3>
         <p class="subtle">
@@ -1994,8 +2003,6 @@
             </button>
           </div>
         {/if}
-        {#if modelError}<p class="error">{modelError}</p>{/if}
-        {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
 
       {:else if group === 'modelprofiles'}
         <!-- Model profiles split from the AI pane: the cards are tall
