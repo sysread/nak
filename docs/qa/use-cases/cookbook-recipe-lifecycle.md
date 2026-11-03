@@ -7,7 +7,7 @@ The full recipe lifecycle in the Cookbook panel and its LLM tool path
 immutable version log + revert, photo attach/reorder/caption + the
 lightbox, the Upcoming / Favorites bookmark flags, click-to-rate, the
 plain-text / Markdown / Cooklang copy exports (AnyList-transfer
-framing), and a model-driven `recipe_save` landing live via the
+framing), and a model-driven recipes (op=save) landing live via the
 realtime relay ([dev: tools](../../dev/tools.md),
 [dev: chat](../../dev/chat.md)).
 
@@ -149,7 +149,7 @@ open panel.
   `Revert to this version` requires a change message and writes a NEW
   `History` row carrying the restored (photo-less) content - the
   revert is itself a version, so it is recoverable.
-- (11) The assistant calls `recipe_save` directly (no toggle step -
+- (11) The assistant calls the recipes tool (op=save) directly (no toggle step -
   every tool is declared on every request); the saved `QA Agent Soup`
   row appears in the open `Recipes` drawer tab WITHOUT a manual
   refresh, via the realtime relay. Its `History` shows one row -
@@ -183,3 +183,4 @@ open panel.
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-11-03 | local stack, wt-nak/tool-combos | de7fddc5 (post-M3, `recipes` combo) | PASS, 4 deviations: baseline's 3 unchanged + 2 NEW combo-specific | All 12 steps at parity with the baseline. Step 11's save = two calls: the first omitted `op` (full correct payload otherwise) - rejected `missing required parameter: op`, self-corrected next round with byte-identical args (5th sighting of the first-call op-omission across every combo run; the sharpened schema did not prevent it; cost: one wasted round + a red chip). NEW minor: the tool chip now reads just `recipes` - the verb is invisible until the chip expands (pre-rename it read `recipe_save`; the activity line may still disambiguate - worth a look at the chip rendering in a later milestone). Realtime drawer refresh under 10s (baseline 28s). Intra-add duplicate-image RLS leak not retested (tracked defect, per instruction). |

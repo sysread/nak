@@ -75,10 +75,7 @@ import { memoryRelateSchema } from './memory_relate.schema';
 import { memoryUnrelateSchema } from './memory_unrelate.schema';
 import { conversationSearchSchema } from './conversation_search.schema';
 import { conversationGetSchema } from './conversation_get.schema';
-import { recipeListSchema } from './recipe_list.schema';
-import { recipeGetSchema } from './recipe_get.schema';
-import { recipeSaveSchema } from './recipe_save.schema';
-import { recipeDeleteSchema } from './recipe_delete.schema';
+import { recipesSchema } from './recipes.schema';
 import { recipePhotosSchema } from './recipe_photos.schema';
 import { recipeRecordCreateSchema } from './recipe_record_create.schema';
 import { recipeRecordUpdateSchema } from './recipe_record_update.schema';
@@ -150,10 +147,7 @@ const memoryRelate = serverSideTool(memoryRelateSchema);
 const memoryUnrelate = serverSideTool(memoryUnrelateSchema);
 const conversationSearch = serverSideTool(conversationSearchSchema);
 const conversationGet = serverSideTool(conversationGetSchema);
-const recipeList = serverSideTool(recipeListSchema);
-const recipeGet = serverSideTool(recipeGetSchema);
-const recipeSave = serverSideTool(recipeSaveSchema);
-const recipeDelete = serverSideTool(recipeDeleteSchema);
+const recipes = serverSideTool(recipesSchema);
 const recipePhotos = serverSideTool(recipePhotosSchema);
 const recipeRecordCreate = serverSideTool(recipeRecordCreateSchema);
 const recipeRecordUpdate = serverSideTool(recipeRecordUpdateSchema);
@@ -275,11 +269,13 @@ export const alwaysOnToolbox: Toolbox = {
   description:
     'The umbrella `context` recall, the three per-layer ' +
     'recall tools, and read-only surfaces (search across ' +
-    'memories / conversations / wiki / cookbook / app docs; ' +
-    'plus get for memories, conversations, and wiki, list/get for ' +
-    'cookbook, and list/get/search for cookbook cooking records) ' +
+    'memories / conversations / wiki / app docs; ' +
+    'plus get for memories, conversations, and wiki, and ' +
+    'list/get/search for cookbook cooking records) ' +
     'plus web search, ' +
-    'update_title, analyze_image, analyze_pdf_page, and ask_user.',
+    'update_title, analyze_image, analyze_pdf_page, and ask_user. ' +
+    'Recipe browsing lives in the recipes combination tool (cooking ' +
+    'toolbox) - its list/get ops are read-only.',
   tools: [
     contextTool,
     memoryRecall,
@@ -296,8 +292,6 @@ export const alwaysOnToolbox: Toolbox = {
     recordGet,
     recordSearch,
     followupList,
-    recipeList,
-    recipeGet,
     recipeRecordList,
     recipeRecordGet,
     recipeRecordSearch,
@@ -315,12 +309,13 @@ export const alwaysOnToolbox: Toolbox = {
 };
 
 /**
- * Cookbook write tools. Read paths (`recipe_list`, `recipe_get`,
- * `recipe_record_list`, `recipe_record_get`, `recipe_record_search`)
- * live in the always-on set; this toolbox carries the tools that
- * mutate cookbook state (saving a new recipe, editing an existing
- * one, deleting one, attaching / removing / reordering photos,
- * captioning photos) plus the cooking-log record writes.
+ * Cookbook tools. The `recipes` combination tool (list / get / save /
+ * delete behind one op enum) carries the whole recipe surface - its
+ * list/get ops are read-only but ride here rather than always-on,
+ * because one tool cannot be split across always-on and a write
+ * toolbox (the skills precedent); the always-on description points at
+ * it. This toolbox also carries the photo combination tool and the
+ * cooking-log record writes.
  *
  * The toolbox description is catalog-visible (the catalog renders
  * toolbox descriptions and per-tool short descriptions, never full
@@ -332,15 +327,15 @@ export const alwaysOnToolbox: Toolbox = {
 export const cookingToolbox: Toolbox = {
   name: 'cooking',
   description:
-    'Save, edit, and delete recipes in the cookbook; attach, remove, ' +
-    'reorder, and label recipe photos (one tool, one op); log cooking ' +
-    'records. When the user reports having cooked a recipe and how it ' +
-    'went, log it with recipe_record_create and say so in the reply. ' +
-    'Read tools (recipe_list, recipe_get, and the recipe_record_* ' +
-    'reads) are always-on; this toolbox carries the writes.',
+    'Read, save, edit, and delete recipes (one combination tool: ' +
+    'list / get / save / delete ops); attach, remove, reorder, and ' +
+    'label recipe photos (one tool, one op); log cooking records. ' +
+    'When the user reports having cooked a recipe and how it went, ' +
+    'log it with recipe_record_create and say so in the reply. The ' +
+    'recipe_record_* reads are always-on; this toolbox carries the ' +
+    'rest.',
   tools: [
-    recipeSave,
-    recipeDelete,
+    recipes,
     recipePhotos,
     recipeRecordCreate,
     recipeRecordUpdate,

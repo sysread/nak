@@ -8,7 +8,15 @@
 import { assertEquals, assertRejects } from '@std/assert';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ToolContext } from '../venice/performToolCall.ts';
-import { recipeSave } from '../venice/tools/recipe_save.ts';
+import { recipes } from '../venice/tools/recipes.ts';
+
+// Dispatch seam: the pre-merge verb tool became the recipes combination
+// tool - every test drives execute() with op:'save' so per-op assertions
+// survive envelope changes unchanged.
+const recipeSave = {
+  execute: (args: Record<string, unknown>, ctx: ToolContext) =>
+    recipes.execute({ op: 'save', ...args }, ctx),
+};
 
 function fakeCtx(opts: { existingTitle?: string } = {}): {
   ctx: ToolContext;

@@ -21,7 +21,7 @@ user-owned notes that the LLM can also author, same row-level
 security posture, same "freeform text column as source of truth"
 philosophy. Embeddings pipeline added later (see "Embeddings"
 below) for the drawer-side recipe search; the LLM tool path
-(`recipe_list`) still uses ILIKE-on-title and is
+((the recipes tool's list op) still uses ILIKE-on-title and is
 unaffected.
 
 ## Files
@@ -29,11 +29,11 @@ unaffected.
 - `supabase/functions/_shared/cooklang-parse.ts` - the inline Cooklang
   parser (`parseCooklang` + the `Recipe` / `Step` / `Ingredient` types).
   Deliberately no upstream dep. Lives in the shared folder because the
-  `recipe_save` edge tool runs it to validate submissions (see
+  the recipes tool's save op runs it to validate submissions (see
   `cooklang-validate.ts` below); the browser reaches it only through
   `src/lib/cooklang.ts`.
 - `supabase/functions/_shared/cooklang-validate.ts` -
-  `validateCooklangSource`, the authoring-mistake checks `recipe_save`
+  `validateCooklangSource`, the authoring-mistake checks the save op
   runs before writing (both forms). A non-empty result refuses the
   write and hands the model the list. See the "Save-time validation"
   gotcha.
@@ -61,15 +61,15 @@ unaffected.
 - `src/lib/tools/recipe_*.schema.ts` — the eleven LLM tools' wire
   schemas (name, description, JSON Schema parameters). Schema only;
   the browser never executes a recipe tool.
-- `supabase/functions/venice/tools/recipe_save.ts`, `recipe_list.ts`,
-  `recipe_get.ts`, `recipe_delete.ts`,
+- `supabase/functions/venice/tools/recipes.ts` (the recipe combination
+tool - one op-switch def over list / get / save / delete),
   `recipe_photos.ts` (the photo combination tool - one op-switch
   def over attach/remove/reorder/label), and
   `recipe_record_*.ts` + `_recipe_record_helpers.ts` (the six record
   tools and their shared normalizers) — the
   implementations, dispatched function-side against the admin client.
   `_recipe_helpers.ts` holds `readRecipePhotoMeta`, the "newest
-  version's link set" read that `recipe_get` and the save tool's edit form
+  version's link set" read that the get op and the save op's edit form
   both answer photo questions with. Mutating tools reach the UI
   through the realtime relay, not `notifyCookbookChanged` - see the
   relay gotcha below.
@@ -223,7 +223,8 @@ unaffected.
   row opens the Cookbook panel on the detail pane for that recipe
   via the routed-recipe resolution (`route.recipe` from
   `src/lib/routing.svelte.ts`).
-- **LLM tool calls** - `recipe_save (create or edit) / list / get / delete`,
+- **LLM tool calls** - the `recipes` combination tool (save =
+  create-or-edit, list, get, delete),
   grouped into the `cooking` toolbox. Every tool is declared on
   every request (no gating); the model calls them directly.
 
@@ -244,7 +245,7 @@ unaffected.
     aren't bookmarked. `recipes_user_title_unique` - a unique index
     on `(user_id, lower(btrim(title)))`: duplicate titles read as
     bugs (two cards that drift apart as one gets edited), and the
-    uniqueness key is what the `recipe_save` tool's natural-key
+    uniqueness key is what the save op's natural-key
     dedup probes against - an exact-title create routes to that
     recipe's update, a near-match is refused with candidates named.
     Enforced as an index because Postgres only accepts expressions in
@@ -369,12 +370,12 @@ unaffected.
 - A mutating tool's response must describe state it actually read
   back, not the shape the caller asked for. See the echoed-row gotcha
   below for the two fields this went wrong on.
-- **The rating is user-only.** `recipe_save` accepts no `rating`
+- **The rating is user-only.** The save op accepts no `rating`
   argument and always passes `p_set_rating: false`; a call that
   carries one is rejected with an explanatory error. The rating is a
   user evaluation of a cooked dish, so it moves only through the UI
   paths - the star control on the recipe card and the edit form -
-  which reach `updateRecipe` directly. `recipe_save` is the same: no
+  which reach `updateRecipe` directly. the save op is the same: no
   `rating` argument, `p_rating: null` on every create, and the same
   explanatory rejection if one shows up.
 
@@ -388,7 +389,7 @@ plpgsql RPCs, so either both rows land or neither does.
 
 `change_message` is required at the `SupabaseService.createRecipe` /
 `updateRecipe` layer (and on the save tool's edit form, where a meaningful delta
-description exists). The `recipe_save` tool is the one exception: a
+description exists). The save op is the one exception: a
 save is always a recipe's first version, so an omitted message has no
 delta to describe and the tool defaults it to `"Initial version"`
 (matching the backfill seed's naming) rather than bouncing the model
@@ -427,7 +428,7 @@ recoverable.
 
 **No history LLM tools** (deliberately): the model has no
 `recipe_versions_list` or `recipe_revert` tool, only the existing
-`recipe_save` / etc. History viewing and revert
+the `recipes` combo / etc. History viewing and revert
 are user-directed UX flows; letting the model revert without an
 explicit user prompt is a footgun without a clear win. The model
 can already author whatever content it wants via the save tool's edit form,
@@ -707,7 +708,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   throws, so a malformed recipe still saves and simply renders
   wrong - often by dropping text without a trace. The checks in
   `cooklang-validate.ts` exist to turn those cases into a refused
-  `recipe_save` the model can fix in the same turn. Each one names a
+  the save op's refusal the model can fix in the same turn. Each one names a
   mistake seen in prod: a note written as `# NOTE: ...` (an empty
   section, which the renderer never shows), a parent heading with only
   sub-sections under it (same drop), `20--25 min` (the `--` comment
@@ -785,7 +786,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 - **Drawer search is semantic; LLM tool path is not.** The
   embedding pipeline (added after the original "no embeddings"
   design - see "Embeddings" below) feeds `searchRecipes` only.
-  The `recipe_list` tool the model uses
+  The list op the model uses
   still goes through ILIKE-on-title. Two reasons: the model knows
   exactly what title it just wrote so meaning matching adds no
   value on the tool path, and keeping the tool's behaviour
@@ -819,19 +820,19 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   previous version's links when `p_set_image_ids` is false, so the tool
   reads the post-write link set back through
   `readRecipePhotoMeta` (`tools/_recipe_helpers.ts`, shared with
-  `recipe_get`) instead of asserting a shape. Topics: the
+  the get op) instead of asserting a shape. Topics: the
   `clear_recipe_topics_on_change` trigger empties the column so the
   curation unit re-tags the row, and the RPC's `return query` reads the
   row back AFTER that trigger fires - so the field is always `[]` on
   this path and the tool strips it rather than echoing a number that
-  only ever means "re-queued." `recipe_save`'s `photos: []` is a
+  only ever means "re-queued." the save op's `photos: []` is a
   different case and stays: a create passes `p_image_ids: null`, so
   the recipe genuinely has no photos yet.
-  `tests/recipe_save_edit_form.test.ts` guards both.
+  `tests/recipe_save_edit_form.test.ts` (ported to the combo seam) guards both.
 - **Photo IDs are stable across versions.** A photo upserted into
   `recipe_images` keeps the same id forever for that user;
   reordering or appending changes the link rows, not the image
-  rows. The LLM tools surface these ids in `recipe_get`'s
+  rows. The LLM tools surface these ids in the get op's
   `photos: [{id, position}, ...]` projection so the model can
   chain a photo-remove call against the same id it just saw.
 - **Photo lifecycle is link-driven.** Recipe delete cascades
@@ -892,7 +893,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   markdown exports append " (optional)" to the bullet, and step
   prose shows just the name. Ingredients only - cooklang-rs also
   allows `#?cookware`, but nak's flat cookware aside has nothing to
-  hang optionality off. The `recipe_save` tool
+  hang optionality off. The image schema's Cooklang spec
   descriptions teach the model the syntax; keep them in sync if the
   rendering changes.
 - **Dash-only section reset.** A line whose non-whitespace content is

@@ -418,7 +418,7 @@ The detail panel renders in one of two views, per-call:
   schema (see `formatArgs` / `formatResult` on `ToolDef`).
   Long fields wrap, identifiers render as inline code, URLs
   linkify, and nested objects/array elements get bracket-path
-  section headers. `recipe_save` ships an override that
+  section headers. the recipes tool (op=save) ships an override that
   surfaces the cooklang source as a labelled fenced block
   below the metadata; new tools can opt in the same way when
   the generic shape doesn't read well for their payload.

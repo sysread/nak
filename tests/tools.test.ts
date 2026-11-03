@@ -89,8 +89,7 @@ describe('tool registry', () => {
     // wiki_list, wiki_get) live in alwaysOnToolbox. The write boxes
     // carry only the tools that mutate user data.
     expect(cookingToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
-      'recipe_save',
-      'recipe_delete',
+      'recipes',
       'recipe_photos',
       'recipe_record_create',
       'recipe_record_update',
@@ -135,8 +134,6 @@ describe('tool registry', () => {
       'wiki_search',
       'wiki_list',
       'wiki_get',
-      'recipe_list',
-      'recipe_get',
       'recipe_record_list',
       'recipe_record_get',
       'recipe_record_search',
