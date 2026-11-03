@@ -108,9 +108,7 @@ describe('tool registry', () => {
     expect(wikiToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'wiki',
       'wiki_librarian',
-      'record_create',
-      'record_update',
-      'record_delete',
+      'records',
       'record_file_attach',
       'record_file_remove',
       'record_link_create',

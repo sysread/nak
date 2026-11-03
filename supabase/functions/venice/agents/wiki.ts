@@ -55,10 +55,7 @@ import {
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { wiki } from '../tools/wiki.ts';
-import { recordList } from '../tools/record_list.ts';
-import { recordCreate } from '../tools/record_create.ts';
-import { recordUpdate } from '../tools/record_update.ts';
-import { recordDelete } from '../tools/record_delete.ts';
+import { records } from '../tools/records.ts';
 import { recordLinkCreate } from '../tools/record_link_create.ts';
 import { recordFileAttach } from '../tools/record_file_attach.ts';
 import { analyzeImage } from '../tools/analyze_image.ts';
@@ -282,128 +279,78 @@ const WIKI_WIRE_SCHEMA: AgentTool['wire'] = {
 // state), AND to dedup before migrating - some inline body entries may
 // already be records (logged by the extraction agent or the user), so the
 // worker MUST check here before record_create.
-const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
+// The wiki agent's records combo wire: ONE tool (the chat-side
+// records combination tool) with the op enum narrowed to this
+// agent's authority - list / create / update / delete. The per-op
+// descriptions keep the flavored contract text. The disciplines:
+// record create is scoped to MIGRATION only (moving a dated entry
+// out of a body - the dedicated extraction agent owns new-event
+// capture), update/delete are opportunistic cleanup on records of
+// the article being touched, and records survive promotion into
+// the body.
+const RECORDS_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'record_list',
+    name: 'records',
     description:
-      "List a wiki article's dated records (the topic's journey: specific " +
-      'events, experiments, observations). Returns {records: [{id, date, ' +
-      'content, tags, created_at}]}. Use it to see what the records have ' +
-      "established so the article BODY (the topic's current state) reflects " +
-      'durable learnings - and ALWAYS call it before record_create when ' +
-      'migrating an inline dated entry, to check the event is not already a ' +
-      'record. Do not restate every record in the body; summarise the ' +
-      'settled outcome.',
+      "Maintain a wiki article's dated records (the topic's journey: " +
+      'specific events, experiments, observations) - distinct from ' +
+      'the article BODY (the current state). One tool, one op. ' +
+      'op=list: the article\'s records, newest first - use it to see ' +
+      'what the records have established so the BODY reflects durable ' +
+      'learnings, and ALWAYS before a create when migrating an inline ' +
+      'dated entry, to check the event is not already a record. Do not ' +
+      'restate every record in the body; summarise the settled ' +
+      'outcome. op=create: MIGRATE one dated entry out of an article ' +
+      'body into a record (article_id + date + content required) - ' +
+      'use ONLY to relocate dated history already written in a body, ' +
+      'NOT to log new events from the conversation (the extraction ' +
+      'agent does that); after the record exists, remove the line ' +
+      'from the body. op=update: edit a record\'s date, content, or ' +
+      'tags (tags replaces the whole array) - correct an outdated ' +
+      'record or merge a duplicate\'s detail into the one you keep; ' +
+      'only touch records on the article whose subject this ' +
+      'conversation is about. op=delete: use ONLY for a true ' +
+      'duplicate or a clearly irrelevant entry - NEVER delete a ' +
+      'record just because you promoted its learning into the body ' +
+      '(records are historical documentation and must survive ' +
+      'promotion). Every write appends the article\'s changelog.',
     parameters: {
       type: 'object',
       properties: {
-        article_id: {
+        op: {
           type: 'string',
-          description: 'UUID of the article (from wiki_search / wiki_list).',
+          enum: ['list', 'create', 'update', 'delete'],
+          description: 'REQUIRED. The operation to run.',
         },
-        limit: { type: 'integer', minimum: 1, maximum: 200 },
-      },
-      required: ['article_id'],
-      additionalProperties: false,
-    },
-  },
-};
-
-// record_create is scoped to MIGRATION only: moving a dated entry that is
-// currently baked into an article BODY out into a record, so the body can
-// become clean current-state prose. The worker does NOT re-extract new
-// events from the conversation into records - the dedicated extraction
-// agent owns that. The discipline (check record_list first, create, THEN
-// trim the body) lives in the prompt body.
-const RECORD_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'record_create',
-    description:
-      'Migrate one dated entry out of an article body into a record. ' +
-      'article_id is the article it belongs to; date is the entry\'s ISO ' +
-      '"YYYY-MM-DD" day; content is the entry text (Markdown). Use ONLY to ' +
-      'relocate dated history already written in a body - NOT to log new ' +
-      'events from the conversation (the extraction agent does that). ALWAYS ' +
-      'record_list first: if the event is already a record, do not duplicate ' +
-      'it. After the record exists, remove the line from the body.',
-    parameters: {
-      type: 'object',
-      properties: {
+        id: {
+          type: 'string',
+          description:
+            'Record UUID. op=update / op=delete: the record (required). ' +
+            'From op=list.',
+        },
         article_id: {
           type: 'string',
-          description: 'UUID of the article this record belongs to.',
+          description: 'op=list + op=create only. UUID of the article this record belongs to.',
         },
         date: {
           type: 'string',
-          description: 'ISO 8601 date of the entry being migrated ("YYYY-MM-DD").',
+          description:
+            'op=create (required) / op=update. ISO 8601 date ("YYYY-MM-DD").',
         },
         content: {
           type: 'string',
           minLength: 1,
-          description: 'The dated entry text, as Markdown.',
+          description:
+            'op=create (required) / op=update. The dated entry text, as Markdown.',
         },
         tags: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Optional keyword tags for filtering.',
+          description: 'op=create / op=update. Optional keyword tags; update replaces the whole array.',
         },
       },
-      required: ['article_id', 'date', 'content'],
-      additionalProperties: false,
-    },
-  },
-};
-
-// record_update / record_delete let the worker CLEAN UP the records on an
-// article it is already touching - correcting an outdated record, merging a
-// duplicate's detail into the one it keeps, removing a true duplicate or a
-// clearly-irrelevant entry. Same discipline the librarian applies: NEVER
-// delete a record just because its learning was promoted into the body
-// (records survive promotion), and never edit/delete records on articles
-// outside the current subject. New-event capture is still NOT the worker's
-// job - the extraction agent owns that, and record_create here stays
-// migration-only.
-const RECORD_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'record_update',
-    description:
-      "Edit a record's date, content, or tags. Use to correct an outdated " +
-      "record or merge a duplicate's detail into the one you keep. Pass id " +
-      'and any subset of date, content, tags (tags replaces the whole array). ' +
-      'Only touch records on the article whose subject this conversation is ' +
-      'about.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Record id (from record_list).' },
-        date: { type: 'string', description: 'New ISO "YYYY-MM-DD" date.' },
-        content: { type: 'string', minLength: 1, description: 'New Markdown body.' },
-        tags: { type: 'array', items: { type: 'string' } },
-      },
-      required: ['id'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const RECORD_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'record_delete',
-    description:
-      'Delete a record. Use ONLY for a true duplicate or a clearly ' +
-      'irrelevant entry. NEVER delete a record just because you promoted ' +
-      'its learning into the article body - records are historical ' +
-      'documentation and must survive promotion.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Record id (from record_list).' },
-      },
-      required: ['id'],
+      required: ['op'],
       additionalProperties: false,
     },
   },
@@ -969,10 +916,7 @@ function buildWikiToolbox(): Toolbox {
     name: 'wiki',
     tools: [
       asAgentTool(wiki, WIKI_WIRE_SCHEMA),
-      asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
-      asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
-      asAgentTool(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
-      asAgentTool(recordDelete, RECORD_DELETE_WIRE_SCHEMA),
+      asAgentTool(records, RECORDS_WIRE_SCHEMA),
       asAgentTool(recordLinkCreate, RECORD_LINK_CREATE_WIRE_SCHEMA),
       asAgentTool(recordFileAttach, RECORD_FILE_ATTACH_WIRE_SCHEMA),
       asAgentTool(analyzeImage, ANALYZE_IMAGE_WIRE_SCHEMA),

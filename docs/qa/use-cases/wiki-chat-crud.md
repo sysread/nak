@@ -5,8 +5,9 @@
 The chat model's direct write access to the wiki
 ([dev: tools](../../dev/tools.md), "The write toolboxes";
 [dev: wiki](../../dev/wiki.md), "Tool toolbox split").
-Specifically the chat-dispatched `wiki_create` / `wiki_update` /
-the wiki tool (op=delete) article tools and the record write tools grouped with
+Specifically the chat-dispatched `wiki` combination tool
+(op=save is the create/update-merged writer; op=delete removes)
+and the record write tools grouped with
 them (`record_create` / `record_update` / `record_delete`), and the
 changelog rows every chat-driven write lands. The `wiki_librarian`
 delegation living alongside the direct tools is exercised by
@@ -22,7 +23,7 @@ delegation living alongside the direct tools is exercised by
 
 1. **Create.** Ask:
    `Create a wiki article titled "QA Sandbox" describing this as a
-   throwaway test article.` Confirm the model calls `wiki_create` and a
+   throwaway test article.` Confirm the model calls the wiki tool (op=save) and a
    row lands:
 
    ```sql
@@ -38,7 +39,7 @@ delegation living alongside the direct tools is exercised by
    ```
 
 3. **Update.** Ask: `Add a sentence to the QA Sandbox article noting it
-   was created during a QA run.` Confirm `wiki_update` fires and the
+   was created during a QA run.` Confirm the wiki tool (op=save with id) fires and the
    body grew (re-run the step-1 query), and a `update`-kind changelog
    row landed.
 
@@ -47,7 +48,9 @@ delegation living alongside the direct tools is exercised by
    `source_thread_ids`; the tool attaches `ctx.threadId`):
 
    ```sql
-   select source_thread_ids from wiki_articles where title = 'QA Sandbox';
+   select s.thread_id from wiki_article_sources s
+     join wiki_articles a on a.id = s.article_id
+    where a.title = 'QA Sandbox';
    ```
 
 5. **Record CRUD.** Ask: `Log a record dated today on the
@@ -74,7 +77,7 @@ delegation living alongside the direct tools is exercised by
 ## Expected
 
 - (1) One `wiki_articles` row, title "QA Sandbox", with the model's
-  prose body; the tool-call panel shows a `wiki_create` call.
+  prose body; the tool-call panel shows a wiki (op=save) call.
 - (2) A `create`-kind `wiki_changelog` row whose `message` is the
   model's one-line reason (imperative voice), not the article body.
 - (3) The body gains the requested sentence; a `update`-kind changelog
@@ -90,7 +93,7 @@ delegation living alongside the direct tools is exercised by
 
 ## Cleanup
 
-- If step 7 didn't run (test aborted earlier), delete the QA Sandbox
+- If the delete step didn't run (test aborted earlier), delete the QA Sandbox
   article by hand from the Wiki tab (cascades its records). Remove the
   QA chat threads.
 
@@ -98,3 +101,4 @@ delegation living alongside the direct tools is exercised by
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-11-03 | local (dev@nak.local) | post-M7 head | PASS | First recorded run; post-combination-tool. All 6 steps green. `wiki` + op=save/delete on every article call, `record_create` unchanged. Model never omitted `op`. Favorite-lock probe added: locked article refuses agent delete in 30ms with no changelog row, succeeds after unlock. Step-4 query fixed in the same landing - `wiki_articles.source_thread_ids` does not exist; sources live in `wiki_article_sources` (verified there). Zero console errors. |

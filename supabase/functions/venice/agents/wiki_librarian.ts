@@ -51,10 +51,7 @@ import { wiki } from '../tools/wiki.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
 import { conversationGet } from '../tools/conversation_get.ts';
 import { memorySearch } from '../tools/memory_search.ts';
-import { recordList } from '../tools/record_list.ts';
-import { recordCreate } from '../tools/record_create.ts';
-import { recordUpdate } from '../tools/record_update.ts';
-import { recordDelete } from '../tools/record_delete.ts';
+import { records } from '../tools/records.ts';
 import { recordLinkCreate } from '../tools/record_link_create.ts';
 import { recordLinkDelete } from '../tools/record_link_delete.ts';
 import { asAgentTool } from './_agent_tools.ts';
@@ -234,94 +231,63 @@ const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
 // delete the irrelevant. It does NOT delete a record merely because it
 // promoted that record's learning into the article body - records are
 // historical documentation and survive promotion.
-const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
+// The librarian's records combo wire: list / create (migration-only)
+// / update / delete (cleanup-only) - the full records CRUD, behind
+// one op enum, wrapped NoThread (attribution rides
+// source_thread_ids on the wiki save op; the delegating thread is
+// not a source).
+const RECORDS_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'record_list',
+    name: 'records',
     description:
-      "List a wiki article's dated records (the topic's journey). Returns " +
-      '{records: [{id, date, content, tags, created_at}]}. Use it to find ' +
-      'durable learnings to fold into the article body, and to spot ' +
-      'duplicate or outdated records worth cleaning up.',
+      "Maintain a wiki article's dated records (the topic's journey). " +
+      'One tool, one op. op=list: one article\'s records, newest first ' +
+      '- use it to find durable learnings to fold into the article ' +
+      'body, and to spot duplicate or outdated records worth cleaning ' +
+      'up. op=create: MIGRATE one dated entry out of an article body ' +
+      'into a record (article_id + date + content required) - use ONLY ' +
+      'to relocate dated history already written in a body; ALWAYS list ' +
+      'first: if the event is already a record, do not duplicate it; ' +
+      'after the record exists, trim the line from the body. op=update: ' +
+      'edit a record\'s date, content, or tags - correct an outdated ' +
+      'record or merge a duplicate\'s detail into the one you keep; ' +
+      'omitted fields are left unchanged; tags replaces the whole array. ' +
+      'op=delete: hard-delete a record - use only for consolidation or ' +
+      'out-of-scope cleanup; records survive promotion into the body.',
     parameters: {
       type: 'object',
       properties: {
-        article_id: { type: 'string', description: 'Article id whose records to list.' },
-        limit: { type: 'integer', minimum: 1, maximum: 200 },
+        op: {
+          type: 'string',
+          enum: ['list', 'create', 'update', 'delete'],
+          description: "REQUIRED. The operation to run.",
+        },
+        id: {
+          type: 'string',
+          description: 'Record UUID. op=update / op=delete: the record (required). From op=list.',
+        },
+        article_id: {
+          type: 'string',
+          description: 'op=list + op=create only. Article the record belongs to.',
+        },
+        date: {
+          type: 'string',
+          description: 'ISO "YYYY-MM-DD" date of the entry.',
+        },
+        content: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 8000,
+          description: 'The dated entry text, Markdown (max 8000 chars).',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional keyword tags; update replaces the whole array.',
+        },
       },
-      required: ['article_id'],
-      additionalProperties: false,
-    },
-  },
-};
-
-// record_create is scoped to MIGRATION: moving a dated entry that is
-// baked into an article BODY out into a record so the body can become
-// clean current-state prose. Like the worker, the librarian must
-// record_list first and skip events that are already records - the
-// extraction agent or the user may have logged them.
-const RECORD_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'record_create',
-    description:
-      'Migrate one dated entry out of an article body into a record. ' +
-      'article_id is the article; date is the entry\'s ISO "YYYY-MM-DD" day; ' +
-      'content is the entry text (Markdown). Use ONLY to relocate dated ' +
-      'history already written in a body. ALWAYS record_list first: if the ' +
-      'event is already a record, do not duplicate it. After the record ' +
-      'exists, trim the line from the body.',
-    parameters: {
-      type: 'object',
-      properties: {
-        article_id: { type: 'string', description: 'Article the record belongs to.' },
-        date: { type: 'string', description: 'ISO "YYYY-MM-DD" date of the entry.' },
-        content: { type: 'string', minLength: 1, maxLength: 8000, description: 'The dated entry text, Markdown (max 8000 chars).' },
-        tags: { type: 'array', items: { type: 'string' } },
-      },
-      required: ['article_id', 'date', 'content'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const RECORD_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'record_update',
-    description:
-      "Edit a record's date, content, or tags. Use to correct an outdated " +
-      'record or merge a duplicate\'s detail into the one you keep. Pass id ' +
-      'and at least one of date, content, tags (tags replaces the whole array).',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Record id to edit.' },
-        date: { type: 'string', description: 'New ISO "YYYY-MM-DD" date.' },
-        content: { type: 'string', description: 'New Markdown body.' },
-        tags: { type: 'array', items: { type: 'string' } },
-      },
-      required: ['id'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const RECORD_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'record_delete',
-    description:
-      'Delete a record. Use ONLY for a true duplicate or a clearly ' +
-      'irrelevant entry. NEVER delete a record just because you promoted ' +
-      'its learning into the article body - records are historical ' +
-      'documentation and must survive promotion.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Record id to delete.' },
-      },
-      required: ['id'],
+      required: ['op'],
       additionalProperties: false,
     },
   },
@@ -330,9 +296,6 @@ const RECORD_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
 // Mirror of MAX_RECORD_LINK_LABEL_CHARS in src/lib/wiki.ts.
 const MAX_RECORD_LINK_LABEL_CHARS = 120;
 
-// record_link_create lets the librarian wire up continuation chains it
-// finds during the wiki-wide pass - records that are revisions of or based
-// on one another but were never linked. Directed; conservative.
 const RECORD_LINK_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
@@ -474,10 +437,7 @@ function buildLibrarianToolbox(): Toolbox {
       asAgentTool(conversationSearch, CONVERSATION_SEARCH_WIRE_SCHEMA),
       asAgentTool(conversationGet, CONVERSATION_GET_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
-      asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
-      asAgentToolNoThread(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
-      asAgentToolNoThread(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
-      asAgentToolNoThread(recordDelete, RECORD_DELETE_WIRE_SCHEMA),
+      asAgentToolNoThread(records, RECORDS_WIRE_SCHEMA),
       asAgentToolNoThread(recordLinkCreate, RECORD_LINK_CREATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordLinkDelete, RECORD_LINK_DELETE_WIRE_SCHEMA),
     ],
