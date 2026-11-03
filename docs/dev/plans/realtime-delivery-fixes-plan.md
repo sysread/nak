@@ -1,41 +1,58 @@
 # Realtime Delivery Fixes Plan
 
-Status: DRAFT 2026-11-03. Bug-intake dispatched fix session
-(realtime-delivery-fixes worktree, base 07eca2c4). Owner: the fix
-session; reviewer/coordinator: guard-5-00021.
+Status: DRAFT r2 2026-11-03. Bug-intake dispatched fix session
+(realtime-delivery-fixes worktree, base f0f19a58, one commit ahead of
+the dispatch's stated 07eca2c4 and one behind current main ce0926d9;
+all citations verified at f0f19a58 - no cited file is touched by
+ce0926d9). Owner: the fix session; reviewer/coordinator:
+guard-5-00021.
 
 ## SYNOPSIS
 
-Five changes, one defect and three riders:
+Six changes, one defect and three riders:
 
 1. **SUBSCRIBED-confirmed catch-up read on the messages channel.**
    `subscribeToMessages` gains an optional subscribe-status callback
    (the pattern the Broadcast stream channel already uses,
-   `src/lib/venice.ts` `setupStreamSubscription`, documented at
-   `docs/dev/chat.md:910-914`). On `SUBSCRIBED` the caller runs one
-   transcript reconcile. This closes the fetch-then-async-join race:
-   any row inserted between the opening `listMessages` snapshot and
-   the channel join is re-fetched after the join instead of landing
-   in neither.
-2. **Subscribe-failure visibility and one bounded resubscribe.** The
+   `src/lib/chat/stream-transport.ts:338` and its status callback at
+   `:596-623`, documented at `docs/dev/chat.md:910-914`). On
+   `SUBSCRIBED` the caller runs one transcript reconcile. This closes
+   the fetch-then-async-join race: any row inserted between the
+   opening `listMessages` snapshot and the channel join is re-fetched
+   after the join instead of landing in neither.
+2. **Subscribe-failure visibility and a bounded resubscribe.** The
    same status callback logs `CHANNEL_ERROR` / `TIMED_OUT` at warn
-   and schedules a single resubscribe (fresh topic, the existing
-   `uniqueTopic` mechanism, `src/lib/supabase/realtime.ts:76-78`).
-   Today a failed join is silent: `.subscribe()` is called with no
-   callback (`src/lib/supabase/realtime.ts:162`).
-3. **END-time transcript reconcile for own sends.** `runExchange`'s
+   and schedules a resubscribe while the failure streak is fresh
+   (one retry per CONSECUTIVE-failure streak, reset on a successful
+   subscribe - see DECISIONS). Today a failed join is silent:
+   `.subscribe()` is called with no callback
+   (`src/lib/supabase/realtime.ts:162`).
+3. **Cross-tab reconcile backstop on the threads UPDATE echo.** A
+   foreign (or unclaimed) threads UPDATE for the ACTIVE thread
+   schedules one trailing debounced reconcile (2s, hand-rolled - the
+   house pattern; no shared debounce helper exists). This addresses
+   the second-tab sighting (c) without trusting the unproven
+   "threads channel works cross-tab" inference: whatever thread-level
+   signal the second tab DID receive becomes a trigger to heal the
+   message list.
+4. **END-time transcript reconcile for own sends.** `runExchange`'s
    settled-turn tail re-fetches the transcript for the active thread
-   on every clean turn finish (normal sends and regenerates). This
-   is the writer-of-record backstop: the edge function is the only
-   writer of tool rows and generated-image attachments
-   (`docs/dev/architecture.md:423, 427`), so the sending tab stops
-   depending on the realtime echo for rows the browser never writes.
-4. **Remove the dead `onToolResultPersisted` wiring.** The handler
+   on every turn settle (normal sends and regenerates,
+   fire-and-forget). This is the writer-of-record backstop: the edge
+   function is the only writer of tool rows and generated-image
+   attachments (`docs/dev/architecture.md:423, 427`), so the sending
+   tab stops depending on the realtime echo for rows the browser
+   never writes.
+5. **Remove the dead `onToolResultPersisted` wiring.** The handler
    member (`src/lib/chat/types.ts:52`) and its only consumer
    (`src/screens/Chat.svelte:4834-4839`) have zero producers (grep
    verified; `src/lib/chat/loop.ts` and `src/lib/chat/stream-events.ts`
-   never call it). Fixes 1-3 subsume what it was meant to do.
-5. **Riders.** (a) The regenerate commit's `.regen-target` stickiness
+   never call it). Fixes 1-4 subsume what it was meant to do. Git
+   archaeology confirms drift, not a recorded decision: the producer
+   was dropped in 305e5cab (2026-06-03, tool dispatch moved into the
+   venice edge function) and the consumer was even re-wired against
+   the dead contract a day later in 054012ed.
+6. **Riders.** (a) The regenerate commit's `.regen-target` stickiness
    gets a diagnosis-then-fix. (b) The regenerate QA doc's tool-call
    precondition gets a reliable recipe. (c) The Settings AI pane's
    shared status line moves next to the image pickers and gains
@@ -79,7 +96,9 @@ Four stacked gaps, all verified below:
    destructive-edit branch.
 3. **`onToolResultPersisted` is dead wiring.** Declared
    (`src/lib/chat/types.ts:52`), handled (`src/screens/Chat.svelte:4834-4839`),
-   never produced - residue from the browser-dispatch era.
+   never produced - residue from the browser-dispatch era (git record:
+   producer removed in 305e5cab, 2026-06-03; consumer re-wired against
+   the dead contract in 054012ed, 2026-06-04).
 4. **No END-time messages refetch on the normal send path.**
    `runExchange`'s success tail only refreshes threads
    (`src/screens/Chat.svelte:5181`). END hydration fetches only the
@@ -92,32 +111,38 @@ generated images before publishing the tool response).
 ## VERIFIED PREMISES
 
 Every citation below was read and confirmed in this session at base
-07eca2c4.
+f0f19a58 (the evidence-audit lens independently re-swept all of them;
+round-1 corrections are folded in).
 
 | # | Premise | Citation |
 | --- | --- | --- |
 | P1 | `subscribeToMessages` binds INSERT + UPDATE postgres_changes and calls `.subscribe()` with NO status callback | `src/lib/supabase/realtime.ts:93-171` (subscribe at :162) |
 | P2 | The messages effect keys on `activeThreadId` + `activeThreadIsDraft` and dedups by id at the append site | `src/screens/Chat.svelte:1993-2051` |
-| P3 | The opening transcript fetch is `listMessages` inside `selectThread`, concurrent with the subscription effect | `src/screens/Chat.svelte:2781` |
-| P4 | `reconcileTranscript` refetches and merges fetched rows with the slot's buffered rows by id | `src/screens/Chat.svelte:3078-3089` |
+| P3 | The opening transcript fetch is `listMessages` inside `selectThread`, concurrent with the subscription effect; `activeThreadId` is set before the fetch resolves | `src/screens/Chat.svelte:2695, 2781` |
+| P4 | `reconcileTranscript` refetches and merges fetched rows with the slot's buffered rows by id; double thread-guard (entry :3080, post-await :3083) | `src/screens/Chat.svelte:3078-3089` |
 | P5 | The post-claim-release reconcile fires only on foreign-claim clear; own-turn lifecycle is skipped by the guard | `src/screens/Chat.svelte:3036-3051` (guard :3047, comment :3032-3033) |
 | P6 | The post-edit-commit reconcile runs only when `ctx.replaceUserMessageContent` is set (destructive-edit branch) | `src/screens/Chat.svelte:5095-5097` |
-| P7 | `onToolResultPersisted` is declared and handled but has zero producers | `src/lib/chat/types.ts:52`, `src/screens/Chat.svelte:4834-4839`; grep over `src/` finds no caller in `chat/loop.ts` or `chat/stream-events.ts` |
+| P7 | `onToolResultPersisted` is declared and handled but has zero producers; exactly five references exist in `src/` | `src/lib/chat/types.ts:52`, `src/screens/Chat.svelte:4834-4839`, comment at `:2802`, `src/lib/exchange/exchange-store.svelte.ts:124`, `src/lib/exchange/exchange-slot.svelte.ts:84` |
 | P8 | The tool_result broadcast event does NOT carry the row; its own comment names the messages realtime subscription as the row's only live feed | `src/lib/chat/stream-events.ts:188-198` |
 | P9 | END hydration fetches only the assistant row (`getMessage`); no tool-row refetch exists on the send path | `src/lib/chat/stream-events.ts:407-425`; `src/lib/supabase/realtime.ts:183-194` |
-| P10 | `runExchange`'s settled tail calls `await refreshThreads()` and no messages refetch | `src/screens/Chat.svelte:5181` |
+| P10 | `runExchange`'s settled tail calls `await refreshThreads()` and no messages refetch; the cross-device claim releases in the finally (`:5341`) and the queued drain runs after it (`:5387`) | `src/screens/Chat.svelte:5181, 5341, 5387` |
 | P11 | The edge function is the writer-of-record for `role='tool'` rows and generated-image attachments | `docs/dev/architecture.md:423, 427` |
-| P12 | The Broadcast stream channel already uses a subscribe-status callback for disconnect handling (in-file precedent for fix 1-2) | `docs/dev/chat.md:910-914`; `src/lib/venice.ts` `setupStreamSubscription` |
+| P12 | The Broadcast stream channel already uses a subscribe-status callback for disconnect handling, with first-SUBSCRIBED-only semantics and own-teardown CLOSED suppression (in-file precedent for fixes 1-2) | `src/lib/chat/stream-transport.ts:338, 595-623` (`setupStreamSubscription`; the plan's earlier `venice.ts` attribution was inherited from a stale pointer at `docs/dev/chat.md:910-911`, to be corrected in M6) |
 | P13 | postgres_changes channels can take a unique topic per subscription; resubscribe is safe | `src/lib/supabase/realtime.ts:55-78` |
-| P14 | A threads UPDATE echo reaches the browser per user-row insert (browser bumps `updated_at`) and per terminal commit (RPC bumps it); heartbeat refreshes do NOT bump it (direct column write, no threads trigger) | `src/lib/supabase/messages.ts:552`; `supabase/schema.sql:13985-13993`; `supabase/functions/venice/getStreamingResponse.ts:404-408` |
+| P14 | A threads UPDATE echo reaches the browser per user-row insert (browser bumps `updated_at`) and per terminal commit (RPC bumps it); heartbeat refreshes do NOT bump it (direct column write; the only trigger on `public.threads` is `clear_thread_embedding_on_change`) | `src/lib/supabase/messages.ts:552`; `supabase/schema.sql:13985-13993, 1646`; `supabase/functions/venice/getStreamingResponse.ts:404-408` |
 | P15 | The paired-read pattern (point read covering a channel's join window) is the module's documented convention | `src/lib/supabase/realtime.ts:8-13`; `subscribeToInflightLease`/`getInflightLeaseExpiry` pair at `:306-361` |
 | P16 | `.regen-target` is driven by `pendingDeleteSet` OR `hoverRegenerateSet` at three class sites | `src/screens/Chat.svelte:8246, 8333, 8383` |
 | P17 | `.regen-target.fading-out` runs the fade animation | `src/styles.css:2676-2679` |
 | P18 | Regenerate clears the hover set on click and the pending-delete set after prune (both tails) | `src/screens/Chat.svelte:5904-5908`, `:5085`, `:5109` |
-| P19 | Settings AI pane: shared `modelInfo`/`modelError` render bare at the pane bottom, below the notifications toggle; the image pickers sit far above; the file's aria-live convention is `aria-live="polite"` on status lines | `src/screens/Settings.svelte:1997-1998` (status), `:1848-1872` (generation picker), `:1885-1892` (edit picker), `:1827`, `:2196`, `:2321` (convention) |
-| P20 | `modelInfo`/`modelError` are a SHARED pane-wide pair: written by the image-gen pick, image-edit pick, name, location, emphasis toggle, notifications toggle, and timezone save | `src/screens/Settings.svelte:1348-1355, 1361-1368, 1380-1402, 1421-1430, 1444-1469, 1561-1577` |
+| P19 | Settings AI pane: shared `modelInfo`/`modelError` render bare at the pane bottom, below the notifications toggle; the image pickers sit far above; the file's aria-live convention is `aria-live="polite"` on status lines | `src/screens/Settings.svelte:1997-1998` (status), `:1848-1872` (generation picker), `:1885-1909` (edit picker), `:1827`, `:2196`, `:2321` (convention) |
+| P20 | `modelInfo`/`modelError` are a SHARED pane-wide pair: written by the image-gen pick, image-edit pick, name, location, emphasis toggle, notifications toggle + permission button, and timezone save; the intentions toggle has its OWN local pair and never writes the shared one | `src/screens/Settings.svelte:1348-1355, 1361-1368, 1380-1402, 1421-1430, 1444-1469, 1488-1497, 1561-1577` (shared writers); `:1406-1418, 1954-1955` (local intents pair) |
 | P21 | The regenerate QA doc's precondition for a tool-calling turn ("ask something that triggers memory or web search") is the line judged unreliable on z-ai-glm-5-3-flash | `docs/qa/use-cases/chat-regenerate-from-here.md:33-34` |
-| P22 | An existing unit test file covers `subscribeToMessages` (stubbed-client harness to extend) | `tests/realtime-subscribe.test.ts:29, 79` |
+| P22 | An existing unit test file covers `subscribeToMessages`; its fake channel DISCARDS the `.subscribe()` argument, so status-passthrough tests require extending the fake to record and invoke the callback | `tests/realtime-subscribe.test.ts:29, 57, 79` |
+| P23 | `selectThread` strips the in-flight `status='streaming'` assistant row off the snapshot before merging so the streaming bubble does not double-paint; the echo handler filters the same shape | `src/screens/Chat.svelte:2792-2797, 2011` |
+| P24 | The threads UPDATE echo lands only through `subscribeToThreads`' `onUpdate` callback (the effect at `:2069+`); implementing the backstop as a `$effect` reading `currentThread` would re-trigger on every thread-row replacement and tear the messages channel down (the churn trap documented at `:1974-1992`) | `src/screens/Chat.svelte:2069-2132, 1974-1992` |
+| P25 | `reconcileTranscript`'s swap has a documented window (a row committing between snapshot and assignment drops until the next reconcile); the layered triggers make that acceptable | `src/screens/Chat.svelte:3068-3076` |
+| P26 | `docs/dev/exchange.md` lists `onToolResultPersisted` in the handler table (doc sweep surface) | `docs/dev/exchange.md:349` |
+| P27 | The Broadcast publish site strips image payloads from tool_response events because a single unstripped result is ~700KB of base64 - shipping full rows on the Broadcast channel is a non-starter | `supabase/functions/venice/getStreamingResponse.ts:1887-1915` |
 
 ## DECISIONS
 
@@ -125,72 +150,132 @@ Recorded so a future session does not re-litigate them.
 
 - **Catch-up read at SUBSCRIBED, not per-tool fetch.** The intake's
   "fire a tool-result hook from `tool_call_response`" seam (fetch the
-  row by `tool_call_id`) is REJECTED: it needs a new query-by-
-  `tool_call_id` method, fires one fetch per tool, and still depends
-  on the echo path being alive. One reconcile after the join lands
-  every row (tool rows, image cards, assistant rows) with the merge
-  machinery P4 already trusts.
-- **The dead handler is removed, not produced.** With fixes 1-3 in
+  row by `tool_call_id`) is REJECTED. The decisive reasons: it is
+  sender-only by construction (the `thread:<id>:stream` Broadcast
+  channel is joined only by the tab running the exchange, so a second
+  observing tab never receives the event and sighting (c) is
+  untouched); it is blind to the image card (the card resolves by
+  filename from attachments, so a row fetch at response time drags in
+  exactly the attach window the constraint forbids, P27); there is no
+  SELECT-by-`tool_call_id` today (the only `tool_call_id` query is
+  the ask_user UPDATE, `src/lib/supabase/messages.ts:574-590`); and
+  the Broadcast channel has adaptive backpressure that drops events
+  under budget pressure (`supabase/functions/venice/broadcast.ts:49`),
+  so making row delivery depend on it is strictly worse than the
+  replication stream plus reconciles. One reconcile after the join
+  lands every row (tool rows, image cards, assistant rows) with the
+  merge machinery P4 already trusts.
+- **The dead handler is removed, not produced.** With fixes 1-4 in
   place, `onToolResultPersisted` stays dead. Deleting the member and
   the handler follows the dead-code hygiene rule (`CLAUDE.md` "Dead-code
   hygiene"); the stale comment reference at `src/screens/Chat.svelte:2802`
   is rewritten to name the real producer (`onAssistantPersisted`).
+  Git history (archaeology lens) confirms the death was drift, not a
+  recorded decision, so removal cannot contradict an intent record.
 - **Own-turn reconcile is added at the settled tail; the foreign-claim
   guard stays as-is.** Relaxing the guard at `:3047` would fire a
   refetch on every own-claim release with no flush of what actually
   landed; the settled tail already knows the turn finished and can
   reconcile once, deliberately.
-- **Cross-tab backstop rides the threads UPDATE echo, debounced.** A
-  foreign threads UPDATE for the ACTIVE thread schedules one trailing
-  debounce (2s) reconcile. Per P14 the echo fires at most twice per
-  foreign turn (user-row bump, terminal-commit bump), so the backstop
-  is not chatty, and a trailing debounce after the terminal bump
-  catches the tool rows that landed just before it. This is the piece
-  that addresses sighting (c) without trusting the unproven
-  "threads channel works" inference: whatever thread-level signal the
-  second tab DID receive becomes a trigger to heal the message list.
-- **Resubscribe budget: one retry per subscription instance.** The
-  failure statuses schedule exactly one resubscribe (via a tick the
-  effect depends on, so teardown/recreate flows through the existing
-  cleanup). A second consecutive failure is logged at warn and left
-  to the reconciles (fixes 1 and 3 keep the transcript correct even
-  when the echo stream is dead); no retry loop, no backoff machine.
+- **Resubscribe budget: one retry per consecutive-failure streak.**
+  The retry decision is a pure function of `(status, attempts)`:
+  `attempts` increments on every failure status and RESETS to 0 on
+  `SUBSCRIBED`. A resubscribe fires only when `attempts` is 1 (i.e.
+  the first failure of a streak); a second consecutive failure is
+  logged at warn and left to the reconciles. This bounds the outage
+  loop (a channel that repeatedly TIMED_OUTs never reaches SUBSCRIBED,
+  so the churn stops after one retry) while a channel that
+  successfully joined and later died gets one fresh retry. The
+  counter lives per effect lifetime (per thread-subscription site)
+  and survives the tick re-run; a thread switch tears the effect down
+  and starts fresh.
+- **Status-decision logic is extracted to a pure module.** The
+  (status, attempts) -> action decision and the resubscribe counting
+  live in a small pure module under `src/lib/chat/` (companion-test
+  convention, `CLAUDE.md` frontend organization); the Chat.svelte
+  effect wires it. This makes the M1 test promise real: no test can
+  mount Chat.svelte (the repo's own test headers say why,
+  `tests/reasoning-picker.test.ts:4`), but a pure module is pinned in
+  a node-env test file.
+- **The catch-up awaits any in-flight opening fetch.** `selectThread`
+  sets `activeThreadId` before its `listMessages` resolves (P3), so a
+  fast SUBSCRIBED could reconcile an older snapshot and lose to the
+  opening fetch's later, staler assignment. The component keeps a
+  per-thread map of in-flight `selectThread` fetch promises; the
+  SUBSCRIBED catch-up awaits the map entry (when present) before
+  reconciling. Thread-open cost is two `listMessages` - accepted
+  (single-user stack; the second fetch is the price of closing the
+  race).
+- **`reconcileTranscript` gains the streaming-row strip.** The catch-up
+  fires on a thread possibly opened MID-TURN, where `listMessages`
+  returns the in-flight `status='streaming'` assistant row; merging it
+  bare would double-paint the answer (bubble + transcript row). The
+  same strip `selectThread` applies (P23) moves into
+  `reconcileTranscript` itself, so every caller is protected. The
+  echo handler's filter (P23) is unchanged.
+- **The END-time reconcile is fire-and-forget and unconditional on
+  outcome.** Awaiting it would hold the cross-device claim and delay
+  the queued-message drain by one round trip on every turn (P10);
+  the merge is idempotent and the swap window self-heals (P25). It
+  fires on `!conflictDetected`-independent grounds: any settle
+  (completed, aborted, errored, suspended) refetches server truth
+  for the active thread. The `StreamDisconnectedError` branch needs
+  no coverage - `reconnectInflightTurn` refetches the full transcript
+  itself.
+- **The cross-tab backstop hooks the threads onUpdate callback, not
+  an effect.** Per P24. Trigger rule: a threads UPDATE whose
+  `id === activeThreadId` and whose `response_holder_id !== holderId`
+  schedules the debounced reconcile. This covers foreign holders AND
+  null holders (a bump that raced the claim); our own claimed-turn
+  bumps (holder === mine) are skipped - they are covered by the
+  END-time reconcile. Accepted redundancy: our own claim-RELEASE echo
+  (holder -> null) fires the backstop once per own turn; the
+  reconcile is idempotent and cheap.
+- **Debounce is hand-rolled.** No shared debounce helper exists; six
+  components hand-roll the setTimeout/clearTimeout pair (e.g.
+  `src/components/MemoryList.svelte:42-62`). The backstop is a
+  seventh; no new util for one consumer.
 - **No schema change, no edge-function change.** All browser-side.
   The function already persists and publishes everything needed.
 
 ## STATE AND TRANSITION MATRIX
 
-The messages channel's lifecycle (per subscription instance created
-by the effect at `src/screens/Chat.svelte:1993`):
+The messages channel's lifecycle (per effect lifetime - one
+thread-subscription site in `src/screens/Chat.svelte:1993`):
 
 | State | Entered when | Exited when | Actions on entry |
 | --- | --- | --- | --- |
-| JOINING | effect run: `subscribeToMessages` called, no status ack yet | status callback fires with SUBSCRIBED, or a failure status | none (dispatch suppressed rows still flow to dedup) |
-| SUBSCRIBED | status `SUBSCRIBED` | teardown (thread switch / unmount) | ONE catch-up reconcile; log at debug |
-| RESUBSCRIBE_PENDING | status `CHANNEL_ERROR` or `TIMED_OUT` | tick re-runs effect -> JOINING | log at warn; bump retry tick (once per instance) |
-| FAILED | second failure status on the same instance | teardown | log at warn; transcript correctness rests on reconciles |
-| removed | teardown: effect cleanup runs | - | `removeChannel` fire-and-forget (existing) |
+| JOINING | effect run: `subscribeToMessages` called, no status ack yet | status callback fires with SUBSCRIBED, or a failure status | attempts unchanged (it initializes to 0 once per effect lifetime - a tick re-run re-enters JOINING with the streak counter intact) |
+| SUBSCRIBED | status `SUBSCRIBED` | teardown (thread switch / unmount) | attempts reset to 0; ONE catch-up reconcile (after awaiting any in-flight opening fetch); log at debug |
+| RESUBSCRIBE_PENDING | failure status with attempts == 1 (first of a streak) | tick re-runs effect -> JOINING (new channel, fresh topic) | attempts incremented; log at warn |
+| FAILED | failure status with attempts >= 2 (second consecutive) | teardown only | log at warn; transcript correctness rests on the reconciles (fixes 3-4) |
+| removed | teardown: effect cleanup runs | - | `removeChannel` fire-and-forget (existing); pending debounce timers cleared |
 
 Precedence rules:
 
-- The catch-up reconcile fires at most once per subscription
-  instance, on the FIRST `SUBSCRIBED` only. A resubscribed instance
-  is a new instance and gets its own catch-up (correct: the channel
-  was dark, the transcript may have moved).
+- The catch-up reconcile fires at most once per SUBSCRIBED
+  transition (a resubscribed channel is a genuine re-join after a
+  dark period and gets its own catch-up - correct by design).
 - Teardown cancels nothing in flight; the reconcile is
-  thread-guarded (`activeThreadId !== threadId` discards, P4), so a
-  thread switch mid-catch-up is a no-op by construction.
+  thread-guarded (P4), so a thread switch mid-catch-up is a no-op by
+  construction. A torn-down instance's late SUBSCRIBED may fire a
+  stray catch-up that the guard discards - accepted (harmless extra
+  fetch on fast thread switches).
 - The cross-tab backstop (debounced foreign-threads-UPDATE reconcile)
   and the END-time own-send reconcile are independent triggers of the
   same `reconcileTranscript`; they never compose state, they only
-  refetch-and-merge, which is idempotent by id (P4).
+  refetch-and-merge, which is idempotent by id (P4). Ordering against
+  a regenerate's fade-out prune is safe: the prune branch completes
+  (await) before the settled tail runs, and the backstop cannot fire
+  mid-fade because claim exclusivity means no foreign turn overlaps
+  ours.
 - Echo delivery is never gated on subscribe state: JOINING and FAILED
   tabs still process any echo that arrives. Status handling changes
   visibility and recovery, not the event path.
 
 ## APPROACH
 
-### Fix 1 + 2: status callback, catch-up, failure handling
+### Fixes 1 + 2: status callback, catch-up, failure handling
 
 `src/lib/supabase/realtime.ts`:
 
@@ -202,49 +287,92 @@ Precedence rules:
 - Docstring updated: the caller pairs the SUBSCRIBED ack with a
   catch-up read (P15 convention).
 
+`src/lib/supabase.ts` (facade, `:1602-1607` region):
+
+- The facade's `subscribeToMessages` delegation gains the same
+  optional parameter (one-for-one typed signatures are the facade
+  contract, `src/lib/supabase/realtime.ts:30-33`).
+
+New pure module `src/lib/chat/realtime-recovery.ts`:
+
+- `messagesSubscribeDecision(status, attempts): { action: 'catch-up' | 'resubscribe' | 'log-warn' | 'log-debug', nextAttempts: number }`
+  - pure, node-testable; encodes the STATE MATRIX table exactly.
+
 `src/screens/Chat.svelte` (messages effect, `:1993-2051`):
 
 - A `$state` resubscribe tick is read inside the effect (making it a
-  dependency) and bumped at most once per instance on a failure
-  status.
-- `onStatus` handler: `SUBSCRIBED` -> `void reconcileTranscript(threadId,
-  'post-subscribe-catch-up')`; `CHANNEL_ERROR`/`TIMED_OUT` -> warn log +
-  tick bump (first failure only); `CLOSED` -> debug log only (normal
-  teardown shape).
+  dependency) and bumped by the decision module's `resubscribe`
+  action. The attempts counter is a plain (non-reactive) variable in
+  the effect's scope... it must SURVIVE the tick re-run, so it lives
+  beside the tick (component scope, keyed to the current effect
+  lifetime; a thread switch re-initializes it).
+- `onStatus` handler: consult the decision module.
+  `catch-up` -> await any in-flight `selectThread` fetch for this
+  thread (component-scoped map, see DECISIONS), then
+  `void reconcileTranscript(threadId, 'post-subscribe-catch-up')`;
+  `resubscribe` -> warn log + tick bump; `log-warn` -> warn log only;
+  `log-debug` -> debug log only.
 - The dedup/merge invariants are untouched: the catch-up flows through
   `reconcileTranscript`, which is thread-guarded and idempotent (P4).
 
-### Fix 3: END-time reconcile for own sends
+`src/screens/Chat.svelte` (`reconcileTranscript`, `:3078-3089`):
 
-In `runExchange`'s settled-turn tail (the block containing
-`src/screens/Chat.svelte:5181`), after the existing bookkeeping and
-only when the turn finished cleanly (not `interrupted`, not
-`conflictDetected`, and the ask-user suspend did not swallow the
-turn), call:
+- Add the streaming-row strip (P23 shape) to the fetched snapshot
+  before the merge, so a mid-turn catch-up cannot double-paint the
+  streaming bubble. Comment names the double-paint symptom.
+
+Tests (node-env, no DOM):
+
+- `tests/realtime-subscribe.test.ts`: extend the fake channel to
+  record and invoke the `.subscribe()` callback (P22); assert
+  passthrough of SUBSCRIBED / failure statuses; assert the fresh-topic
+  contract still holds for the four-arg call.
+- New `tests/realtime-recovery.test.ts`: the decision matrix
+  (SUBSCRIBED resets; first failure resubscribes; second consecutive
+  failure warns only; CLOSED is debug-only).
+
+### Fix 3: cross-tab backstop on the threads UPDATE echo
+
+`src/screens/Chat.svelte` (the `subscribeToThreads` wiring at
+`:2069-2132`):
+
+- Inside the existing `onUpdate` callback (P24): if the updated
+  thread `id === activeThreadId` and `response_holder_id !== holderId`,
+  schedule the trailing debounce for that thread id (2s).
+- Hand-rolled debounce: one module-scope (component-scope) timer
+  variable + pending thread id; a newer trigger clears and re-arms;
+  teardown (effect cleanup / thread switch) clears the timer.
+- On fire: `void reconcileTranscript(threadId, 'cross-tab-threads-echo')`.
+- Comment: names the sighting (c) shape it heals (a foreign turn whose
+  message echoes never arrived), the trigger budget (P14: at most two
+  echoes per foreign turn), and why the holder test also admits null.
+
+### Fix 4: END-time reconcile for own sends
+
+In `runExchange`'s settled-turn tail (after the fade-out prune branch
+`:5070-5111` and alongside `:5181`):
 
 ```ts
 if (activeThreadId === ctx.threadId) {
-  await reconcileTranscript(ctx.threadId, 'post-turn');
+  void reconcileTranscript(ctx.threadId, 'post-turn');
 }
 ```
 
-Background exchanges (thread switched away mid-turn) are covered by
-the existing `slot.persistedRows` merge on re-entry (P3/P4); the
-guard skips them here on purpose. Ordering: AFTER the fade-out prune
-branch (`:5070-5111`) so the refetch omits pruned rows and the swap
-cannot resurrect them; the post-edit-commit site (`:5095-5097`) folds
-into this call (same reconcile, one why-string) or stays separate -
-the reviewer weighs which reads better.
+- Fire-and-forget, unconditional on outcome (see DECISIONS). The
+  post-edit-commit site (`:5095-5097`) stays: it is AWAITED there on
+  purpose (ordering the edited row above the reply before the view
+  settles is load-bearing for that branch).
 
-### Fix 4: dead wiring removal
+### Fix 5: dead wiring removal
 
 - Delete the `onToolResultPersisted` member from `ChatLoopHandlers`
   (`src/lib/chat/types.ts:49-52` region).
 - Delete the handler object entry (`src/screens/Chat.svelte:4834-4839`).
 - Rewrite the stale comment at `:2800-2802` to name
   `onAssistantPersisted` as the sole producer of buffered rows.
-- Sweep comments in `src/lib/exchange/exchange-store.svelte.ts:124`
-  and `exchange-slot.svelte.ts:84` that name the dead handler.
+- Sweep the comment references in `src/lib/exchange/exchange-store.svelte.ts:124`
+  and `exchange-slot.svelte.ts:84`, and the handler-table row at
+  `docs/dev/exchange.md:349` (P26).
 
 ### Rider (a): regen-target stickiness
 
@@ -265,7 +393,10 @@ Fix shape (applied once the repro names the holder): clear
 half of the class binding off while a send is in flight on the
 thread (the click path already hands the class to
 `pendingDeleteSet` alone, `:5904-5908` - this extends the same
-invariant to the whole send window). Cheap, no new state.
+invariant to the whole send window). The gating predicate is
+extracted into `src/lib/ui/regenerate` and pinned in
+`tests/regenerate.test.ts` (which already pins the range math there)
+so the fix is not purely QA-verified.
 
 ### Rider (b): QA doc precondition tightening
 
@@ -291,11 +422,12 @@ precondition wording and note the model dependence.
 - Add `aria-live="polite"` to both lines, matching the file's own
   convention (`:1827`, `:2196`, `:2321`).
 - Accepted tradeoff (P20): the pair is pane-wide, so notices from the
-  emphasis / intentions / notifications toggles below render about a
-  section above their controls. The intents toggle already renders
-  its own pair locally (`:1954-1955`), so the shared pair's audience
-  is dominated by the pickers. Alternative rejected: splitting the
-  pair per section multiplies state for one pane.
+  emphasis / notifications toggles below render about a section above
+  their controls. The intentions toggle already renders its own local
+  pair beside its control (`:1954-1955`), so it is unaffected. The
+  shared pair's remaining audience is dominated by the pickers.
+  Alternative rejected: splitting the pair per section multiplies
+  state for one pane.
 
 ## MILESTONES
 
@@ -308,25 +440,30 @@ precondition wording and note the model dependence.
   realtime vs refetch for the second tab's title change. Characterize
   rider (a)'s stale-set holder. Message the coordinator BEFORE
   starting browser work to de-conflict with garrick-the-lint-warden-00023.
-- **M1 - realtime.ts status callback + Chat.svelte catch-up +
-  failure handling** (fixes 1-2), with unit tests extended in
-  `tests/realtime-subscribe.test.ts` (P22): status passthrough,
-  catch-up-once semantics, one-resubscribe cap.
-- **M2 - END-time reconcile** (fix 3) + unit coverage for the merge
-  behavior if a seam exists (the function is inside the component;
-  cover via the `reconcileTranscript` merge helper tests if
-  `mergeMessagesById` tests do not already pin it - check
-  `tests/`).
-- **M3 - dead wiring removal** (fix 4) + comment sweeps. Gate green.
-- **M4 - rider (a) fix** per the M0 characterization.
-- **M5 - rider (c) Settings fix.**
-- **M6 - docs.** `docs/dev/chat.md` (messages-subscription gotcha:
-  the SUBSCRIBED catch-up contract, the reconcile call sites),
-  `docs/dev/settings.md` (status-line placement if the doc names
-  it), `docs/user/` if the status line's behavior is described there
-  (check; the placement change is cosmetic but visible). Rider (b)
-  lands with M0's doc edit or here, whichever the QA flow prefers.
-- **M7 - QA re-run + close-out.** Re-execute the M0 use cases, log
+- **M1 - fixes 1-2.** realtime.ts status callback + facade parameter;
+  the `realtime-recovery` pure module + its test; Chat.svelte effect
+  wiring (tick, attempts, catch-up with in-flight-fetch await);
+  reconcileTranscript streaming-row strip; the extended
+  realtime-subscribe tests. Gate green.
+- **M2 - fix 3 (cross-tab backstop).** threads-onUpdate hook +
+  hand-rolled debounce + teardown. Gate green.
+- **M3 - fix 4 (END-time reconcile).** Settled-tail call site. Gate
+  green.
+- **M4 - fix 5 (dead wiring removal).** Member, handler, comment
+  sweeps, exchange.md row. Gate green.
+- **M5 - rider (a) fix** per the M0 characterization, with the
+  predicate extraction + test.
+- **M6 - rider (c) Settings fix.**
+- **M7 - docs.** `docs/dev/chat.md` (messages-subscription gotcha:
+  the SUBSCRIBED catch-up contract, the reconcile call sites; ALSO
+  correct the stale `venice.ts` -> `stream-transport.ts` pointer at
+  `:910-911` while in there), `docs/dev/exchange.md` (handler table
+  if not covered in M4), `docs/dev/settings.md` (status-line
+  placement if the doc names it), `docs/user/` if the status line's
+  behavior is described there (check; the placement change is
+  cosmetic but visible). Rider (b) lands with M0's doc edit or here,
+  whichever the QA flow prefers.
+- **M8 - QA re-run + close-out.** Re-execute the M0 use cases, log
   before/after pairs, message the coordinator the diff summary +
   test results + QA rows. No done declaration before their review.
 
@@ -346,30 +483,35 @@ exit codes; run it unpiped).
   `playwright_browser_run_code_unsafe` with explicit page selection
   from `context().pages()`.
 - Browser needed at: M0 (baseline + repros + rider (a)
-  characterization) and M7 (post-change re-runs). The coordinator is
+  characterization) and M8 (post-change re-runs). The coordinator is
   messaged before each window.
-- Between browser windows, all work (M1-M6 code + docs + gate) is
+- Between browser windows, all work (M1-M7 code + docs + gate) is
   local and conflict-free.
 - Two-tab repro hygiene: the second tab stays on my own origin
-  (separate localStorage, same holder identity is per-tab by
-  `holderId`, so a second tab is a genuine foreign observer for the
-  messages channel).
+  (separate localStorage; `holderId` is per-tab, so a second tab is a
+  genuine foreign observer for the messages channel).
 
 ## RISKS / OPEN QUESTIONS
 
 - **Sighting (c) root cause may be infra-level** (realtime delivery
   genuinely failing server-side). The fixes make the state visible
-  (status logging), heal the open-time snapshot (catch-up), and heal
-  per-turn (backstop + END reconcile) - but if the echo stream itself
-  is dead mid-session, a FOREIGN tab still depends on the backstop
-  catching the threads echo. If the threads echo is also dead, only
-  focus-refresh recovers - logged at M0 if observed.
-- **The debounce backstop is new surface.** Its trigger set is
-  exactly foreign threads UPDATEs on the active thread (P14: at most
-  twice per foreign turn plus side-effect writes that bump
-  `updated_at` - the schema notes title writes do NOT bump,
+  (status logging), heal the open-time snapshot (catch-up), heal
+  per-turn for the sender (END reconcile), and heal per-turn for a
+  foreign observer IFF the threads echo is alive (backstop). If BOTH
+  echo streams are dead mid-session, only focus-refresh recovers -
+  logged at M0 if observed.
+- **The debounce backstop is new surface** (shape: hand-rolled, per
+  DECISIONS). Its trigger set is foreign-or-null holder threads
+  UPDATEs on the active thread (P14: at most twice per foreign turn
+  plus claim-lease writes; the schema notes title writes do NOT bump,
   `supabase/schema.sql:6051-6052`). The 2s trailing debounce bounds
-  any burst; the reconcile itself is a bounded single query.
+  any burst; the reconcile itself is a bounded single query. Accepted
+  redundancy: one extra reconcile per own turn (claim-release echo).
 - **`CLOSED` status semantics** differ across realtime-js versions;
-  treated as informational only, never a resubscribe trigger, to
-  avoid resubscribing on our own teardown echoes.
+  treated as debug-only, never a resubscribe trigger, to avoid
+  resubscribing on our own teardown echoes (the stream-transport
+  precedent suppresses self-initiated CLOSED the same way, P12).
+- **Thread-open cost is two `listMessages`** (opening fetch + catch-up)
+  plus the streamState point read. Accepted for a single-user stack;
+  the swap window (P25) means the layered triggers, not any single
+  reconcile, are what make delivery eventually-correct.
