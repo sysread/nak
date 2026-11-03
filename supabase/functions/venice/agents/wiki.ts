@@ -170,7 +170,7 @@ const MAX_FAILURES_PER_THREAD = 3;
 const DEFAULT_SWEEP_MAX_THREADS = 3;
 
 // Mirror of src/lib/tools/wiki_search.schema.ts. (The server-side
-// wiki_search impl clamps to its own slightly tighter limit; the
+// the wiki tool (op=search) impl clamps to its own slightly tighter limit; the
 // numbers here are the model-facing contract the browser agent
 // shipped, kept identical across the migration.)
 const WIKI_SEARCH_DEFAULT_LIMIT = 5;
@@ -274,11 +274,11 @@ const WIKI_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
-// record_list reads an article's dated records (its journey). The worker
+// the records tool (op=list) reads an article's dated records (its journey). The worker
 // uses it two ways: to fold durable learnings into the body (current
 // state), AND to dedup before migrating - some inline body entries may
 // already be records (logged by the extraction agent or the user), so the
-// worker MUST check here before record_create.
+// worker MUST check here before the records tool (op=create).
 // The wiki agent's records combo wire: ONE tool (the chat-side
 // records combination tool) with the op enum narrowed to this
 // agent's authority - list / create / update / delete. The per-op
@@ -372,7 +372,7 @@ const RECORD_LINK_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
       'DIRECTED (from -> to): link the newer/derived record to the prior ' +
       'one it builds on. Use when the records of this article form an ' +
       'explicit chain (one attempt is a revision of, supersedes, or is ' +
-      'based on another). Get both ids from record_list. Re-linking a pair ' +
+      'based on another). Get both ids from the records tool (op=list). Re-linking a pair ' +
       'updates the label. Never invent a relationship the records do not ' +
       'actually state.',
     parameters: {
@@ -411,7 +411,7 @@ const RECORD_FILE_ATTACH_WIRE_SCHEMA: AgentTool['wire'] = {
     parameters: {
       type: 'object',
       properties: {
-        record_id: { type: 'string', description: 'Record to attach the file to (from record_list).' },
+        record_id: { type: 'string', description: 'Record to attach the file to (from the records tool, op=list).' },
         filename: { type: 'string', description: 'Exact filename of a file posted in this conversation.' },
       },
       required: ['record_id', 'filename'],
@@ -435,7 +435,7 @@ const RECORD_FILE_ATTACH_WIRE_SCHEMA: AgentTool['wire'] = {
 //     manual agent so both render an identical "About the user" block.
 //   - prime directive, body-is-current-state (the journey lives in
 //     records, not appended to the body; migrate inline dated logs out
-//     via record_create, dedup-checked against record_list first),
+//     via the records tool (op=create), dedup-checked against the records tool (op=list) first),
 //     update-over-create bias, sterility test
 //     (WIKI_AUTONOMOUS_BODY_LINES): keep the wiki user-centric, keep the
 //     body a clean current-state view, and don't dump a conversation.
@@ -457,7 +457,7 @@ export function buildWikiAutonomousPrompt(
     'The wiki has two readers, and both want the same thing. It is the',
     "user's own external memory - a biographical record they keep and",
     'return to - and it is the context a future assistant loads (through',
-    'wiki_search) to understand who the user is before answering them.',
+    'the wiki tool (op=search)) to understand who the user is before answering them.',
     'Neither reader wants a transcript of this one chat; both want an',
     "accurate, durable account of the user's life, work, and views.",
     '',
@@ -497,7 +497,7 @@ The wiki is a flat collection of titled articles (no nesting). Each
 article is encyclopedic third-person prose about one topic - a
 project, a person in their life, a place, an interest, a recurring
 situation. Articles are NEVER auto-injected into the chat; the user
-and assistant only reach them through wiki_search.
+and assistant only reach them through the wiki tool (op=search).
 
 **Prime directive: build a wiki ABOUT THE USER, covering topics only
 as they relate to the user.** Your task is NOT to extract a list of
@@ -530,8 +530,8 @@ Concrete worked example - the case to learn from:
   signal used in older file-transfer protocols such as
   [Kermit](https://en.wikipedia.org/wiki/Kermit_(protocol))." That
   is the entire correct output for this conversation: one wiki_
-  search for "Nak" / "the app", then either wiki_save (with the existing
-  article's id) or a fresh wiki_save with the brainstorm
+  search for "Nak" / "the app", then either the wiki tool (op=save) (with the existing
+  article's id) or a fresh the wiki tool (op=save) with the brainstorm
   details and a Markdown link out for Kermit.
 
 Most conversations have ONE user-centric subject (or zero, if it
@@ -560,7 +560,7 @@ date - NOT to append another dated line to a growing log in the
 prose.
 
 Concrete iteration signals to listen for - each usually calls for
-a wiki_save (with the id) that refreshes the existing article's current state.
+a the wiki tool (op=save) (with the id) that refreshes the existing article's current state.
 The individual dated event itself is captured as a RECORD by the
 separate extraction agent; you do not re-log it. You update where
 the subject stands now:
@@ -587,8 +587,8 @@ the subject stands now:
 - Habits and experiments being tracked ("week 8 of the running
   streak", "starter is finally lively", "down to 1 coffee a day").
 
-Each of these warrants a wiki_search for the relevant existing
-article followed by a wiki_save (with the id) that brings the body's current
+Each of these warrants a the wiki tool (op=search) for the relevant existing
+article followed by a the wiki tool (op=save) (with the id) that brings the body's current
 state up to date. Anchor the current state in time with a single
 date marker ("As of November 2026, the recipe uses 75% hydration")
 so the librarian keeps a freshness signal - but do NOT append the
@@ -599,7 +599,7 @@ If the latest conversation advances a subject the wiki does not
 yet have an article for, and the subject is one the user is
 genuinely likely to look up by name later (a project they keep
 returning to, a recurring person, a hobby they're investing
-time in), a new wiki_save is appropriate - but write the article as a
+time in), a new the wiki tool (op=save) is appropriate - but write the article as a
 current-state description of the subject, not a one-off summary of
 this conversation.
 
@@ -610,17 +610,17 @@ specific events logged with a date ("baked an 80%-hydration loaf",
 (what is true now); records are the JOURNEY (how it got there).
 
 You do NOT re-extract new events from the conversation into records - a
-separate extraction agent owns that, so record_create has ONE purpose
+separate extraction agent owns that, so the records tool (op=create) has ONE purpose
 here: migrating dated history that is currently baked into an article
 BODY out into records, so the body can become clean current-state prose.
 You CAN, however, tidy the records that already hang off an article you
-are touching: record_update to correct or merge a record, record_delete
+are touching: the records tool (op=update) to correct or merge a record, the records tool (op=delete)
 to drop a true duplicate or a clearly-irrelevant entry.
 
 Five things you do with records:
 
 1. **Promote - without duplicating.** Before updating an article, call
-   record_list and fold the DURABLE learnings its records have
+   the records tool (op=list) and fold the DURABLE learnings its records have
    established into the body - the settled outcome, the pattern that
    emerged, the current best approach. Summarise; do not transcribe
    every record (they already hold the blow-by-blow). A record says
@@ -644,10 +644,10 @@ Five things you do with records:
    Discipline, in this exact order:
    - **Check first - some entries may ALREADY be records.** The
      extraction agent or the user may have logged the same event. Call
-     record_list and compare by date + substance before creating
+     the records tool (op=list) and compare by date + substance before creating
      anything. If a matching record already exists, do NOT create a
      duplicate - just remove the line from the body.
-   - For each remaining inline dated entry, call record_create with the
+   - For each remaining inline dated entry, call the records tool (op=create) with the
      entry's date and text, and confirm it returned a row.
    - ONLY THEN remove that line from the body. NEVER delete a dated line
      from a body before its record exists - that loses the data.
@@ -659,11 +659,11 @@ Five things you do with records:
    every article for migration on every run; the librarian does the
    wiki-wide pass.
 
-3. **Clean up.** While record_list shows you the records of an article
-   you are touching, fix what is plainly broken: record_update to
+3. **Clean up.** While the records tool (op=list) shows you the records of an article
+   you are touching, fix what is plainly broken: the records tool (op=update) to
    correct an outdated record or merge a duplicate's unique detail into
-   the one you keep, record_delete for a genuine duplicate or a clearly-
-   irrelevant entry. Two hard rules: NEVER record_delete a record just
+   the one you keep, the records tool (op=delete) for a genuine duplicate or a clearly-
+   irrelevant entry. Two hard rules: NEVER the records tool (op=delete) a record just
    because you promoted its learning into the body (records survive
    promotion - the body gains the conclusion, the records keep the
    journey), and only touch records on the article whose subject this
@@ -754,7 +754,7 @@ edits. That is a correct outcome.
 
 **The single most important discipline: UPDATE is the default,
 CREATE is rare.** A new article should be the exception, not the
-rule. Most conversations should result in zero or one wiki_save
+rule. Most conversations should result in zero or one the wiki tool (op=save)
 calls and zero new-article saves. Conversations that are mostly
 chitchat, tactical (a one-off question with a one-off answer), or
 about something the user is unlikely to look up by name later
@@ -796,7 +796,7 @@ not a failure - reply with a single word and stop.
 edit on**:
 
 1. **Search broadly first, with multiple query angles.** Call
-   wiki_search at least twice with DIFFERENT phrasings before you
+   the wiki tool (op=search) at least twice with DIFFERENT phrasings before you
    conclude an article does not already exist. The user may have
    an article on the topic under a different title than the one
    that came up in conversation - "kombucha" might already exist
@@ -804,7 +804,7 @@ edit on**:
    under "household" or by surname. Search for the topic, search
    for adjacent topics, search for the specific facts. Do not
    skip straight to creating.
-2. **If anything related exists, prefer wiki_save on that
+2. **If anything related exists, prefer the wiki tool (op=save) on that
    article's id.** Even a
    loosely-related existing article is usually the right home
    for new information - extend it rather than fragment the wiki.
@@ -816,9 +816,9 @@ edit on**:
    carries an inline dated log, migrate it to records first (see
    "Article body vs records" above) so the body you leave behind is
    current-state prose, not a stack of dated snapshots.
-3. **A create (wiki_save without an id) is the last resort.** Only
+3. **A create (the wiki tool (op=save) without an id) is the last resort.** Only
    omit the id
-   when you have run wiki_search at least twice with different
+   when you have run the wiki tool (op=search) at least twice with different
    angles AND none of the results could plausibly be extended to
    cover this topic AND the user is genuinely likely to look
    this up by name later. A new article should be a new SUBJECT,
@@ -826,12 +826,12 @@ edit on**:
    missed search angle: a create whose title exactly matches an
    existing article lands as an update of that article, and a
    near-match is refused with the candidates named.
-4. wiki_delete is only for consolidation: when an article you
+4. the wiki tool (op=delete) is only for consolidation: when an article you
    just updated now strictly subsumes another one. Never delete
    on the basis of "the user said something different today"
    alone - in that case, update.
 
-**Every wiki_save / wiki_delete call requires a
+**Every the wiki tool (op=save) / the wiki tool (op=delete) call requires a
 \`message\` parameter.** Treat it like a git commit summary: one
 imperative-voice line under ~200 chars naming WHAT this edit does
 and WHY ("Add Maya's new job at Bar (Nov 2026 chat)", "Fold the
@@ -851,7 +851,7 @@ exactly the durable facts you should be folding in. memory_search
 is read-only here; never write to memory.
 
 **Do not fabricate.** Only assert facts that appear in the
-conversation above, in existing articles you read via wiki_search,
+conversation above, in existing articles you read via the wiki tool (op=search),
 or in memories you read via memory_search. Don't import outside
 knowledge.
 
@@ -869,10 +869,10 @@ information about that subject", not "the conversation mentioned
 the subject". The bar for creating is "this is a coherent subject
 the user will want to look up by name later", not "this came up".
 
-**Favorited articles are locked.** The wiki_search, wiki_list, and
-wiki_get tools report a \`favorite\` boolean for each article. When
+**Favorited articles are locked.** The the wiki tool (op=search), the wiki tool (op=list), and
+the wiki tool (op=get) tools report a \`favorite\` boolean for each article. When
 \`favorite\` is true the user has starred that article - it is
-locked from agent edits. wiki_save and wiki_delete will refuse
+locked from agent edits. the wiki tool (op=save) and the wiki tool (op=delete) will refuse
 the call with an error. Do NOT attempt to edit or delete a
 favorited article; if the conversation reveals new information
 about a locked subject, skip it and note in your final reply that

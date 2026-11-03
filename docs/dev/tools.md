@@ -96,12 +96,10 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   synthesized note from one store. The targeted, more-expensive
   drill-down tier above the deterministic `context` survey.
 - Direct reads across every store: `memory_search` / `memory_get`,
-  `conversation_search` / `conversation_get`, the wiki tool (op=search) /
-  the wiki tool (op=list) / the wiki tool (op=get) plus the wiki record reads `record_list` /
-  `record_get` / `record_search`. The `*_get` trio (`memory_get` /
-  `conversation_get` /
-  the wiki tool (op=get)) is the by-id drill-down behind the recall block's
-  `^N^` citations. (The Library and cookbook reads moved into their
+  `conversation_search` / `conversation_get`. The `*_get` trio
+  (`memory_get` / `conversation_get` / the wiki tool (op=get)) is the
+  by-id drill-down behind the recall block's `^N^` citations. (The
+  wiki-record reads live in the records combination tool.) (The Library and cookbook reads moved into their
   combos - `docs` and `recipes` - whose list/get ops are read-only.)
 - `research_docs` - one-shot sub-completion whose system prompt
   bundles the user-facing doc corpus (`docs/user/`), answering
