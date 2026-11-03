@@ -2887,7 +2887,7 @@
       // loop persisted during the window between `messages = []` and
       // the fetch resolving. Race shape: user switches into a thread
       // whose background slot is mid-exchange; onAssistantPersisted
-      // and onToolResultPersisted fire while the await is in flight,
+      // and onAssistantPersisted fire while the await is in flight,
       // pushing into slot.persistedRows. The snapshot may or may not
       // include those rows depending on when its underlying query
       // ran. mergeMessagesById de-dupes by id and slots the buffered
@@ -4974,12 +4974,6 @@
               // has now landed - retire their notice cards with the
               // CRT-power-off animation.
               dismissSlopNotices(slot);
-            },
-            onToolResultPersisted: (msg) => {
-              slot.recordPersistedRow(msg);
-              if (ctx.threadId === activeThreadId) {
-                appendMessage(msg);
-              }
             },
             onRowsPruned: (ids) => {
               // The server deleted empty assistant rows (the bare

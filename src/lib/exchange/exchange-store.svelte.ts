@@ -121,7 +121,7 @@ export class ExchangeStore {
  *
  * Use case: selecting a thread whose slot is mid-exchange. Between
  * `messages = []` (clear) and `messages = fetched` (snapshot resolve),
- * the chat-loop may have fired onAssistantPersisted / onToolResultPersisted
+ * the chat-loop may have fired onAssistantPersisted
  * with new rows. The buffer captures them; the merge folds them back
  * in regardless of where they landed in the timeline.
  *

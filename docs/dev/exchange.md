@@ -346,7 +346,6 @@ re-run starts with a clean buffer.
 | --- | --- | --- |
 | `onAssistantPersisted` | `slot.recordPersistedRow(msg)` | always |
 | `onAssistantPersisted` | `appendMessage(msg)` | only when `ctx.threadId === activeThreadId` |
-| `onToolResultPersisted` | same as above | same as above |
 | Realtime `subscribeToMessages` echo | `appendMessage(msg)` | only on the active thread (subscription is keyed on it) |
 
 `appendMessage` de-dupes by `id`, so the realtime echo for our

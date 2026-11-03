@@ -48,8 +48,6 @@ export interface ChatLoopHandlers {
   onToolError?(call: OpenAIToolCall, error: Error): void;
   /** The assistant row for the current round has been written to Supabase. */
   onAssistantPersisted?(message: Message): void;
-  /** A tool-result row has been written (fires once per tool). */
-  onToolResultPersisted?(message: Message): void;
   /**
    * The server's end-of-turn sweep deleted empty assistant rows from
    * this thread (ids carried on the END event). Fires once, after the
