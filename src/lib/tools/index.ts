@@ -100,12 +100,7 @@ import { followupCloseSchema } from './followup_close.schema';
 import { followupDismissSchema } from './followup_dismiss.schema';
 import { followupSaveSchema } from './followup_save.schema';
 import { followupListSchema } from './followup_list.schema';
-import { docSaveSchema } from './doc_save.schema';
-import { docListSchema } from './doc_list.schema';
-import { docGetSchema } from './doc_get.schema';
-import { docGrepSchema } from './doc_grep.schema';
-import { docReadSchema } from './doc_read.schema';
-import { docDeleteSchema } from './doc_delete.schema';
+import { docsSchema } from './docs.schema';
 import { imageSchema } from './image.schema';
 import { skillsSchema } from './skills.schema';
 
@@ -166,12 +161,7 @@ const followupSave = serverSideTool(followupSaveSchema);
 const followupClose = serverSideTool(followupCloseSchema);
 const followupDismiss = serverSideTool(followupDismissSchema);
 const followupList = serverSideTool(followupListSchema);
-const docList = serverSideTool(docListSchema);
-const docGet = serverSideTool(docGetSchema);
-const docGrep = serverSideTool(docGrepSchema);
-const docRead = serverSideTool(docReadSchema);
-const docSave = serverSideTool(docSaveSchema);
-const docDelete = serverSideTool(docDeleteSchema);
+const docs = serverSideTool(docsSchema);
 const image = serverSideTool(imageSchema);
 const skillsTool = serverSideTool(skillsSchema);
 
@@ -259,13 +249,14 @@ export const alwaysOnToolbox: Toolbox = {
   description:
     'The umbrella `context` recall, the three per-layer ' +
     'recall tools, and read-only surfaces (search across ' +
-    'memories / conversations / wiki / app docs; ' +
-    'plus get for memories, conversations, and wiki) ' +
+    'memories / conversations / wiki; plus get for memories, ' +
+    'conversations, and wiki) ' +
     'plus web search, ' +
     'update_title, analyze_image, analyze_pdf_page, and ask_user. ' +
     'Recipe browsing lives in the recipes combination tool and the ' +
     'cooking log in the recipe_records combination tool (both cooking ' +
-    'toolbox) - their list/get/search ops are read-only.',
+    'toolbox); Library reading lives in the docs combination tool ' +
+    '(library toolbox) - their list/get/search ops are read-only.',
   tools: [
     contextTool,
     memoryRecall,
@@ -282,10 +273,6 @@ export const alwaysOnToolbox: Toolbox = {
     recordGet,
     recordSearch,
     followupList,
-    docList,
-    docGet,
-    docGrep,
-    docRead,
     researchDocs,
     webSearch,
     updateTitle,
@@ -453,23 +440,24 @@ export const imagesToolbox: Toolbox = {
 };
 
 /**
- * Library write tools. Document reads (doc_list, doc_get, doc_grep, doc_read)
- * live in the always-on set; this toolbox carries the writes that mutate the
- * user's persistent document Library: promoting a pasted file into a permanent
- * doc, editing a doc's title/description, and deleting a doc (with its stored
- * original). The model has no file of its
- * own, so doc_save only promotes a file the user already attached to the
- * conversation.
+ * Library tools. The `docs` combination tool (list / get / grep /
+ * read / save / delete behind one op enum) carries the whole Library
+ * surface - the read ops ride inside the combo rather than always-on
+ * (one tool cannot be split across always-on and a write toolbox; the
+ * skills precedent), and the always-on description points at it.
+ * The model has no file of its own, so the save op only promotes a
+ * file the user already attached to the conversation.
  */
 export const libraryToolbox: Toolbox = {
   name: 'library',
   description:
-    "Manage the user's document Library: save a file they attached to the " +
-    'conversation as a permanent searchable document (doc_save), edit a ' +
-    "document's title or description (doc_update), or delete a document " +
-    '(doc_delete). Read paths (doc_list, doc_get, doc_grep, doc_read) are ' +
-    'always-on; this toolbox carries the writes.',
-  tools: [docSave, docDelete],
+    "Manage the user's document Library with one combination tool " +
+    '(docs): list / get / grep / read ops are read-only browsing and ' +
+    'search; op=save promotes a file they attached to the ' +
+    'conversation into a permanent searchable document or updates ' +
+    "a document's title/description; op=delete permanently removes " +
+    'a document (with its stored original).',
+  tools: [docs],
 };
 
 /**

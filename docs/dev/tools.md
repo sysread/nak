@@ -98,10 +98,11 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
 - Direct reads across every store: `memory_search` / `memory_get`,
   `conversation_search` / `conversation_get`, `wiki_search` /
   `wiki_list` / `wiki_get` plus the wiki record reads `record_list` /
-  `record_get` / `record_search`, and `doc_list` / `doc_get` / `doc_grep` /
-  `doc_read`. The `*_get` trio (`memory_get` / `conversation_get` /
+  `record_get` / `record_search`. The `*_get` trio (`memory_get` /
+  `conversation_get` /
   `wiki_get`) is the by-id drill-down behind the recall block's
-  `^N^` citations.
+  `^N^` citations. (The Library and cookbook reads moved into their
+  combos - `docs` and `recipes` - whose list/get ops are read-only.)
 - `research_docs` - one-shot sub-completion whose system prompt
   bundles the user-facing doc corpus (`docs/user/`), answering
   meta-questions about Nak itself; returns `{answer, sources}`.
@@ -191,9 +192,11 @@ surface lives in the always-on set above.
   reschedule by id) / `followup_close` / `followup_dismiss`, the
   lifecycle of the pending questions the model saves for itself.
   The read (`followup_list`) stays always-on. See `./followups.md`.
-- **`library`** - document writes: `doc_save` (promote a file the
-  user attached into a permanent searchable document, or update an
-  existing document's metadata by id), `doc_delete`. See
+- **`library`** - the `docs` combination tool (list / get / grep /
+  read / save / delete): the read ops browse and search inside
+  documents; op=save promotes a file the user attached into a
+  permanent searchable document (or updates an existing document's
+  metadata by id); op=delete removes one. See
   `./library.md`.
 - **`skills`** - the single `skills` combination tool: list / get /
   search / save / delete behind one `op` enum discriminator plus

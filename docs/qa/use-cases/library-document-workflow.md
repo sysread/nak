@@ -28,7 +28,7 @@ assistant answers ([dev: library](../../dev/library.md),
 5. Edit the document metadata, change only the description, and save.
 6. Download the original file from the document page.
 7. In chat, ask a question whose answer depends on the uploaded document,
-   then expand the assistant's `doc_grep` tool call and look for the
+   then expand the assistant's docs (op=grep) tool call and look for the
    matched document's title in its result.
 8. With `Library QA Doc` still open, click the top-bar **Upload
    document** button, then reopen `Library QA Doc` from the list.
@@ -46,7 +46,7 @@ assistant answers ([dev: library](../../dev/library.md),
 - (6) Download returns the original uploaded file, not only extracted
   text.
 - (7) The assistant can answer from the Library document; the matched
-  doc's title (`Library QA Doc`) appears inside the `doc_grep` tool-call
+  doc's title (Library QA Doc) appears inside the op=grep tool-call
   result. There is no separate source/citation chip for library docs -
   CitationsPanel renders web-search citations only.
 - (8) The upload button swaps the document page for the empty upload

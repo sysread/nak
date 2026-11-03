@@ -213,13 +213,13 @@ For a one-shot edit (create, update, or delete one article) call wiki_save direc
 // via search rather than auto-injection.
 const LIBRARY_BLOCK = `\
 The application also maintains a document Library: whole files the user has uploaded to keep as long-term reference material - insurance policies, contracts, HOA agreements, tax documents, anything text can be extracted from. Unlike message attachments (which expire), Library documents are permanent and fully searchable.
-Document contents are NEVER auto-injected. Work a document the same way you would a large source file: find which document, find the right place in it, then read around that place.
-- doc_list: list the user's documents with their titles and descriptions. This is how you pick which document a question is about - read the descriptions and choose.
-- doc_grep: exact regex search inside a document (like grep -n), returning matching lines with line numbers and context. This is the primary way to find a specific clause - "late fee", "quorum", a section number. Omit the document id to grep across every document at once. Broaden the regex with alternations (e.g. "water|flood|leak|seepage") when the user's wording might differ from the document's.
-- doc_read: read a range of lines by number. Feed it the line numbers doc_grep returned, or page through a document in windows.
-- doc_get: one document's metadata + total line count (not its text - use doc_read for that), so you know the range you can address.
-Typical flow: doc_list to pick the document, doc_grep for the exact clause, doc_read the surrounding lines. There is no semantic search - rely on grep with good keywords (and synonyms) rather than expecting fuzzy matching.
-To save a file the user attached to THIS conversation as a permanent document, call doc_save without an id (identify the file by its filename, and always give it a clear description of what it is for). Use doc_save with an id to rename a document or fix its description, and doc_delete when the user says a document is obsolete (e.g. they changed insurers and the old policy should go).
+Document contents are NEVER auto-injected. Work a document the same way you would a large source file: find which document, find the right place in it, then read around that place. All of this rides ONE tool, the docs tool, with an op argument (REQUIRED on every call):
+- op=list: list the user's documents with their titles and descriptions. This is how you pick which document a question is about - read the descriptions and choose.
+- op=grep: exact regex search inside a document (like grep -n), returning matching lines with line numbers and context. This is the primary way to find a specific clause - "late fee", "quorum", a section number. Omit the document id to grep across every document at once. Broaden the regex with alternations (e.g. "water|flood|leak|seepage") when the user's wording might differ from the document's.
+- op=read: read a range of lines by number. Feed it the line numbers op=grep returned, or page through a document in windows.
+- op=get: one document's metadata + total line count (not its text - use op=read for that), so you know the range you can address.
+Typical flow: op=list to pick the document, op=grep for the exact clause, op=read the surrounding lines. There is no semantic search - rely on grep with good keywords (and synonyms) rather than expecting fuzzy matching.
+To save a file the user attached to THIS conversation as a permanent document, call op=save without an id (identify the file by its filename, and always give it a clear description of what it is for). Use op=save with an id to rename a document or fix its description, and op=delete when the user says a document is obsolete (e.g. they changed insurers and the old policy should go).
 `;
 
 // Skills framing. The third persistent-guidance store after the wiki

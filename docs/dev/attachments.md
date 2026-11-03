@@ -352,7 +352,8 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   [`../../supabase/functions/README.md`](../../supabase/functions/README.md).
 - **Tools** ([`./tools.md`](./tools.md)) - `image` (images
   toolbox) flows output through the attachment path; `analyze_image`,
-  `analyze_pdf_page`, `doc_save`, `recipe_photos_attach` all read
+  `analyze_pdf_page`, the docs combo (op=save), the recipe_photos
+  combo (op=attach) all read
   attachment bytes via the bucket (signed URL or `downloadAttachmentBlob`).
   `analyze_image` and `analyze_pdf_page` share `tools/_vision.ts`.
 - **Models** - `ModelSpec.supportsVision` gates inline images.
