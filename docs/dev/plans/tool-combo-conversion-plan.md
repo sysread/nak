@@ -1,8 +1,9 @@
 # Tool Combo Conversion Plan (Tier 1 + Tier 2)
 
-Status: PROPOSED 2026-11-02, revised after deep-mode refinement round 1
-(seven lenses; findings folded in). One cluster per milestone; each
-milestone ships as its own deploy.
+Status: IN PROGRESS. M1 (`recipe_photos`) SHIPPED to main as squash
+f0f19a58 on 2026-11-02 (Tests + Deploy green). M2 (`image`) SHIPPED
+2026-11-03. M3-M9 pending. One cluster per milestone; each milestone
+ships as its own deploy.
 
 Read [`../tools.md`](../tools.md) first - this plan assumes its
 vocabulary (`ToolDef`, `buildToolList`, `performToolCall`, agent
