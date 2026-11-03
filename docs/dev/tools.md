@@ -96,11 +96,11 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   synthesized note from one store. The targeted, more-expensive
   drill-down tier above the deterministic `context` survey.
 - Direct reads across every store: `memory_search` / `memory_get`,
-  `conversation_search` / `conversation_get`, `wiki_search` /
-  `wiki_list` / `wiki_get` plus the wiki record reads `record_list` /
+  `conversation_search` / `conversation_get`, the wiki tool (op=search) /
+  the wiki tool (op=list) / the wiki tool (op=get) plus the wiki record reads `record_list` /
   `record_get` / `record_search`. The `*_get` trio (`memory_get` /
   `conversation_get` /
-  `wiki_get`) is the by-id drill-down behind the recall block's
+  the wiki tool (op=get)) is the by-id drill-down behind the recall block's
   `^N^` citations. (The Library and cookbook reads moved into their
   combos - `docs` and `recipes` - whose list/get ops are read-only.)
 - `research_docs` - one-shot sub-completion whose system prompt
@@ -181,8 +181,8 @@ surface lives in the always-on set above.
   / `memory_doubt` for graded confidence, `memory_relate` /
   `memory_unrelate` for the memory graph). See `./memory.md`.
 - **`wiki`** - the whole chat-driven wiki write surface.
-  Article save + delete (`wiki_save` - create without an id, or
-  rewrite by id; `wiki_delete`), the `wiki_librarian` delegation (a
+  Article save + delete (the wiki tool (op=save) - create without an id, or
+  rewrite by id; the wiki tool (op=delete)), the `wiki_librarian` delegation (a
   multi-round sub-agent for multi-article consolidations), and the
   full record write surface (`record_create` / `record_update` /
   `record_delete`, the file tools `record_file_attach` /

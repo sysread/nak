@@ -143,9 +143,9 @@ const RECALL_BLOCK = `\
 You have persistent long-term memory about this user, organised in three parallel layers: atomic facts and preferences (memories), the prior conversations those were worked out in, and an encyclopedic wiki of articles ABOUT topics in the user's life (projects, people, places).
 Topic-boundary recall is handled for you automatically: at the start of a thread, after a topic shift, or after a long stretch without a refresh (the staleness fuse), the system pre-injects relevant context as a <think> block above. That block is an index, not a synthesis: matching memory facts inline (verbatim), plus a short list of related prior conversations and wiki articles by title and id.
 That auto-injection is a topic-relevance projection, not a full inventory of what is stored: it surfaces what looked relevant to the live conversation, not everything the persistent stores contain.
-The conversation and wiki entries in that block are leads, not the content: when one looks relevant, call conversation_get or wiki_get with its id to read the actual transcript or article body before relying on it.
+The conversation and wiki entries in that block are leads, not the content: when one looks relevant, call conversation_get, or the wiki tool (op=get) with its id to read the actual transcript or article body before relying on it.
 When you want broad context about the user, their past, their projects, or what you have worked through together, consider calling \`context\` first - it searches all three layers in parallel and returns the same kind of index in one round-trip instead of three separate searches.
-For an LLM-distilled read of a single layer use memory_recall, conversation_recall, or wiki_recall - when you want the store summarised rather than indexed. For raw lookups by phrase (including "what do you remember about me?", "what does my wiki say about Y?") use memory_search, conversation_search, or wiki_search to read the actual store rather than answering from the projection.
+For an LLM-distilled read of a single layer use memory_recall, conversation_recall, or wiki_recall - when you want the store summarised rather than indexed. For raw lookups by phrase (including "what do you remember about me?", "what does my wiki say about Y?") use memory_search, conversation_search, or the wiki tool (op=search) to read the actual store rather than answering from the projection.
 Cheap conversational turns (small talk, "what time is it?", a quick code question) do not need persistent context - skip the recall step entirely on those.
 `;
 
@@ -183,25 +183,24 @@ Never break the fourth wall over them: do not mention the blocks, the comments t
 // - their projects, the people in their life, places they live or visit,
 // things they're learning or reading, ongoing experiments, their work.
 // Articles by title, written in third person, never auto-injected into
-// the chat. The block names the three read paths the assistant has to
-// the wiki - wiki_search (semantic), wiki_list (alphabetical overview),
-// wiki_get (primary-key body fetch) - and tells the model when to
-// prefer each. The scope is intentionally NOT a general encyclopedia of
-// topics that came up - external topics referenced inside a user-centric
-// article are linked (Wikipedia conventionally), not given their own
-// pages. Distinct from memory (atomic facts): the wiki carries curated
+// the chat. The block names the wiki combination tool's read ops -
+// op=search (semantic), op=list (alphabetical overview), op=get
+// (primary-key body fetch) - and tells the model when to prefer each.
+// The scope is intentionally NOT a general encyclopedia of topics that
+// came up - external topics referenced inside a user-centric article
+// are linked (Wikipedia conventionally), not given their own pages.
+// Distinct from memory (atomic facts): the wiki carries curated
 // topical articles centered on the user, that span many conversations.
 //
-// The final paragraph splits the write paths: one-shot edits go through
-// the direct wiki_save / wiki_delete tools, and a
-// consolidation that has to reason over the whole wiki delegates to the
-// wiki_librarian sub-agent.
+// The final paragraph splits the write ops: one-shot edits go through
+// the wiki tool's op=save / op=delete, and a consolidation that has to
+// reason over the whole wiki delegates to the wiki_librarian sub-agent.
 const WIKI_BLOCK = `\
 The application also maintains a user wiki: a flat collection of titled articles ABOUT THE USER - their projects, the people in their life, places they care about, things they are learning or reading, work, hobbies, experiments. Not a general encyclopedia of topics that came up.
-Articles are NEVER auto-injected into the chat - call wiki_search whenever the user references one of their own projects, a person they know, a place in their life, or a topic they have personally invested in, to retrieve the relevant article.
-For lookup by topic phrase use wiki_search; for an overview of what is in the wiki use wiki_list; once you know the id of a specific article use wiki_get to fetch the full body.
+Articles are NEVER auto-injected into the chat - call the wiki tool with op=search whenever the user references one of their own projects, a person they know, a place in their life, or a topic they have personally invested in, to retrieve the relevant article.
+For lookup by topic phrase use op=search; for an overview of what is in the wiki use op=list; once you know the id of a specific article use op=get to fetch the full body.
 The wiki is the right surface for "what is X (in the user's life)" lookups against the user's own knowledge graph; memories carry atomic facts and the wiki carries the longer-form topical entries on the user-centric subjects.
-For a one-shot edit (create, update, or delete one article) call wiki_save directly - with the article's id to rewrite it, or without one to create a new article. When the user asks to consolidate duplicates, split a sprawling page, or otherwise reshape several articles at once, call wiki_librarian with concrete instructions - it delegates to a sub-agent that reads every article and carries out the maintenance pass. Scope the request first with wiki_list / wiki_get so the instructions reference specific titles or ids; vague instructions produce vague results.
+For a one-shot edit (create, update, or delete one article) call op=save directly - with the article's id to rewrite it, or without one to create a new article. When the user asks to consolidate duplicates, split a sprawling page, or otherwise reshape several articles at once, call wiki_librarian with concrete instructions - it delegates to a sub-agent that reads every article and carries out the maintenance pass. Scope the request first with op=list / op=get so the instructions reference specific titles or ids; vague instructions produce vague results.
 `;
 
 // Library (persistent document storage). Distinct from both the wiki (short

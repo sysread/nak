@@ -32,8 +32,7 @@ import {
   MEMORY_SEARCH_WIRE_SCHEMA,
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
-import { wikiSearch } from '../tools/wiki_search.ts';
-import { wikiList } from '../tools/wiki_list.ts';
+import { wiki } from '../tools/wiki.ts';
 import { recordCreate } from '../tools/record_create.ts';
 import { recordList } from '../tools/record_list.ts';
 import { recordLinkCreate } from '../tools/record_link_create.ts';
@@ -97,55 +96,40 @@ const WIKI_SEARCH_MAX_LIMIT = 20;
 // grounding (its schema lives in _agent_tools.ts).
 // ---------------------------------------------------------------------------
 
-const WIKI_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
+// The extraction agent's wiki combo wire: search (grounding lookups)
+// + list (the alphabetical survey for dedup), narrowed to this
+// agent's read-only authority.
+const WIKI_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'wiki_search',
+    name: 'wiki',
     description:
-      "Semantic search over the user's wiki articles. Returns " +
-      '{id, title, content, updated_at, similarity?}[] ranked by relevance. ' +
-      'Use this to find the article a discrete event belongs to before ' +
-      'logging a record against it.',
+      "Read the user's wiki - encyclopedic articles about topics, " +
+      'people, places, and projects in their life. One tool, one op. ' +
+      'op=search: semantic lookup (ranked hits). op=list: the ' +
+      'alphabetical survey with short excerpts - use it to see what ' +
+      'articles already exist before creating one for an event. ' +
+      'Articles are NEVER auto-injected; this tool is how you see them.',
     parameters: {
       type: 'object',
       properties: {
+        op: {
+          type: 'string',
+          enum: ['search', 'list'],
+          description: "REQUIRED. The operation to run.",
+        },
         query: {
           type: 'string',
-          minLength: 1,
-          description: 'Natural-language query, topic, or article title.',
+          description: 'op=search only. Natural-language query, topic, or article title.',
         },
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: WIKI_SEARCH_MAX_LIMIT,
-          description: `Max results (default ${WIKI_SEARCH_DEFAULT_LIMIT}, max ${WIKI_SEARCH_MAX_LIMIT}).`,
+          maximum: 500,
+          description: 'Max results (search default 5 / max 20; list default 100 / max 500).',
         },
       },
-      required: ['query'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const WIKI_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'wiki_list',
-    description:
-      "List the user's wiki articles alphabetically. Returns " +
-      '{id, title, excerpt}[]. Use this to survey what articles exist when ' +
-      'wiki_search comes back thin and you need to pick the closest home ' +
-      'for an event.',
-    parameters: {
-      type: 'object',
-      properties: {
-        limit: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 200,
-          description: 'Max results (default 50).',
-        },
-      },
+      required: ['op'],
       additionalProperties: false,
     },
   },
@@ -339,8 +323,7 @@ function buildWikiRecordsToolbox(): Toolbox {
   return {
     name: 'wiki_records',
     tools: [
-      asAgentTool(wikiSearch, WIKI_SEARCH_WIRE_SCHEMA),
-      asAgentTool(wikiList, WIKI_LIST_WIRE_SCHEMA),
+      asAgentTool(wiki, WIKI_WIRE_SCHEMA),
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
       asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentTool(recordLinkCreate, RECORD_LINK_CREATE_WIRE_SCHEMA),

@@ -201,7 +201,8 @@ describe('buildSystemPrompt', () => {
     // Every direct-search counterpart.
     expect(prompt).toMatch(/memory_search/);
     expect(prompt).toMatch(/conversation_search/);
-    expect(prompt).toMatch(/wiki_search/);
+    // The wiki's direct search is the wiki combo's op=search.
+    expect(prompt).toMatch(/wiki tool \(op=search\)/);
     expect(prompt).toMatch(/handled.*automatically/i);
     expect(prompt).toMatch(/<think>/);
     expect(prompt).toMatch(/stale/i);

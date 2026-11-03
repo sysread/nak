@@ -213,7 +213,7 @@ async function doCreate(
   // reading the returned row and correcting itself.
   const match = await resolveNaturalKeyMatch({
     query: async (probeValue: string) => {
-      // % wildcards for containment (see wiki_save.ts); bare column
+      // % wildcards for containment (see the wiki combo's save op); bare column
       // select (PostgREST cannot carry AS aliases). RLS OFF: user_id
       // filtered explicitly - service-role bypasses RLS.
       const { data, error } = await ctx.adminClient

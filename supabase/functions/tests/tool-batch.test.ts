@@ -26,7 +26,13 @@ import {
   splitByDispatchCap,
 } from '../venice/getStreamingResponse.ts';
 import { memoryDelete } from '../venice/tools/memory_delete.ts';
-import { wikiDelete } from '../venice/tools/wiki_delete.ts';
+import { wiki } from '../venice/tools/wiki.ts';
+// Dispatch seam: the retired verb tool became the wiki combination
+// tool (op=delete) - assertions unchanged.
+const wikiDelete = {
+  execute: (args: Record<string, unknown>, ctx: ToolContext) =>
+    wiki.execute({ op: 'delete', ...args }, ctx),
+};
 import { recipes } from '../venice/tools/recipes.ts';
 
 // Dispatch seam: the retired verb tool became the recipes combination
@@ -36,11 +42,12 @@ const recipeDelete = {
     recipes.execute({ op: 'delete', ...args }, ctx),
 };
 import { recordDelete } from '../venice/tools/record_delete.ts';
+import { recipeRecords } from '../venice/tools/recipe_records.ts';
 // Dispatch seam: the retired verb tool became the recipe_records
 // combination tool (op=delete) - assertions unchanged.
 const recipeRecordDelete = {
   execute: (args: Record<string, unknown>, ctx: ToolContext) =>
-    recipes.execute({ op: 'delete', ...args }, ctx),
+    recipeRecords.execute({ op: 'delete', ...args }, ctx),
 };
 import { recordLinkDelete } from '../venice/tools/record_link_delete.ts';
 

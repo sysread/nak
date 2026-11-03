@@ -79,12 +79,7 @@ import { recipesSchema } from './recipes.schema';
 import { recipePhotosSchema } from './recipe_photos.schema';
 import { recipeRecordsSchema } from './recipe_records.schema';
 import { researchDocsSchema } from './research_docs.schema';
-import { wikiSearchSchema } from './wiki_search.schema';
-import { wikiListSchema } from './wiki_list.schema';
-import { wikiGetSchema } from './wiki_get.schema';
-
-import { wikiSaveSchema } from './wiki_save.schema';
-import { wikiDeleteSchema } from './wiki_delete.schema';
+import { wikiSchema } from './wiki.schema';
 import { wikiLibrarianSchema } from './wiki_librarian.schema';
 import { recordListSchema } from './record_list.schema';
 import { recordGetSchema } from './record_get.schema';
@@ -138,11 +133,7 @@ const recipes = serverSideTool(recipesSchema);
 const recipePhotos = serverSideTool(recipePhotosSchema);
 const recipeRecords = serverSideTool(recipeRecordsSchema);
 const researchDocs = serverSideTool(researchDocsSchema);
-const wikiSearch = serverSideTool(wikiSearchSchema);
-const wikiList = serverSideTool(wikiListSchema);
-const wikiGet = serverSideTool(wikiGetSchema);
-const wikiSave = serverSideTool(wikiSaveSchema);
-const wikiDelete = serverSideTool(wikiDeleteSchema);
+const wiki = serverSideTool(wikiSchema);
 const wikiLibrarian = serverSideTool(wikiLibrarianSchema);
 const recordList = serverSideTool(recordListSchema);
 const recordGet = serverSideTool(recordGetSchema);
@@ -260,9 +251,6 @@ export const alwaysOnToolbox: Toolbox = {
     memoryGet,
     conversationSearch,
     conversationGet,
-    wikiSearch,
-    wikiList,
-    wikiGet,
     recordList,
     recordGet,
     recordSearch,
@@ -368,17 +356,15 @@ export const memoriesToolbox: Toolbox = {
 export const wikiToolbox: Toolbox = {
   name: 'wiki',
   description:
-    "Maintain the user's wiki: create, edit, and delete encyclopedic " +
-    'articles (wiki_save / wiki_delete); delegate a ' +
-    'multi-article consolidation to the librarian sub-agent ' +
-    '(wiki_librarian); create, edit, and delete the dated records that ' +
-    "track an article's journey, attach conversation files to a record, " +
-    'and cross-link related records. Read paths (wiki_search, wiki_list, ' +
-    'wiki_get, wiki_recall, record_list, record_get, record_search) are ' +
-    'always-on; this toolbox carries the writes.',
+    "Maintain the user's wiki with two combination tools: the wiki " +
+    'tool (list / get / search / save / delete ops - the read ops ' +
+    'ride inside it) for articles, and wiki_librarian to delegate a ' +
+    'multi-article consolidation; plus the dated records that track ' +
+    "an article's journey: create, edit, and delete them, attach " +
+    'conversation files to a record, and cross-link related records ' +
+    '(the record reads are always-on).',
   tools: [
-    wikiSave,
-    wikiDelete,
+    wiki,
     wikiLibrarian,
     recordCreate,
     recordUpdate,

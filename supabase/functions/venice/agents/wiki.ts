@@ -54,9 +54,7 @@ import {
   MEMORY_SEARCH_WIRE_SCHEMA,
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
-import { wikiSearch } from '../tools/wiki_search.ts';
-import { wikiSave } from '../tools/wiki_save.ts';
-import { wikiDelete } from '../tools/wiki_delete.ts';
+import { wiki } from '../tools/wiki.ts';
 import { recordList } from '../tools/record_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
 import { recordUpdate } from '../tools/record_update.ts';
@@ -190,84 +188,72 @@ const WIKI_SEARCH_MAX_LIMIT = 20;
 // extracted; the wiki agent never gets memory write tools.
 // ---------------------------------------------------------------------------
 
-const WIKI_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
+// The wiki agent's combo wire: ONE tool (the chat-side wiki
+// combination tool) with the op enum narrowed to this agent's
+// authority - search / save / delete. The per-op descriptions keep
+// the agent-flavored contract text (agents run without the chat
+// system prompt). NO list/get: this agent works per-conversation on
+// a topic, not on the wiki's shape.
+const WIKI_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'wiki_search',
+    name: 'wiki',
     description:
-      "Semantic search over the user's wiki - flat encyclopedic articles " +
-      'about topics, people, places, and projects in their life (with ' +
-      'substring fallback for rows the embeddings worker has not yet ' +
-      'processed). Returns {id, title, content, updated_at, similarity?}[] ' +
-      'ranked by relevance. Articles are NEVER auto-injected into the chat; ' +
-      'this is the only way to surface them.',
+      "Read and maintain the user's wiki - flat encyclopedic articles " +
+      'about topics, people, places, and projects in their life. One ' +
+      'tool, one op. op=search: semantic lookup over the wiki ' +
+      '(ranked by relevance). Articles are NEVER auto-injected into ' +
+      'the chat; this is the only way to surface them. op=save: ' +
+      'create a new article or update an existing one by id (omit id ' +
+      'to create; title + content required; titles unique per user - ' +
+      'an exact-title match routes to that update and a near-match is ' +
+      'refused with candidates named; preserve existing facts unless ' +
+      "the user has explicitly contradicted them). op=delete: remove " +
+      'an article for consolidation only - when one article is now ' +
+      'strictly subsumed by another just updated; never delete on ' +
+      '"the user said something contradictory today" (update instead). ' +
+      'message is required on save + delete: one imperative-voice line ' +
+      'on WHY, landing in the changelog the user audits.',
     parameters: {
       type: 'object',
       properties: {
-        query: {
+        op: {
           type: 'string',
-          minLength: 1,
-          description: 'Natural-language query, topic, or article title.',
+          enum: ['search', 'save', 'delete'],
+          description: 'REQUIRED. The operation to run.',
         },
-        limit: {
-          type: 'integer',
-          minimum: 1,
-          maximum: WIKI_SEARCH_MAX_LIMIT,
-          description: `Max results (default ${WIKI_SEARCH_DEFAULT_LIMIT}, max ${WIKI_SEARCH_MAX_LIMIT}).`,
-        },
-      },
-      required: ['query'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const WIKI_SAVE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'wiki_save',
-    description:
-      "Save a wiki article: create a new one, or update an existing one " +
-      'by id. Omit id to create (title + content required); pass id ' +
-      '(from wiki_search) to update, providing only the fields that ' +
-      'change. Titles must stay unique per user; creating with a title ' +
-      'that exactly matches an existing article updates that article ' +
-      'instead (the row carries matched_existing), and a near-match is ' +
-      'refused with the candidates named. Preserve existing facts ' +
-      'unless the user has explicitly contradicted them. Returns the ' +
-      'saved row. When invoked by the librarian, `source_thread_ids` ' +
-      'carries the thread ids whose content informed this update so ' +
-      "they land in the article's bibliography; the autonomous wiki " +
-      'agent leaves it unset (its current thread is attached ' +
-      'automatically).',
-    parameters: {
-      type: 'object',
-      properties: {
         id: {
           type: 'string',
           description:
-            'UUID of the article to update (from wiki_search). Omit to ' +
-            'create a new article.',
+            'UUID of the article. op=save: the article to update ' +
+            '(omit to create). op=delete: the article to remove ' +
+            '(required). From op=search.',
+        },
+        query: {
+          type: 'string',
+          minLength: 1,
+          description: 'op=search only. Natural-language query, topic, or article title.',
         },
         title: {
           type: 'string',
           minLength: 1,
           maxLength: MAX_WIKI_TITLE_CHARS,
-          description: 'Article title (the topic name).',
+          description: 'op=save only. Article title (the topic name).',
         },
         content: {
           type: 'string',
           minLength: 1,
           maxLength: MAX_WIKI_CONTENT_CHARS,
-          description: 'Article body, encyclopedic third-person prose.',
+          description: 'op=save only. Article body, encyclopedic third-person prose.',
         },
         message: {
           type: 'string',
           minLength: 1,
           maxLength: MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
           description:
-            'Required. One-line summary of why this article is being ' +
-            'saved. Written in the imperative voice ("Add Jeff\'s sister ' +
+            'op=save + op=delete (required). One-line summary of why ' +
+            'this article is being saved or removed. Written in the ' +
+            'imperative voice ("Add Jeff\'s sister ' +
             'Maya, recently moved to Seattle" / "Correct Maya\'s employer ' +
             'to Bar (from November 2026 chat)") so the changelog reads ' +
             'as a log of discrete decisions. Lands in the wiki changelog ' +
@@ -278,51 +264,14 @@ const WIKI_SAVE_WIRE_SCHEMA: AgentTool['wire'] = {
           items: { type: 'string' },
           maxItems: 20,
           description:
-            'Thread ids whose content informed this save. The librarian ' +
-            'populates this with ids from conversation_search results; ' +
+            'op=save only. Thread ids whose content informed this save. ' +
+            'The librarian populates this with ids from conversation_search results; ' +
             'unknown ids are silently dropped (validated against the ' +
             'threads table). Leave unset on the autonomous path - the ' +
             'current thread is attached automatically by the tool.',
         },
       },
-      required: ['message'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const WIKI_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'wiki_delete',
-    description:
-      'Delete a wiki article by id. Use only for consolidation - when one ' +
-      'article is now strictly subsumed by another article you just updated. ' +
-      'Never delete on the basis of "the user said something contradictory ' +
-      'today" alone; in that case, update the article to reflect the new view. ' +
-      'message is a one-line commit-message-style summary of WHY you are ' +
-      `removing this article (max ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars); ` +
-      'it lands in the wiki changelog so the user can audit the deletion.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: {
-          type: 'string',
-          description: 'UUID of the article (from wiki_search).',
-        },
-        message: {
-          type: 'string',
-          minLength: 1,
-          maxLength: MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
-          description:
-            'One-line summary of why this article is being removed. Written ' +
-            "in the imperative voice (\"Delete 'Kermit protocol' as out-of-" +
-            'scope") so the changelog reads as a log of discrete decisions. ' +
-            'Lands in the wiki changelog the user can browse from the Wiki ' +
-            'top bar.',
-        },
-      },
-      required: ['id', 'message'],
+      required: ['op'],
       additionalProperties: false,
     },
   },
@@ -1019,9 +968,7 @@ function buildWikiToolbox(): Toolbox {
   return {
     name: 'wiki',
     tools: [
-      asAgentTool(wikiSearch, WIKI_SEARCH_WIRE_SCHEMA),
-      asAgentTool(wikiSave, WIKI_SAVE_WIRE_SCHEMA),
-      asAgentTool(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
+      asAgentTool(wiki, WIKI_WIRE_SCHEMA),
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
       asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentTool(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),

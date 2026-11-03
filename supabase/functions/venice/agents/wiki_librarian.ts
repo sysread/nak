@@ -47,12 +47,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
-import { wikiSearch } from '../tools/wiki_search.ts';
+import { wiki } from '../tools/wiki.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
 import { conversationGet } from '../tools/conversation_get.ts';
 import { memorySearch } from '../tools/memory_search.ts';
-import { wikiSave } from '../tools/wiki_save.ts';
-import { wikiDelete } from '../tools/wiki_delete.ts';
 import { recordList } from '../tools/record_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
 import { recordUpdate } from '../tools/record_update.ts';
@@ -97,21 +95,69 @@ const LIBRARIAN_ARTICLE_LIMIT = 500;
 // they live here rather than in _agent_tools.ts.
 // ---------------------------------------------------------------------------
 
-const WIKI_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
+const WIKI_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'wiki_search',
+    name: 'wiki',
     description:
-      "Semantic search over the user's wiki - encyclopedic articles " +
-      'about projects, people, places, and topics in their life. ' +
-      'Returns matching articles with their full body inlined.',
+      "Read and maintain the user's wiki - encyclopedic articles " +
+      'about projects, people, places, and topics in their life. One ' +
+      'tool, one op. op=search: semantic search, matching articles ' +
+      'with their full body inlined. op=save: rewrite an existing ' +
+      'article in place - pass the article id plus either `title` or ' +
+      '`content` (or both); you NEVER create articles, so id is ' +
+      'always required on save (the wrapper rejects an id-less save ' +
+      'before the tool runs). Optionally pass `source_thread_ids` ' +
+      '(thread ids from your most recent conversation_search results) ' +
+      'to attribute the update. op=delete: hard-delete an article - ' +
+      'use only for consolidation (you just merged its content into ' +
+      'another) or out-of-scope cleanup. Every save + delete call ' +
+      'requires a `message` (imperative-voice changelog summary, ' +
+      'max 200 chars, like a git commit message) landing in the ' +
+      'changelog the user audits.',
     parameters: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Natural-language query.' },
-        limit: { type: 'integer', minimum: 1, maximum: 20 },
+        op: {
+          type: 'string',
+          enum: ['search', 'save', 'delete'],
+          description: 'REQUIRED. The operation to run.',
+        },
+        id: {
+          type: 'string',
+          description:
+            'Article id. op=save: the article to rewrite (required - ' +
+            'you never create). op=delete: the article to delete ' +
+            '(required). From op=search.',
+        },
+        query: {
+          type: 'string',
+          description: 'op=search only. Natural-language query.',
+        },
+        message: {
+          type: 'string',
+          description:
+            'op=save + op=delete (required). Imperative-voice ' +
+            'changelog summary. Treat like a git commit message.',
+        },
+        title: {
+          type: 'string',
+          description: 'op=save only. New title (optional).',
+        },
+        content: {
+          type: 'string',
+          description: 'op=save only. New content (optional).',
+        },
+        source_thread_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'op=save only. Thread ids from conversation_search results that informed ' +
+            'this update; validated server-side and silently dropped if ' +
+            'they do not belong to the user.',
+        },
       },
-      required: ['query'],
+      required: ['op'],
       additionalProperties: false,
     },
   },
@@ -177,68 +223,6 @@ const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
         query: { type: 'string' },
         limit: { type: 'integer', minimum: 1, maximum: 50 },
       },
-      additionalProperties: false,
-    },
-  },
-};
-
-const WIKI_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'wiki_save',
-    description:
-      'Rewrite an existing wiki article in place. Pass the article id ' +
-      'plus either `title` or `content` (or both) - you NEVER create ' +
-      'articles, so id is always required here. Every call requires a ' +
-      '`message` (changelog summary, max 200 chars). Optionally pass ' +
-      '`source_thread_ids` (an array of thread ids from your most ' +
-      'recent conversation_search results) to attribute the update.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Article id to update.' },
-        message: {
-          type: 'string',
-          description:
-            'Imperative-voice changelog summary. Treat like a git ' +
-            'commit message.',
-        },
-        title: { type: 'string', description: 'New title (optional).' },
-        content: { type: 'string', description: 'New content (optional).' },
-        source_thread_ids: {
-          type: 'array',
-          items: { type: 'string' },
-          description:
-            'Thread ids from conversation_search results that informed ' +
-            'this update; validated server-side and silently dropped if ' +
-            'they do not belong to the user.',
-        },
-      },
-      required: ['id', 'message'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const WIKI_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'wiki_delete',
-    description:
-      'Hard-delete a wiki article. Use only for consolidation (you ' +
-      'just merged its content into another article) or out-of-scope ' +
-      'cleanup. Every call requires a `message` (changelog summary, ' +
-      'max 200 chars).',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Article id to delete.' },
-        message: {
-          type: 'string',
-          description: 'Imperative-voice changelog summary.',
-        },
-      },
-      required: ['id', 'message'],
       additionalProperties: false,
     },
   },
@@ -451,17 +435,46 @@ function asAgentToolNoCreate(tool: ToolDef, wire: AgentTool['wire']): AgentTool 
   };
 }
 
+/**
+ * The librarian's wiki tool: ONE combo def with BOTH guards composed.
+ * NoThread on every call (the delegating chat thread is NOT a content
+ * source - attribution rides the model-supplied source_thread_ids
+ * parameter; the autonomous agent's threadId auto-attach must not
+ * fire here). Plus the no-create guard on op=save: the librarian
+ * never creates articles - new subjects flow from the autonomous
+ * per-thread agent - and the combo merged create+update into one
+ * save op, so the guard rejects an id-absent save before the impl
+ * runs.
+ */
+function asLibrarianWikiTool(): AgentTool {
+  const inner = asAgentToolNoThread(wiki, WIKI_WIRE_SCHEMA);
+  return {
+    name: inner.name,
+    wire: WIKI_WIRE_SCHEMA,
+    execute: async (args, agentCtx) => {
+      if (
+        args.op === 'save' &&
+        !(typeof args.id === 'string' && args.id.trim().length > 0)
+      ) {
+        throw new Error(
+          'wiki save without an id would create a new article, but the librarian never creates - ' +
+            'find the article id with the search op and pass it.',
+        );
+      }
+      return inner.execute(args, agentCtx);
+    },
+  };
+}
+
 function buildLibrarianToolbox(): Toolbox {
   return {
     name: 'wikiLibrarian',
     tools: [
-      asAgentTool(wikiSearch, WIKI_SEARCH_WIRE_SCHEMA),
+      asLibrarianWikiTool(),
       asAgentTool(conversationSearch, CONVERSATION_SEARCH_WIRE_SCHEMA),
       asAgentTool(conversationGet, CONVERSATION_GET_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
-      asAgentToolNoCreate(wikiSave, WIKI_UPDATE_WIRE_SCHEMA),
-      asAgentToolNoThread(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
       asAgentToolNoThread(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordDelete, RECORD_DELETE_WIRE_SCHEMA),

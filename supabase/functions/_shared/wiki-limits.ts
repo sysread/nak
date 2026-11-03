@@ -1,8 +1,8 @@
 /**
  * Wiki char-limit constants for the edge function side.
  * Mirrors the four limits in src/lib/wiki.ts. Consolidated here
- * so the wiki tools (tools/wiki_create.ts, wiki_update.ts,
- * wiki_delete.ts), the record helpers (tools/_record_helpers.ts),
+ * so the wiki combination tool (tools/wiki.ts), the record helpers
+ * (tools/_record_helpers.ts),
  * the wiki agent (agents/wiki.ts), the wiki_records agent
  * (agents/wiki_records.ts), and the embed input composer
  * (_shared/embed-input.ts) all reference one source instead of

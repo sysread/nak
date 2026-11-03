@@ -81,7 +81,7 @@ Each article has just two fields:
 ## Searching
 
 The search bar above the listing filters the drawer in place. It uses
-the same semantic-search pipeline the assistant uses for `wiki_search`
+the same semantic-search pipeline the assistant uses for the wiki tool (op=search)
 (see "How the assistant uses the wiki" below) - typing a phrase finds
 articles by meaning, not just by literal substring. Substring matches
 are merged in too, so an article you wrote ten seconds ago (before the
@@ -195,7 +195,7 @@ destructive action, **Cancel** dismisses the prompt.
 
 Deletes are hard - the article doesn't move to a trash bin. If you
 delete by mistake the easy recovery is to ask the assistant to
-reconstruct it from the relevant conversations and call `wiki_save`,
+reconstruct it from the relevant conversations and call the wiki tool (op=save),
 or to recreate it manually. The deletion stays visible in the
 [changelog](#changelog) with the title snapshot and the reason you
 typed, so the audit trail survives even when the article doesn't.
@@ -534,8 +534,8 @@ on.
   will NOT also perform the broader periodic sweep - it stays
   inside the scope you specified.
 
-A manual run is irreversible - the librarian's `wiki_save` and
-`wiki_delete` tools write to your wiki directly, with no preview
+A manual run is irreversible - the librarian's the wiki tool (op=save) and
+the wiki tool (op=delete) tools write to your wiki directly, with no preview
 step. The confirmation strip surfaces this before you commit.
 
 A manual run does **not** reset the 12-hour cadence for the next
@@ -551,8 +551,8 @@ instead of racing two passes over the wiki.
 You can also ask Nak to invoke the librarian from inside a normal
 conversation - for example, "consolidate my duplicate Maya articles"
 or "delete the kettle stub and tidy any references to it." The
-assistant has read access to your wiki (`wiki_list`, `wiki_get`,
-`wiki_search`) for surveying the shape of what is there, and it can
+assistant has read access to your wiki (the wiki tool (op=list), the wiki tool (op=get),
+the wiki tool (op=search)) for surveying the shape of what is there, and it can
 delegate maintenance tasks to the librarian through a `wiki_librarian`
 tool, on the fly when the conversation makes maintenance the obvious
 next step.
@@ -612,10 +612,10 @@ empty wiki).
 ## How the assistant uses the wiki
 
 Articles are **never** auto-injected into the chat. The assistant
-reaches them only through `wiki_search`, an always-on tool registered
+reaches them only through the wiki tool (op=search), an always-on tool registered
 on every conversation. When you mention something topical or factual
 about yourself - a project, a person, a place, a habit - the
-assistant will call `wiki_search` to pull the relevant article so its
+assistant will call the wiki tool (op=search) to pull the relevant article so its
 reply is grounded rather than guessing.
 
 This is the deliberate split between the two knowledge surfaces:
@@ -626,7 +626,7 @@ This is the deliberate split between the two knowledge surfaces:
   retrieved on demand.
 
 If you want the assistant to use a particular article, mention the
-topic (or the title) directly - that's the cue for `wiki_search`.
+topic (or the title) directly - that's the cue for the wiki tool (op=search).
 
 ### Letting the assistant edit the wiki
 

@@ -11,8 +11,12 @@
 import { assertRejects, assertEquals } from '@std/assert';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ToolContext } from '../venice/performToolCall.ts';
-import { wikiSave } from '../venice/tools/wiki_save.ts';
-import { wikiDelete } from '../venice/tools/wiki_delete.ts';
+import { wiki } from '../venice/tools/wiki.ts';
+
+// Dispatch seam: the retired verb tools became the wiki combination
+// tool - the favorite-lock guard lives in the save + delete op bodies.
+const wikiSave = { execute: (args: Record<string, unknown>, ctx: ToolContext) => wiki.execute({ op: 'save', ...args }, ctx) };
+const wikiDelete = { execute: (args: Record<string, unknown>, ctx: ToolContext) => wiki.execute({ op: 'delete', ...args }, ctx) };
 
 interface FakeCtx {
   ctx: ToolContext;
