@@ -67,3 +67,5 @@ assistant answers ([dev: library](../../dev/library.md),
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-11-03 | local (dev@nak.local) | ea60d19 (pre-M5 baseline) | PASS 9/9 | Baseline before doc_* -> `docs` combo. All 9 steps pass. Processing chip not observable on a 57 B text file. Fixture injected in-memory (no /tmp write). Title prefixed ZZQA-TC. All six verbs mapped (grep-then-read loop, promotion + refusal shapes). The model fanned out doc_list + doc_get + doc_read in ONE parallel round. |
+| 2026-11-03 | local (dev@nak.local) | 3e9807cf (post-M5, `docs` combo) | PASS 9/9 | Attempt 1 BLOCKED (serve down - the process died in the mid-application file changes and was not restarted; not code rot). Attempt 2: all six ops verified through the combo with op-specific plain-English activity labels. Fan-out watch item: parallel calls to the same combo still fan out (3 calls, one round, 23-26ms). ZERO op-omissions (6/6 first-try) - the REQUIRED-on-every-call schema phrasing credits. Stale dev-doc framing fixed in the same landing (docs/dev/README.md's chunked-Library description). |

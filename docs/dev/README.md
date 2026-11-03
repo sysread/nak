@@ -106,9 +106,11 @@ changing a contract that other features depend on.
   recipe-edit invalidation trigger, shopping trips with the
   In-cart section, and the item-photo bucket plus its GC sweep.
 - [Library](./library.md) — persistent uploaded documents:
-  the `documents` + `document_chunks` tables, the Storage
-  bucket for originals, browser-side extraction + chunking,
-  the chunk-level embedding search, the `doc_*` tools, and
+  the `documents` table (whole extracted text, no chunking - the
+  chunked schema is retired), the Storage
+  bucket for originals, browser-side extraction,
+  exact regex search over the extracted text, the `docs`
+  combination tool, and
   the Library drawer tab + panel.
 - [Offline cache](./offline-cache.md) — the per-device IndexedDB
   mirror of favorited articles and favorited/upcoming recipes, the
