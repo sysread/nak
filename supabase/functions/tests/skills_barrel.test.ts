@@ -33,7 +33,7 @@ Deno.test('the tool barrel registers the skills combination tool', () => {
 // missing (a module edited to drop its registerTool call, or a barrel
 // line whose import resolves to nothing). Bump the floor alongside
 // any change that removes tools; additions need nothing.
-const MIN_REGISTERED_TOOLS = 49;
+const MIN_REGISTERED_TOOLS = 46;
 
 Deno.test(`the registry carries at least ${MIN_REGISTERED_TOOLS} registrations`, () => {
   const names = listRegisteredTools();

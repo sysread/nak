@@ -23,7 +23,7 @@ import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '.
 import { memorySearch } from '../tools/memory_search.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
 import { wikiSearch } from '../tools/wiki_search.ts';
-import { followupList } from '../tools/followup_list.ts';
+import { followups as followupsTool } from '../tools/followups.ts';
 import { logPreview } from './_recall_helpers.ts';
 
 // Per-layer caps. Memories ride inline so the cap also bounds the
@@ -180,7 +180,7 @@ export const contextTool: ToolDef = {
           ctx,
         ),
         wikiSearch.execute({ query, limit: CONTEXT_WIKI_LIMIT }, ctx),
-        followupList.execute({}, ctx),
+        followupsTool.execute({ op: 'list' }, ctx),
       ]);
 
       if (memoryR.status === 'rejected') {

@@ -38,7 +38,7 @@ Deno.test('reflection prompt does not promise a confidence bump on update', () =
   assertStringIncludes(p, 'memory_reaffirm to nudge its confidence');
 });
 
-Deno.test('reflection toolbox is the soft-decay memory set plus follow-up verbs, in declared order', () => {
+Deno.test('reflection toolbox is the soft-decay memory set plus the followups combo, in declared order', () => {
   const toolbox = __test.buildReflectionToolbox();
   assertEquals(toolbox.name, 'reflection');
   assertEquals(
@@ -51,9 +51,7 @@ Deno.test('reflection toolbox is the soft-decay memory set plus follow-up verbs,
       'memory_doubt',
       'memory_relate',
       'memory_unrelate',
-      'followup_list',
-      'followup_save',
-      'followup_close',
+      'followups',
     ],
   );
 });
@@ -63,8 +61,17 @@ Deno.test('reflection toolbox excludes hard-delete, dismiss, and the UI tool', (
   assertEquals(names.includes('memory_delete'), false);
   assertEquals(names.includes('ask_user'), false);
   // Dismissal is the user's veto, expressed live in chat - a background
-  // agent must never infer "stop asking" from a transcript.
-  assertEquals(names.includes('followup_dismiss'), false);
+  // agent must never infer "stop asking" from a transcript. The combo
+  // carries the dismiss op for chat, so the WIRE ENUM is the enforcement
+  // layer now: reflection's pinned wire narrows the op enum to
+  // list / save / close.
+  const followupsTool = __test.buildReflectionToolbox().tools.find((t) => t.name === 'followups')!;
+  const wireParams = followupsTool.wire.function.parameters as {
+    properties: { op: { enum: string[] } };
+  };
+  const wireEnum = wireParams.properties.op.enum;
+  assertEquals(wireEnum.includes('dismiss'), false);
+  assertEquals(wireEnum, ['list', 'save', 'close']);
 });
 
 Deno.test('reflection prompt reconciles follow-ups with the answered-check guard', () => {
@@ -72,8 +79,8 @@ Deno.test('reflection prompt reconciles follow-ups with the answered-check guard
   // thread whose outcome already landed in a different conversation,
   // and must not mint a fresh follow-up for a resolved plan.
   const p = __test.REFLECTION_PROMPT;
-  assertStringIncludes(p, 'followup_list');
-  assertStringIncludes(p, 'followup_close');
+  assertStringIncludes(p, 'op=list');
+  assertStringIncludes(p, 'op=close');
   assertStringIncludes(p, 'already answered/dismissed');
   // The prompt wraps at ~76 chars, so the sentence may break across
   // lines - assert on the stable fragment.

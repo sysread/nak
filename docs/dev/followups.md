@@ -74,13 +74,13 @@ gather (never inferred by the smoothing model):
   `MAX_UNANSWERED_SURFACINGS` 3, `DUE_EXPIRY_MS` 30d) - LAUNCH
   PLACEHOLDERS tuned for feel, not data. Vitest-pinned in
   `tests/followups.test.ts`.
-- `supabase/functions/venice/tools/followup_*.ts` - the five tool
-  impls (create / update / close / dismiss / list), b-strict
-  throughout. `followup_list` returns `{open, recently_closed}` -
+- `supabase/functions/venice/tools/followups.ts` - the combination
+  tool impl (one op-switch def over list / save / close / dismiss),
+  b-strict throughout. The list op returns `{open, recently_closed}` -
   the closed window is the create-side dedup evidence.
-- `src/lib/tools/followup_*.schema.ts` - the browser wire schemas;
-  `followupsToolbox` + the always-on `followup_list` registration in
-  `src/lib/tools/index.ts`.
+- `src/lib/tools/followups.schema.ts` - the browser wire schema;
+  `followupsToolbox` in `src/lib/tools/index.ts` (the list op rides
+  the combo there).
 - `supabase/functions/venice/priming/context-recall.ts` -
   `gatherFollowups` (the fourth arm: due pull + semantic union +
   lazy expiry) and `stampFollowupLedger` (the post-smoothing ask
@@ -127,13 +127,13 @@ One table, `followups`:
   NULL = never proactively asked; the loop surfaces only when the
   topic comes up semantically, and never expires (its "outcome
   unknown" stays true until the user resolves it).
-- `resolution text` - stamped by `followup_close`. Audit only.
+- `resolution text` - stamped by the close op. Audit only.
 - `last_surfaced_at` / `surface_count` - the anti-nag ledger.
   Written ONLY by `stampFollowupLedger`, which the pipeline calls
   AFTER the smoothing pass ships a non-empty note - a surfacing
   counts when it is delivered, not when it is gathered (see
   Gotchas). Semantic surfacing is not an ask-prompt, so it neither
-  stamps the ledger nor counts toward expiry. `followup_save`
+  stamps the ledger nor counts toward expiry. The save op
   resets the ledger when it changes `relevant_after` - a rescheduled
   plan has a fresh ask horizon.
 - `embedding` + model + claim columns - rides the standard backfill
@@ -141,24 +141,24 @@ One table, `followups`:
 
 ## Lifecycle contracts
 
-- `followup_save({question, context?, relevant_after?})` - create form (no id):
-  callers check `followup_list` first; a question already open OR
+- `op=save` (`{question, context?, relevant_after?}`) - create form (no id):
+  callers list first; a question already open OR
   already answered/dismissed must not be created again. The
   answered/dismissed half is the **stale re-creation guard**:
   reflection may process an old planning thread AFTER the outcome
   landed in a different conversation, and must not mint a fresh
   loop for a resolved plan.
-- `followup_save({id, question?, context?, relevant_after?})` - revise form:
+- `op=save` (`{id, question?, context?, relevant_after?}`) - revise form:
   the reschedule/revise verb for a plan that MOVED rather than
   resolved. `relevant_after: null` clears the date. Open rows only.
-- `followup_close({id, resolution})` - open rows only, so a
+- `op=close` (`{id, resolution}`) - open rows only, so a
   double-close reads as not-found instead of silently rewriting a
   recorded resolution.
-- `followup_dismiss({id})` - the user's veto ("stop asking about
+- `op=dismiss` (`{id}`) - the user's veto ("stop asking about
   that"). Chat-only: reflection deliberately does NOT carry it,
   because a background agent must never infer "stop asking" from a
   transcript.
-- `followup_list()` - always-on read; `{open, recently_closed}`.
+- `op=list` () - read; `{open, recently_closed}`.
 
 ## How outcomes reach the descriptive layers
 
@@ -272,8 +272,8 @@ written BEFORE the implementation:
 - **Memory** ([`memory.md`](./memory.md)) - reflection is the
   subconscious writer for both stores and the guaranteed
   outcome-memory path. Follow-ups never write memory state.
-- **Tools** ([`tools.md`](./tools.md)) - the gated `followups`
-  write box + always-on `followup_list`; the toggle mirror
+- **Tools** ([`tools.md`](./tools.md)) - the `followups`
+  combo (the list op rides inside it); the toggle mirror
   discipline applies.
 - **Embeddings** ([`embeddings.md`](./embeddings.md)) - one more
   `EMBED_SOURCES` entry + claim/save RPC pair.
