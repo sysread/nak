@@ -429,37 +429,6 @@ function asLibrarianWikiTool(): AgentTool {
   };
 }
 
-/**
- * The librarian's wiki tool: ONE combo def with BOTH guards composed.
- * NoThread on every call (the delegating chat thread is NOT a content
- * source - attribution rides the model-supplied source_thread_ids
- * parameter; the autonomous agent's threadId auto-attach must not
- * fire here). Plus the no-create guard on op=save: the librarian
- * never creates articles - new subjects flow from the autonomous
- * per-thread agent - and the combo merged create+update into one
- * save op, so the guard rejects an id-absent save before the impl
- * runs.
- */
-function asLibrarianWikiTool(): AgentTool {
-  const inner = asAgentToolNoThread(wiki, WIKI_WIRE_SCHEMA);
-  return {
-    name: inner.name,
-    wire: WIKI_WIRE_SCHEMA,
-    execute: async (args, agentCtx) => {
-      if (
-        args.op === 'save' &&
-        !(typeof args.id === 'string' && args.id.trim().length > 0)
-      ) {
-        throw new Error(
-          'wiki save without an id would create a new article, but the librarian never creates - ' +
-            'find the article id with the search op and pass it.',
-        );
-      }
-      return inner.execute(args, agentCtx);
-    },
-  };
-}
-
 function buildLibrarianToolbox(): Toolbox {
   return {
     name: 'wikiLibrarian',
