@@ -17,6 +17,7 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ToolCallRequest } from '../_shared/venice-stream.ts';
+import type { ToolContext } from '../venice/performToolCall.ts';
 import {
   askUserRowContent,
   DEFERRED_TOOL_MESSAGE,
@@ -26,7 +27,14 @@ import {
 } from '../venice/getStreamingResponse.ts';
 import { memoryDelete } from '../venice/tools/memory_delete.ts';
 import { wikiDelete } from '../venice/tools/wiki_delete.ts';
-import { recipeDelete } from '../venice/tools/recipe_delete.ts';
+import { recipes } from '../venice/tools/recipes.ts';
+
+// Dispatch seam: the retired verb tool became the recipes combination
+// tool (op=delete) - assertions unchanged.
+const recipeDelete = {
+  execute: (args: Record<string, unknown>, ctx: ToolContext) =>
+    recipes.execute({ op: 'delete', ...args }, ctx),
+};
 import { recordDelete } from '../venice/tools/record_delete.ts';
 import { recipeRecordDelete } from '../venice/tools/recipe_record_delete.ts';
 import { recordLinkDelete } from '../venice/tools/record_link_delete.ts';

@@ -1,8 +1,8 @@
-# Cookbook: recipe_save refuses text that would not render
+# Cookbook: the recipes save op refuses text that would not render
 
 ## Covers
 
-The save-time checks `recipe_save` runs before writing
+The save-time checks the recipes tool (op=save) runs before writing
 ([dev: cookbook](../../dev/cookbook.md), "Save-time validation"
 gotcha): a note written as a `#` heading (empty section), a `##`
 heading, a `--` glued to a range, literal `\n` escapes, and syntax
@@ -24,7 +24,7 @@ resubmission must render the text it originally lost.
    altitude`. Then a section `== Bake ==` with one step: Bake the
    @potatoes{2} for 20--25 minutes. Then a line `## Serve` and the
    step Serve hot."
-2. Open the recipe_save tool call(s) in the turn's tool-call panel.
+2. Open the recipes tool call(s) in the turn's tool-call panel.
 3. Open the saved recipe in the Cookbook detail pane.
 4. Send: "Edit ZZQA Save Validation: add a first step reading exactly
    `Preheat to {400°F}, then roast ~{12-15 min} with @olive oil{1%1%tbsp}.`"
@@ -32,11 +32,11 @@ resubmission must render the text it originally lost.
 
 ## Expected
 
-- (1)(2) The first recipe_save call fails. Its error lists three
+- (1)(2) The first save call fails. Its error lists three
   problems: the `# NOTE...` heading has no lines under it, the
   `20--25` line would lose "-25 minutes", and `## Serve` is not a
   heading. No recipe row exists after that failed call.
-- (2) A later recipe_save call in the same turn succeeds with a fixed
+- (2) A later save call in the same turn succeeds with a fixed
   body (the note as a plain line, a single-hyphen range, `== Serve ==`
   or `# Serve`).
 - (3) The detail pane shows the altitude note, "20-25 minutes", and a
@@ -59,3 +59,4 @@ On the hosted app, delete the recipe from the Cookbook panel.
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-11-03 | local (dev@nak.local, glm-5-3-flash) | 3235f2d (pre-M3 baseline) | PASS (4/4) | All 4 refusal/retry pairs behaved as specified: first-call failures listed all three problems each (heading-with-no-lines, `--` comment eating the range, `##` not a heading; then raw `{400°F}`, missing `%` in the timer, double-`%` olive oil), nothing written by failed calls, both retries passed first-try, rendered pane correct (note plain-ish, `20-25 minutes` live timer, clean amounts). 4 tool calls, all `recipe_save`; no read verb used at any point; the edit re-sent the full cooklang document with id (reconstructed from the model's own earlier turn). Model pre-diagnosed the second refusal set in prose and made the failing call deliberately - if the post-change run skips failing calls entirely, that is model behavior, not validator drift. Out of scope, unverified: the detail header showed five filled stars while `rating` was null (likely the unrated control's styling in this theme). |

@@ -7,7 +7,7 @@ The full recipe lifecycle in the Cookbook panel and its LLM tool path
 immutable version log + revert, photo attach/reorder/caption + the
 lightbox, the Upcoming / Favorites bookmark flags, click-to-rate, the
 plain-text / Markdown / Cooklang copy exports (AnyList-transfer
-framing), and a model-driven `recipe_save` landing live via the
+framing), and a model-driven recipes (op=save) landing live via the
 realtime relay ([dev: tools](../../dev/tools.md),
 [dev: chat](../../dev/chat.md)).
 
@@ -149,7 +149,7 @@ open panel.
   `Revert to this version` requires a change message and writes a NEW
   `History` row carrying the restored (photo-less) content - the
   revert is itself a version, so it is recoverable.
-- (11) The assistant calls `recipe_save` directly (no toggle step -
+- (11) The assistant calls the recipes tool (op=save) directly (no toggle step -
   every tool is declared on every request); the saved `QA Agent Soup`
   row appears in the open `Recipes` drawer tab WITHOUT a manual
   refresh, via the realtime relay. Its `History` shows one row -
@@ -183,3 +183,4 @@ open panel.
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-11-03 | local stack, wt-nak/tool-combos | f0f19a58+ (pre-M3 baseline) | PASS, 3 deviations (all filed with intake; none combo-blocking) | Baseline against the separate verb tools; step 11's model save = one `recipe_save` call (title + cooklang + activity; change_message defaulted to "Initial version"), realtime drawer refresh 28s. Deviations: (1) step 3d's "inline error" is the browser's native constraint validation, not an app-rendered message (doc/impl should pick one); (2) step 7: Save NOT disabled during a photo upload (sampled 120x/25ms across an in-flight add - the expected gate doesn't exist as documented); (3) step 7: two byte-identical images in ONE add - the second fails with a leaked raw RLS error (`new row violates row-level security policy`, storage 400 on the content-hash path) - intra-add dedup gap + error-message leak; (4) step 9: the plain-text export leaks a literal `== Instructions ==` section marker (Markdown renders sections correctly - asymmetric; matters for the AnyList framing). QA-agent substitution note: file inputs driven via DataTransfer + change event with canvas-generated 320px PNGs (playwright sandbox cannot see /tmp paths). |

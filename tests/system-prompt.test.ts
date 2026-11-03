@@ -152,15 +152,16 @@ describe('buildSystemPrompt', () => {
     expect(alwaysSection).toMatch(/- conversation_recall /);
     expect(alwaysSection).toMatch(/- memory_search /);
     expect(alwaysSection).toMatch(/- conversation_search /);
-    expect(alwaysSection).toMatch(/- recipe_list /);
+    // Recipe browsing rides the recipes combination tool in the
+    // cooking section now (one tool cannot split across sections);
+    // its list/get ops are read-only but are not always-on lines.
+    expect(alwaysSection).not.toMatch(/- recipes : /);
     // Writes do not leak into the always-on listing.
     expect(alwaysSection).not.toMatch(/- memory_create /);
-    expect(alwaysSection).not.toMatch(/- recipe_save /);
     // Write sections carry the writes.
     expect(gatedSection).toMatch(/- memory_save /);
-    expect(gatedSection).toMatch(/- recipe_save /);
+    expect(gatedSection).toMatch(/- recipes : /);
     expect(gatedSection).not.toMatch(/- memory_search /);
-    expect(gatedSection).not.toMatch(/- recipe_list /);
 
     // Every write toolbox gets a "name : description" line with its
     // tools indented below. The conversations and research toolboxes
@@ -409,7 +410,7 @@ describe('every tool available every turn', () => {
     ]) {
       expect(prompt).toMatch(new RegExp(`^  ${name} : `, 'm'));
     }
-    expect(prompt).toMatch(/^      - recipe_save : /m);
+    expect(prompt).toMatch(/^      - recipes : /m);
     expect(prompt).toMatch(/^  - memory_search : /m);
   });
 

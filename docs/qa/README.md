@@ -308,7 +308,7 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [cookbook-recipe-lifecycle](./use-cases/cookbook-recipe-lifecycle.md) -
   recipe authoring in Cooklang, version log + revert, photos +
   lightbox, Upcoming / Favorites bookmarks, click-to-rate, the copy
-  exports, and a model-driven recipe_save landing via the relay.
+  exports, and a model-driven recipes (op=save) landing via the relay.
 - [recipe-records](./use-cases/recipe-records.md) - the cooking log:
   chat-capture (create with the dedup guard, get-then-merge update),
   the detail pane's Records section, the outcome filter end to end,
@@ -334,7 +334,7 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   tap-highlight resolving through sub-bullets, and the export nesting
   in Markdown and plain text.
 - [cookbook-save-validation](./use-cases/cookbook-save-validation.md) -
-  recipe_save refusing text the renderer would drop (a note written as
+  the save op refusing text the renderer would drop (a note written as
   a heading, `##` headings, glued `--`, literal escapes) and the
   model's fixed resubmission rendering it.
 - [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -

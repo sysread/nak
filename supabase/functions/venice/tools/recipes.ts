@@ -1,14 +1,21 @@
-// recipe_save (create/update-merged recipe write)
+// recipes (function-side combination tool)
 //
-// One tool behind an optional `id`: omit it to create a new recipe,
-// pass it to patch an existing one. Consolidates the former
-// recipe_save + recipe_update (the routing contract is the same
-// id-optional upsert shape as wiki_save; there is no shared runtime
-// module because each resource's conditional validation differs).
-// Wire schema lives in src/lib/tools/recipe_save.schema.ts. Auth:
-// b-strict.
+// One tool behind an `op` enum discriminator: list / get / save /
+// delete over the user's cookbook. Replaces the four verb
+// registrations (recipe_list, recipe_get, recipe_save, recipe_delete);
+// the per-op bodies survive verbatim as internal functions - only the
+// envelope changed (see the browser schema's header).
 //
-// The two halves hit different RPCs: recipe_create_with_version on a
+// Auth: b-strict throughout. recipes has user_id directly, so every
+// read filters .eq('user_id', userId) and every write stamps
+// p_user_id - the service-role client bypasses RLS, and a foreign or
+// unknown id matches zero rows and reports the miss honestly
+// (indistinguishable from "never existed", matching what RLS would
+// show the browser path).
+//
+// The save op is the create/update-merged upsert (the former
+// recipe_save; itself a consolidation of recipe_save + recipe_update).
+// The two forms hit different RPCs: recipe_create_with_version on a
 // create, recipe_update_with_version on an edit. The RPCs use
 // p_set_<field> + p_<field> pairs - explicit null clears, omission
 // leaves alone - so the patch bundle is built from named fields only.
@@ -19,30 +26,47 @@
 // that reported `photos: []` looked like it had wiped the recipe's
 // photos, and the model relayed that to the user as data loss on an
 // edit that had in fact preserved every photo. Changing the photo set
-// is the recipe_photos_* tools' job.
+// is the recipe_photos combination tool's job.
 //
-// Both forms run validateCooklangSource (_shared/cooklang-validate.ts)
-// on the submitted body and refuse the write when it reports anything,
-// so the model sees the problem and resubmits a fixed recipe.
+// Both save forms run validateCooklangSource
+// (_shared/cooklang-validate.ts) on the submitted body and refuse the
+// write when it reports anything, so the model sees the problem and
+// resubmits a fixed recipe.
+//
+// Per-op required fields (id on get/delete, title + cooklang on
+// create, change_message on update) are enforced inside the per-op
+// bodies below - the flat wire schema cannot express them. Error
+// strings are load-bearing: substring test assertions pin them.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readRecipePhotoMeta } from './_recipe_helpers.ts';
 import { ArgErrors } from './_validate.ts';
 import { resolveNaturalKeyMatch } from './_upsert_heuristics.ts';
+import { validateCooklangSource } from '../../_shared/cooklang-validate.ts';
 
 // Mirror of src/lib/recipe-limits.ts - the caps the wire schema
 // advertises. Divergent copies here rejected schema-legal bodies.
 const MAX_RECIPE_TITLE_CHARS = 160;
 const MAX_RECIPE_COOKLANG_CHARS = 20_000;
 
-import { validateCooklangSource } from '../../_shared/cooklang-validate.ts';
+// Mirror of RECIPE_LIST_DEFAULT_LIMIT / _MAX_LIMIT in the wire schema.
+const RECIPE_LIST_DEFAULT_LIMIT = 100;
+const RECIPE_LIST_MAX_LIMIT = 500;
+
+// ILIKE pattern helper. Mirrors src/lib/supabase.ts ilikeFilterPattern -
+// escape ILIKE metacharacters in the user input, then wrap in %...%.
+// Keeps the substring match honest when the title contains a literal
+// % or _ (rare for recipe titles but cheap insurance).
+function ilikeFilterPattern(raw: string): string {
+  return `%${raw.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+}
 
 /**
  * The star rating is the user's evaluation of a dish they cooked, so
  * no tool writes it - only the star control on the recipe card does.
  * A call carrying one fails loudly rather than dropping it silently:
  * a silent drop reads to the model as a successful write, and it then
- * tells the user a rating was saved. Both forms share this guard.
+ * tells the user a rating was saved. Both save forms share this guard.
  */
 function rejectRating(errs: ArgErrors, args: Record<string, unknown>) {
   if ('rating' in args) {
@@ -53,6 +77,98 @@ function rejectRating(errs: ArgErrors, args: Record<string, unknown>) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// list
+// ---------------------------------------------------------------------------
+
+async function listOp(args: Record<string, unknown>, ctx: ToolContext) {
+  const query = typeof args.query === 'string' ? args.query.trim() : '';
+  const rawLimit =
+    typeof args.limit === 'number' ? args.limit : RECIPE_LIST_DEFAULT_LIMIT;
+  const limit = Math.max(
+    1,
+    Math.min(RECIPE_LIST_MAX_LIMIT, Math.floor(rawLimit)),
+  );
+  const sort: 'updated' | 'rating' =
+    args.sort === 'rating' ? 'rating' : 'updated';
+
+  // RLS OFF: filter by userId. recipes.user_id is the direct
+  // ownership column.
+  let q = ctx.adminClient
+    .from('recipes')
+    .select('id, title, source, source_url, rating, updated_at')
+    .eq('user_id', ctx.userId)
+    .limit(limit);
+  if (sort === 'rating') {
+    q = q
+      .order('rating', { ascending: false, nullsFirst: false })
+      .order('updated_at', { ascending: false });
+  } else {
+    q = q.order('updated_at', { ascending: false });
+  }
+  if (query.length > 0) {
+    q = q.ilike('title', ilikeFilterPattern(query));
+  }
+
+  const { data, error } = await q;
+  if (error) throw new Error(`listRecipes failed: ${error.message}`);
+
+  return (data ?? []).map((r) => ({
+    id: r.id as string,
+    title: r.title as string,
+    source: r.source as string | null,
+    source_url: r.source_url as string | null,
+    rating: r.rating as number | null,
+    updated_at: r.updated_at as string,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// get
+// ---------------------------------------------------------------------------
+
+async function getOp(args: Record<string, unknown>, ctx: ToolContext) {
+  const id = typeof args.id === 'string' ? args.id : '';
+  if (!id) throw new Error('id is required');
+
+  // RLS OFF: filter by userId. user_id eq + id eq matches browser
+  // RLS behavior; miss-vs-not-owned reads the same to a probe.
+  const { data: recipe, error: recipeErr } = await ctx.adminClient
+    .from('recipes')
+    .select(
+      'id, title, source, source_url, cooklang, rating, upcoming, favorite, topics, created_at, updated_at',
+    )
+    .eq('user_id', ctx.userId)
+    .eq('id', id)
+    .maybeSingle();
+  if (recipeErr) throw new Error(`getRecipe failed: ${recipeErr.message}`);
+  if (!recipe) return { found: false };
+
+  // Newest recipe_version row carries the current photo set; the
+  // shared helper owns that join (the save op's edit form reads it
+  // back the same way). Ownership was validated by the select above.
+  const photos = await readRecipePhotoMeta(ctx.adminClient, id);
+
+  return {
+    found: true,
+    recipe: {
+      ...recipe,
+      photos,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// save
+// ---------------------------------------------------------------------------
+
+/**
+ * The star rating is the user's evaluation of a dish they cooked, so
+ * no tool writes it - only the star control on the recipe card does.
+ * A call carrying one fails loudly rather than dropping it silently:
+ * a silent drop reads to the model as a successful write, and it then
+ * tells the user a rating was saved.
+ */
 async function doCreate(
   args: Record<string, unknown>,
   ctx: ToolContext,
@@ -275,33 +391,87 @@ async function doUpdate(
   // tagged with a moment earlier and will be tagged with again once
   // the unit catches up. Echoing it invited the model to report the
   // tags as lost. Callers that want the live tags read them back with
-  // recipe_get after the curation unit has run.
+  // the get op after the curation unit has run.
   const { topics: _requeuedTopics, ...row } = rows[0];
 
   return { ...row, photos: await readRecipePhotoMeta(ctx.adminClient, id) };
 }
 
-export const recipeSave: ToolDef = {
-  name: 'recipe_save',
+async function saveOp(args: Record<string, unknown>, ctx: ToolContext) {
+  const id =
+    typeof args.id === 'string' && args.id.trim().length > 0
+      ? args.id.trim()
+      : undefined;
+
+  // Shared pre-route guard: the rating veto applies to both forms.
+  if ('rating' in args) {
+    const errs = new ArgErrors();
+    errs.add(
+      'rating is not editable by this tool - the star rating is the ' +
+        "user's own evaluation and only they can set or clear it",
+    );
+    errs.throwIfAny();
+  }
+
+  if (id) return doUpdate(id, args, ctx);
+  return doCreate(args, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// delete
+// ---------------------------------------------------------------------------
+
+async function deleteOp(args: Record<string, unknown>, ctx: ToolContext) {
+  const id = typeof args.id === 'string' ? args.id : '';
+  if (!id) throw new Error('id is required');
+
+  // RLS OFF: filter by userId. .select('id') makes a zero-row match
+  // detectable so the result can distinguish "deleted" from
+  // "nothing matched" (see memory_delete.ts for the same change).
+  const { data, error } = await ctx.adminClient
+    .from('recipes')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', ctx.userId)
+    .select('id');
+  if (error) throw new Error(`deleteRecipe failed: ${error.message}`);
+  const deleted = Array.isArray(data) && data.length > 0;
+  if (!deleted) {
+    return {
+      deleted: false,
+      reason: 'No recipe with that id - already deleted, never existed, or not yours.',
+    };
+  }
+
+  return { deleted: true };
+}
+
+// ---------------------------------------------------------------------------
+// combination-tool envelope
+// ---------------------------------------------------------------------------
+
+export const recipes: ToolDef = {
+  name: 'recipes',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
-    const id =
-      typeof args.id === 'string' && args.id.trim().length > 0
-        ? args.id.trim()
-        : undefined;
-
-    // Shared pre-route guard: the rating veto applies to both forms.
-    if ('rating' in args) {
-      const errs = new ArgErrors();
-      errs.add(
-        'rating is not editable by this tool - the star rating is the ' +
-          "user's own evaluation and only they can set or clear it",
-      );
-      errs.throwIfAny();
+    const op = typeof args.op === 'string' ? args.op.trim() : '';
+    if (!op) {
+      throw new Error('op is required (list | get | save | delete)');
     }
-
-    if (id) return doUpdate(id, args, ctx);
-    return doCreate(args, ctx);
+    switch (op) {
+      case 'list':
+        return listOp(args, ctx);
+      case 'get':
+        return getOp(args, ctx);
+      case 'save':
+        return saveOp(args, ctx);
+      case 'delete':
+        return deleteOp(args, ctx);
+      default:
+        throw new Error(
+          `unknown op "${op}" - expected list, get, save, or delete`,
+        );
+    }
   },
 };
 
-registerTool(recipeSave);
+registerTool(recipes);

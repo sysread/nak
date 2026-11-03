@@ -178,7 +178,7 @@ longer stretches the line across the whole width.
 
 **Via the model**: ask Nak in chat. "Save this chicken piccata recipe
 to my cookbook" followed by the URL, or just paste the recipe text —
-the model will call the `recipe_save` tool and store the result in
+the model will call the `recipes` tool (op=save) and store the result in
 Cooklang form.
 
 If Nak tells you it can't save a recipe, check that the recipe text
