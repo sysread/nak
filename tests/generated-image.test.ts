@@ -16,7 +16,7 @@ import {
 
 function makeCall(
   id: string,
-  name = 'generate_image'
+  name = 'image'
 ): OpenAIToolCall {
   return { id, type: 'function', function: { name, arguments: '{}' } };
 }
@@ -65,7 +65,7 @@ describe('aspectRatioCss', () => {
 });
 
 describe('generatedImagesForGroup', () => {
-  it('emits one descriptor per successful generate_image call, in call order', () => {
+  it('emits one descriptor per successful image call, in call order', () => {
     const calls = [makeCall('a'), makeCall('b')];
     const results: Record<string, Message> = {
       a: makeResult(JSON.stringify({ filename: 'first.webp', width: 1024, height: 1024 })),
@@ -89,7 +89,7 @@ describe('generatedImagesForGroup', () => {
     expect(generatedImagesForGroup([makeCall('a')], {})).toEqual([]);
   });
 
-  it('skips a failed generate_image call', () => {
+  it('skips a failed image call', () => {
     const results: Record<string, Message> = {
       a: makeResult(JSON.stringify({ error: 'content policy' })),
     };

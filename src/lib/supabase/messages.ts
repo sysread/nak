@@ -68,7 +68,7 @@ export async function listMessages(
   // rows without attachments, which is the common case) and lets
   // the realtime subscribe path reuse the same hydration helper
   // later.
-  // User rows carry uploads; assistant rows carry generate_image
+  // User rows carry uploads; assistant rows carry image-tool
   // output (attached at end of turn by the chat-loop). Both hydrate
   // through the same query; tool / system rows never carry
   // attachments so they're left out to keep the IN-list small.
@@ -465,8 +465,8 @@ export async function listAttachmentSummariesForThread(
     created_at: row.created_at,
     // Role of the message the attachment hangs on. The block uses this to
     // tell the model which images it can actually see: user-posted ones
-    // ride inline into the turn, assistant-minted ones (generate_image /
-    // edit_image / upscale_image / remove_background outputs) do not.
+    // ride inline into the turn, assistant-minted ones (image-tool /
+    // image-tool outputs) do not.
     posted_by: row.messages?.[0]?.role === 'user' ? 'user' : 'assistant',
   }));
 }

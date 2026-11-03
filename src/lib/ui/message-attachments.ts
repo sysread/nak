@@ -6,7 +6,7 @@
  * type and live-vs-expired state), not framework wiring, so it lives
  * here rather than inline in the .svelte file.
  *
- * Used for both user uploads and assistant-side generate_image output;
+ * Used for both user uploads and assistant-side image (op=generate) output;
  * the partition is role-agnostic.
  */
 import type { Attachment } from '../supabase';

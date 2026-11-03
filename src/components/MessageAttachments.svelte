@@ -1,6 +1,6 @@
 <!--
   Per-message attachment list rendered under the body of a user message
-  (uploads) or an assistant message (generate_image output). Two groups,
+  (uploads) or an assistant message (image (op=generate) output). Two groups,
   split by `partitionAttachments`:
 
     - Live images render as large inline previews, about 85% of the

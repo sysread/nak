@@ -1,11 +1,13 @@
 # Image editing
 
-Three chat tools that **change pictures the conversation already
-holds** - `edit_image`, `upscale_image`, and `remove_background` -
-against Venice's image-edit endpoints. They reuse the generate_image
-result contract end to end, so a new image op costs one tool module
-plus one wire helper; everything about lookup, size-guarding,
-attaching, and rendering is shared.
+Three ops of the `image` chat tool that **change pictures the
+conversation already holds** - `op=edit`, `op=upscale`, and
+`op=remove_bg` - against Venice's image-edit endpoints. They reuse
+the generate op's result contract end to end, so a new image op
+costs one switch arm plus one wire helper; everything about lookup,
+size-guarding, attaching, and rendering is shared. (The four image
+ops were separate verb tools until the combo conversion; the ops,
+bodies, and contracts are unchanged by that envelope change.)
 
 The user-facing surface is described in
 [`../user/image-editing.md`](../user/image-editing.md); the tool
@@ -25,12 +27,13 @@ refinement record (kept for rationale) is
   abort signal.
 - `supabase/functions/venice/tools/_image_ops.ts` - the shared
   machinery (below).
-- `supabase/functions/venice/tools/{edit_image,upscale_image,remove_background}.ts`
-  - the tools, registered through the `tools/index.ts` side-effect
-  barrel like every other tool.
+- `supabase/functions/venice/tools/image.ts`
+  - the combination tool (one op-switch def over generate / edit /
+  upscale / remove_bg), registered through the `tools/index.ts`
+  side-effect barrel like every other tool.
 - `supabase/functions/_shared/price-cap.ts` - the per-op cap checks.
-- `src/lib/tools/{edit_image,upscale_image,remove_background}.schema.ts`
-  - wire schemas; browser ToolDefs are schema-only (server dispatch).
+- `src/lib/tools/image.schema.ts`
+  - wire schema; the browser ToolDef is schema-only (server dispatch).
 - `src/lib/models/edit-image-catalog.ts` +
   `src/lib/edit-image-models-catalog.svelte.ts` - the `?type=inpaint`
   catalog coercion and its reactive store (twins of the generation
@@ -38,17 +41,17 @@ refinement record (kept for rationale) is
 - `src/lib/ui/edit-image-picker.ts` + `src/screens/Settings.svelte` -
   the picker primitives and the Settings -> AI pane section.
 - `src/lib/ui/generated-image.ts` - the dedicated image card's
-  `IMAGE_TOOL_NAMES` set covering all four image tools.
+  `IMAGE_TOOL_NAMES` set covering the combination tool.
 
 ## The three ops
 
-| Tool | Endpoint | Model | Output | Input encoding |
+| Op | Endpoint | Model | Output | Input encoding |
 |---|---|---|---|---|
-| `edit_image` | `/image/edit` | user-configurable | webp (requested) | data URI |
-| `upscale_image` | `/image/upscale` | fixed `upscaler` | PNG | **raw base64 only** |
-| `remove_background` | `/image/background-remove` | fixed `bria-bg-remover` | PNG + alpha | data URI |
+| `edit` | `/image/edit` | user-configurable | webp (requested) | data URI |
+| `upscale` | `/image/upscale` | fixed `upscaler` | PNG | **raw base64 only** |
+| `remove_bg` | `/image/background-remove` | fixed `bria-bg-remover` | PNG + alpha | data URI |
 
-Every tool returns the same envelope `generate_image` does: a compact
+Every op returns the same envelope the generate op does: a compact
 model-visible descriptor (filename, format, note) plus the heavy
 payload under `GENERATED_IMAGE_RESULT_KEY`, which the orchestrator
 harvests structurally and attaches to the round's assistant row. That
@@ -63,9 +66,9 @@ most-recent-by-created_at lookups.
 - **`findImageAttachmentByFilename(ctx, filename, toolName)`** - the
   thread-scoped `image/%` lookup extracted from `analyze_image`
   (ownership rides the validated threadId). Miss diagnostics are
-  parameterized by calling tool so the not-an-image redirect names the
-  right limitation; `analyze_image`'s renderings stay byte-identical
-  (pinned by
+  parameterized by calling surface so the not-an-image redirect names
+  the right limitation - the image tool passes `image (op=edit)`-style
+  names; `analyze_image`'s renderings stay byte-identical (pinned by
   `supabase/functions/tests/attachment-vision-tools.test.ts`). The
   expired-`storage_path` branch travels with the lookup - manual
   deletion nulls the path, and "expired" must not read as "try again".
@@ -89,7 +92,7 @@ most-recent-by-created_at lookups.
 
 ## Model selection and caps
 
-`edit_image` resolves `profiles.settings.editImageModel` service-side
+The edit op resolves `profiles.settings.editImageModel` service-side
 (the picker's only consumer is the id), falling back to
 `firered-image-edit`. The default is mirrored in
 `src/lib/models/index.ts` as `DEFAULT_EDIT_IMAGE_MODEL`; the two

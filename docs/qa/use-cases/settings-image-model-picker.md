@@ -1,11 +1,11 @@
-# Settings: image-generation model picker drives generate_image
+# Settings: image-generation model picker drives the image tool
 
 ## Covers
 
 The Settings -> AI -> **Image generation** picker
 ([dev: settings](../../dev/settings.md)), the `?type=image` catalog
 fetch through the venice `models` route, the `profiles.settings.imageModel`
-round-trip, and the server-side resolution in `generate_image`
+round-trip, and the server-side resolution in the `image` tool
 ([dev: tools](../../dev/tools.md)): the tool reads the configured id at
 generation time and falls back to the built-in default
 (`venice-sd35`) when unset.
@@ -60,7 +60,7 @@ generation time and falls back to the built-in default
   one you selected in step 3 - NOT `venice-sd35`.
 - (7) Selecting the default clears the override rather than storing it.
 - (8) `image_model` is now NULL (absent) - "default" is represented as
-  absence, and `generate_image` falls back to `venice-sd35`.
+  absence, and the image tool falls back to `venice-sd35`.
 
 ## Cleanup
 
@@ -72,3 +72,4 @@ generation time and falls back to the built-in default
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-11-03 | local (dev@nak.local) | 82078d9 | PARTIAL | Tool rename clean: all calls `image` + op=generate. Steps 1,2,4,7,8 PASS. Step 3 FAIL: confirmation line renders at pane bottom, off-screen. Steps 5-6 FAIL on qwen-image (tool always sends width/height; model rejects them), PASS on default venice-sd35. Doc drift: Image editing section + price-cap filter undocumented. |

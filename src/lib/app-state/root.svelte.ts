@@ -63,7 +63,7 @@ interface AppState {
    */
   modelProfiles: ModelProfile[];
   /**
-   * Venice text-to-image model id for generate_image, from
+   * Venice text-to-image model id for image (op=generate), from
    * `profiles.settings.imageModel`. Undefined on activate() and whenever
    * the user hasn't overridden it - the server-side tool falls back to
    * VENICE_DEFAULT_IMAGE_MODEL. Only the Settings image picker reads this
@@ -72,7 +72,7 @@ interface AppState {
    */
   imageModel?: string;
   /**
-   * Venice image-EDIT model id for edit_image, from
+   * Venice image-EDIT model id for image (op=edit), from
    * `profiles.settings.editImageModel`. Undefined on activate() and
    * whenever the user hasn't overridden it - the server-side tool falls
    * back to DEFAULT_EDIT_IMAGE_MODEL. Same browser posture as imageModel:

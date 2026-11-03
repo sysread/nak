@@ -71,8 +71,8 @@ changing a contract that other features depend on.
   expiration worker.
 - [Tools](./tools.md) — the browser-side toolbox catalog +
   the edge-side dispatch (chat tools and agent loops).
-- [Image editing](./image-editing.md) — the edit_image /
-  upscale_image / remove_background tools: Venice image-edit wire
+- [Image editing](./image-editing.md) - the image tool's edit /
+  upscale / remove_bg ops: Venice image-edit wire
   helpers, the shared `_image_ops` machinery, edit-model selection +
   caps, and the attachment provenance split.
 - [MCP integrations](./mcp-integrations.md) — remote MCP

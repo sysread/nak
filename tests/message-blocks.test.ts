@@ -289,8 +289,8 @@ describe('buildMessageBlocks - rename blocks', () => {
 });
 
 describe('buildMessageBlocks - generated-image blocks', () => {
-  it('emits one image card per successful generate_image call, after the tool-group', () => {
-    const a = msg({ id: 'a1', tool_calls: [call('c1', 'generate_image')] });
+  it('emits one image card per successful image call, after the tool-group', () => {
+    const a = msg({ id: 'a1', tool_calls: [call('c1', 'image')] });
     const r = msg({
       id: 'r1',
       role: 'tool',
@@ -311,7 +311,7 @@ describe('buildMessageBlocks - generated-image blocks', () => {
   });
 
   it('skips the card for a failed or still-in-flight generation', () => {
-    const a = msg({ id: 'a1', tool_calls: [call('c1', 'generate_image')] });
+    const a = msg({ id: 'a1', tool_calls: [call('c1', 'image')] });
     const failed = msg({
       id: 'r1',
       role: 'tool',

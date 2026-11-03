@@ -4,8 +4,8 @@
 
 The dedicated generated-image card and its by-filename resolution
 ([dev: components](../../dev/components.md),
-[dev: attachments](../../dev/attachments.md)), the `generate_image`
-tool's server-side per-round attach
+[dev: attachments](../../dev/attachments.md)), the `image` tool's
+server-side per-round attach
 ([dev: tools](../../dev/tools.md)), and the regression this fixes:
 before the card, a freshly generated image only appeared after a full
 page reload because the per-round `message_attachments` insert never
@@ -17,14 +17,17 @@ echoes over the messages realtime channel.
 - A Venice key seeded in `app_config` (image generation calls the live
   Venice image model; without a key the tool errors and no card is
   expected).
-- A thread with no pending reply. Note its thread id for the SQL check.
+- A thread with no pending reply. Note its thread id for the SQL
+  check - and note it AFTER the first send: the composer's pre-send
+  URL carries a throwaway cid that never becomes a row; the real
+  thread id exists only once the first message lands.
 
 ## Steps
 
 1. Open a thread.
 2. Send: `Please create an image of a watercolor fox in a snowy
    forest.`
-3. Watch the turn WITHOUT reloading. Observe the `generate_image`
+3. Watch the turn WITHOUT reloading. Observe the `image`
    tool-call card while it runs, then the area directly below it once
    the tool card shows its success check.
 4. After the image renders, click its preview.
@@ -46,7 +49,7 @@ echoes over the messages realtime channel.
 
 ## Expected
 
-- (2-3) While `generate_image` runs, the tool-call card shows the live
+- (2-3) While the image tool (op=generate) runs, the tool-call card shows the live
   duration ticker. Once it completes, a NEW card appears directly below
   the tool-group card showing a loading placeholder (the K.I.T.T.-style
   Scanner pulse) sized to the image's aspect ratio, which then resolves
@@ -64,11 +67,14 @@ echoes over the messages realtime channel.
 
 ## Cleanup
 
-- Delete the QA thread if it is not otherwise useful (cascades the
-  generated `message_attachments` row and frees the bucket object on the
-  next expiry sweep).
+- Delete the QA thread if it is not otherwise useful. Delete is a
+  HIDE, not a cascade: the thread row survives locally with
+  `hidden = true` (the fork-GC reclaims it later), so a SQL check
+  should filter `hidden = false` or hard-delete the row.
 
 ## Results log
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-11-02 | local stack, wt-nak/tool-combos | f0f19a58 (pre-M2 baseline) | PASS 7/7 | Baseline against the four separate image tools; generate_image exercised (the other three verbs were never reached in this flow - the model offered them in prose only). One unreproduced anomaly: 1 of 5 generations completed (DB row landed) but the card did not render until reload - watch item for the post-change run. Observer tab went deaf during that same turn (5s+ staleness; possibly same root cause). Scanner placeholder not captured (sub-2s paint; measurement gap, not a failure). Overflow add-on: page clean, zero document overflow, images constrained (731px in-container); the "weird overflow" the human saw was the emulated 1400x1000 viewport cropped by a 1200x904 OS window - artifact, not app CSS. |
+| 2026-11-03 | local stack, wt-nak/tool-combos | 646abf84+ (post-M2, `image` combo; uncommitted worktree) | PASS 6/7 (step 7 FAIL: known delivery defect, see below) | All image calls used the single `image` tool: generate x3 + edit x1 succeeded (cards live, no reload), one call omitted op (clean 20ms error, model self-corrected), and one call mixed op-specific params (generate keys + scale + filename under op=edit) and edited an existing image where a fresh generation was arguably intended - first signal the flat op schema needs sharper per-op parameter pairing; recoverable but noted. Watch items: live-card miss NOT reproduced (4/4 live); observer-tab deafness REPRODUCED WORSE - a second tab received thread-level updates (title) but ZERO message rows across ~4 minutes, foregrounded or backgrounded; reload recovered everything (data correct, delivery dead). Third sighting of the delivery-defect family bug intake has under CLAIM 2. Scanner placeholder CLOSED: it exists (label "Loading generated image", aspect-ratio sized) but lives 10-21ms because the server attaches before publishing the tool response - sub-frame, hence "missing" at human polling rates. Zero console errors after the hard reload (the combo rename cannot HMR - hard reload required). Doc nits folded: cleanup wording (delete is hide), precondition cid note (the pre-send cid never persists). |

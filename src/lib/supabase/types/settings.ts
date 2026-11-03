@@ -54,20 +54,20 @@ export interface UserSettings {
    */
   modelProfiles?: ModelProfile[];
   /**
-   * Venice text-to-image model the generate_image tool uses, e.g.
+   * Venice text-to-image model the image tool uses, e.g.
    * 'venice-sd35'. Absent means fall back to VENICE_DEFAULT_IMAGE_MODEL.
    * Unlike tierModels this is a bare model id, not a capability snapshot:
-   * the only consumer is the server-side generate_image tool, which reads
+   * the only consumer is the server-side image tool, which reads
    * it from profiles.settings at generation time and needs nothing but
    * the id (image generation has no synchronous client-side resolution
    * path the way chat does). See VENICE_DEFAULT_IMAGE_MODEL in ../models.
    */
   imageModel?: string;
   /**
-   * Venice image-EDIT model the edit_image tool uses, e.g.
+   * Venice image-EDIT model the image tool (op=edit) uses, e.g.
    * 'firered-image-edit'. Absent means fall back to
    * DEFAULT_EDIT_IMAGE_MODEL. Same shape and consumer pattern as
-   * imageModel above: a bare id read server-side by the edit_image tool
+   * imageModel above: a bare id read server-side by the image tool (op=edit)
    * at edit time. The catalog slice is `?type=inpaint` (see
    * edit-image-catalog.ts).
    */

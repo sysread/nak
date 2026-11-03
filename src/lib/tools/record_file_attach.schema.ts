@@ -4,7 +4,7 @@
  * supabase/functions/venice/tools/record_file_attach.ts).
  *
  * Promotes a file already in the conversation (a user upload OR a
- * generate_image output - both are thread attachments) onto a wiki
+ * image-tool output - both are thread attachments) onto a wiki
  * record, copying the bytes into the persistent record-files store.
  */
 export const recordFileAttachSchema = {

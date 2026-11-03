@@ -61,7 +61,7 @@ landing tab move together.
   **Custom prompts** (both below) - each carries a tall card list
   that would push everything else here below the fold.
 
-  The **Image generation** subsection points the `generate_image` tool at
+  The **Image generation** subsection points the image tool (op=generate) at
   a Venice image model via `ImageModelSelect` - a custom button + popover
   listbox (no fuzzy search, since image models are few) whose rows left-
   align the model name and right-align the per-image price in a pill, with
@@ -77,11 +77,11 @@ landing tab move together.
   built-in default (`VENICE_DEFAULT_IMAGE_MODEL`) clears the override so
   "default" reads as absence; any other pick writes the id via
   `persistImageModel`. See
-  [generate_image](./tools.md) for the server-side resolution + the
+  [image](./tools.md) for the server-side resolution + the
   one-dimension-table size assumption.
 
   The **Image editing** subsection is the edit-tool twin: it points the
-  `edit_image` tool at a Venice edit model via the same `ImageModelSelect`
+  `image` tool (op=edit) at a Venice edit model via the same `ImageModelSelect`
   component, fed from the `?type=inpaint` catalog slice
   (`edit-image-models-catalog.svelte.ts` + `edit-image-catalog.ts`,
   coerced to `EditCatalogModel`). Rows add a **privacy badge** - lock =
@@ -90,7 +90,7 @@ landing tab move together.
   user's own photos. The shared `max_image_usd` cap filters the list
   (`filterEditCatalogByCap`); picking the built-in default
   (`DEFAULT_EDIT_IMAGE_MODEL`, `firered-image-edit`) clears the override
-  via `persistEditImageModel`. `upscale_image` and `remove_background`
+  via `persistEditImageModel`. the upscale and remove_bg ops
   use fixed models and have no picker. The internals live in
   [image-editing](./image-editing.md).
 - **Model profiles** - the user-defined named model configurations
@@ -457,7 +457,7 @@ every update) so it's covered here rather than in its own file.
     `tierModels`, `defaultReasoningEffort`, `defaultVerbosity`) from
     the blob.
   - `imageModel`: `string` — Venice text-to-image model id for the
-    `generate_image` tool. A bare id, not a snapshot: the only consumer is
+    `image` tool. A bare id, not a snapshot: the only consumer is
     the server-side tool, which reads it at generation time. Absent means
     fall back to `VENICE_DEFAULT_IMAGE_MODEL`. A non-empty string survives
     `coerceSettings`; empty/non-string drops to absence.

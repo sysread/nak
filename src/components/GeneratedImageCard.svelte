@@ -1,12 +1,12 @@
 <!--
-  Dedicated card for a generate_image tool's output, rendered as its own
+  Dedicated card for a image (op=generate) tool's output, rendered as its own
   assistant bubble directly below the tool-call card that produced it
   (see Chat.svelte's `generated-image` message block). Owns resolving
   the image to an attachment and the loading placeholder shown until it
   resolves.
 
   Why this exists instead of the generic per-message attachment slot in
-  AssistantBody: generate_image attaches its image to the round's
+  AssistantBody: image (op=generate) attaches its image to the round's
   assistant-with-tool-calls row SERVER-SIDE, after that row was already
   inserted and echoed over the messages realtime channel. The
   message_attachments insert fires no messages realtime event, so the

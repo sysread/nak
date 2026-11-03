@@ -861,7 +861,7 @@ cards, PDFs):
   helpers) and reads via `listWikiRecordFiles` +
   `createWikiRecordFileSignedUrls`. The chat reaches files through the
   `record_file_attach` tool, which **promotes a file the conversation
-  already holds** (a user upload OR a `generate_image` output - both are
+  already holds** (a user upload OR an image-tool output - both are
   `message_attachments` rows) by copying the bytes from the
   `attachments` bucket into `wiki-record-files`. The model can't upload
   bytes; it names a live thread file by filename (expired source ->
@@ -1474,7 +1474,7 @@ mental model (wiki editing covers articles and records alike).
   persistent `wiki-record-files` bucket and the signed-URL read model;
   the `wiki-record-file-gc` orphan sweep is a clone of `attachment-gc`.
 - **Attachments** (`docs/dev/attachments.md`) - `record_file_attach`
-  promotes a thread file (user upload OR `generate_image` output) onto a
+  promotes a thread file (user upload OR image-tool output) onto a
   record by copying its bytes out of the `attachments` bucket, reusing
   the thread-scoped filename resolver `analyze_image` uses. The chat
   attachment can expire; the record copy is permanent.

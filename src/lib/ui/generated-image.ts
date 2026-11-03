@@ -1,14 +1,14 @@
 /**
  * UI-behavior primitives for the dedicated generated-image card that
- * renders directly below a `generate_image` tool-call card. Pure
- * functions only - no runes, no Svelte, no DOM. The companion
+ * renders directly below an `image` tool-call card. Pure functions
+ * only - no runes, no Svelte, no DOM. The companion
  * `src/components/GeneratedImageCard.svelte` owns the by-filename
  * resolution effect and the markup; `Chat.svelte`'s message-block
  * builder calls `generatedImagesForGroup` to turn an assistant
  * tool-group row into zero or more card descriptors.
  *
  * Why a dedicated card instead of the generic per-message attachment
- * slot: generate_image attaches its output to the round's
+ * slot: the image tool attaches its output to the round's
  * assistant-with-tool-calls row server-side, AFTER that row was already
  * inserted and echoed over the messages realtime channel. The
  * `message_attachments` insert fires no `messages` realtime event, so
@@ -20,8 +20,6 @@
  */
 import type { Message } from '../supabase';
 import type { OpenAIToolCall } from '../tools';
-
-export const GENERATE_IMAGE_TOOL_NAME = 'generate_image';
 
 export interface GeneratedImageDescriptor {
   /** tool_call_id - stable key for the keyed #each loop. */
@@ -39,7 +37,7 @@ interface ParsedResult {
 }
 
 /**
- * Parse a generate_image tool-result row's content into the image
+ * Parse an image tool-result row's content into the image
  * descriptor. Returns null for any shape that isn't a successful
  * generation: a failed call carries an `error` key and no filename, a
  * partial/streamed row may be empty, and malformed JSON parses to
@@ -80,18 +78,13 @@ export function aspectRatioCss(width: number, height: number): string {
 /**
  * Walk an assistant tool-group row's tool_calls and emit one
 /**
- * The image tools whose dedicated card resolves by filename: the creator
- * plus the three editors. Every image-op tool attaches server-side via
- * the same __generated_image contract, so all four render through this
- * card; the per-tool name lives here and in
+ * The image combination tool whose dedicated card resolves by
+ * filename. Every image op attaches server-side via the same
+ * __generated_image contract, so all ops render through this card;
+ * the per-tool name lives here and in
  * src/components/GeneratedImageCard.svelte's doc.
  */
-export const IMAGE_TOOL_NAMES: ReadonlySet<string> = new Set([
-  GENERATE_IMAGE_TOOL_NAME,
-  'edit_image',
-  'upscale_image',
-  'remove_background',
-]);
+export const IMAGE_TOOL_NAMES: ReadonlySet<string> = new Set(['image']);
 
 /**
  * Emit one image-card descriptor per successful image-op call. A call

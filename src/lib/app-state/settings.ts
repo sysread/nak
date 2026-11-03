@@ -249,7 +249,7 @@ export async function persistModelProfiles(profiles: ModelProfile[]): Promise<vo
 
 /**
  * Persist the image-generation model id. A bare string (or undefined to
- * clear), since the server-side generate_image tool needs only the id.
+ * clear), since the server-side image (op=generate) tool needs only the id.
  * Optimistic with rollback, like the other persist* wrappers.
  */
 export async function persistImageModel(modelId: string | undefined): Promise<void> {
@@ -266,7 +266,7 @@ export async function persistImageModel(modelId: string | undefined): Promise<vo
 
 /**
  * Persist the image-EDIT model id. Same shape as persistImageModel: a
- * bare string (or undefined to clear), since the server-side edit_image
+ * bare string (or undefined to clear), since the server-side image (op=edit)
  * tool needs only the id. Optimistic with rollback.
  */
 export async function persistEditImageModel(modelId: string | undefined): Promise<void> {

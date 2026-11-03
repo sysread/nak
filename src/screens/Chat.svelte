@@ -2026,7 +2026,7 @@
       //      needs to fetch attachments itself.
       //
       // Assistant rows are deliberately excluded: their only
-      // attachment source is generate_image, and that output is
+      // attachment source is image (op=generate), and that output is
       // attached server-side AFTER this row's INSERT echo, so it would
       // never be hydrated here anyway. GeneratedImageCard resolves the
       // image by filename instead (see generated-image.ts).
@@ -8278,7 +8278,7 @@
               </div>
             {:else if block.kind === 'generated-image'}
               <!-- Generated-image card: its own assistant bubble sitting
-                   directly under the tool-group block whose generate_image
+                   directly under the tool-group block whose image (op=generate)
                    call produced it. GeneratedImageCard resolves the image
                    by filename and shows a sized Scanner placeholder until
                    it lands - it does NOT read the assistant row's

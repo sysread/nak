@@ -194,7 +194,7 @@ tool uses.
 
 Editing existing pictures works the same way and has its own picker:
 Settings -> AI -> **Image editing** chooses the model behind the
-`edit_image` tool (see [Image editing](./image-editing.md) for the
+`image` tool op=edit (see [Image editing](./image-editing.md) for the
 feature itself). The rows carry one thing the generation picker
 doesn't: a **privacy badge** saying where your picture goes. A lock
 means the model is served on Venice's own infrastructure; a mask
