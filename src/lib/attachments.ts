@@ -359,7 +359,7 @@ export async function maybeDownscaleImage(file: File): Promise<File | null> {
 /**
  * Compress an oversized image File toward IMAGE_COMPRESSION_TARGET_BYTES,
  * re-encoding as WebP (best ratio, alpha-capable, universal in current
- * browsers). Shared by the composer's add path and the generate_image
+ * browsers). Shared by the composer's add path and the image-tool
  * tool's result handler so both shrink images the same way and report the
  * same before/after.
  *

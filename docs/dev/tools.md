@@ -217,8 +217,8 @@ surface lives in the always-on set above.
   guidance with `op=save` and say so in the reply). Tool writes
   stamp `last_author = 'assistant'`; browser panel writes stamp
   `'user'`. See [`./skills.md`](./skills.md).
-- **`images`** - `generate_image`. A generation
-  spends Venice credits and writes a persistent attachment.
+- **`images`** - the `image` combination tool. Every op spends
+  Venice credits and writes a persistent attachment.
   Unusually for a tool, its real output does NOT come back in the
   tool-result content: the edge orchestrator harvests the generated
   bytes (`supabase/functions/venice/tools/_generated_image.ts` +
@@ -242,11 +242,11 @@ surface lives in the always-on set above.
   pre-validated. A per-model constraint lookup is the follow-up if that
   bites.
 
-- **`edit_image` / `upscale_image` / `remove_background`** (gated
-  `images` toolbox) - operate on an image already in the thread (user
-  upload, generation, or a previous edit) via Venice's image-edit
+- **`image` ops `edit` / `upscale` / `remove_bg`** (`images`
+  toolbox) - operate on an image already in the thread (user
+  upload, generation, or a previous op) via Venice's image-edit
   endpoints. They ride the SAME `__generated_image` envelope and
-  per-round attach as `generate_image`, so everything above about the
+  per-round attach as the generate op, so everything above about the
   harvest, the descriptor, and the card applies to them too. Result
   filenames are prefixed (`edited-` / `upscaled-` / `no-bg-`) with a
   random suffix for collision-proofing; the original is left
@@ -257,7 +257,7 @@ surface lives in the always-on set above.
   `supabase/functions/venice/tools/_image_ops.ts`, which
   `analyze_image` shares its lookup with.
 
-  `edit_image`'s backing model is user-configurable the same way:
+  The edit op's backing model is user-configurable the same way:
   `profiles.settings.editImageModel`, falling back to
   `firered-image-edit` (mirrored from `DEFAULT_EDIT_IMAGE_MODEL` in
   `src/lib/models/index.ts`). The choice is made in Settings -> AI ->
@@ -557,8 +557,7 @@ Edge dispatch (`supabase/functions/venice/`):
 
 - **Chat** - `buildToolList()` shapes the turn's wire array; the
   edge function dispatches and persists. See `./chat.md`.
-- **Attachments** - `generate_image`, `edit_image`, `upscale_image`,
-  `remove_background` (gated `images` toolbox) are the tools whose
+- **Attachments** - the `image` tool's four ops are the tools whose
   output bypasses the tool-result content
   entirely: the edge orchestrator harvests their image bytes and
   writes a `message_attachments` row on the round's assistant

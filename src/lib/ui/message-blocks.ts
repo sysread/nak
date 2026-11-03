@@ -41,7 +41,7 @@ import {
 export type MessageBlock =
   | { kind: 'plain'; message: Message }
   | { kind: 'tool-group'; assistant: Message; resultsByCallId: Record<string, Message> }
-  // A generate_image tool call's output, rendered as its own card
+  // A image tool call's output, rendered as its own card
   // directly below the tool-group block for the turn it fired on.
   // `key` is the tool_call_id (stable across renders); `assistantId`
   // anchors it to the originating row; `filename` + `aspectRatio` let
@@ -215,7 +215,7 @@ export function buildMessageBlocks(messages: readonly Message[]): MessageBlock[]
         const narrowed: Message = { ...m, tool_calls: visibleCalls };
         blocks.push({ kind: 'tool-group', assistant: narrowed, resultsByCallId: scoped });
 
-        // Emit one generated-image card per successful generate_image
+        // Emit one generated-image card per successful image
         // call, immediately after the tool-group block so the picture
         // sits right under the tool card that made it. The card
         // resolves the image by filename rather than reading the

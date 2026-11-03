@@ -1,4 +1,4 @@
-# Image editing: edit_image, upscale_image, remove_background
+# Image editing: the image tool's edit / upscale / remove_bg ops
 
 ## Covers
 
@@ -31,7 +31,7 @@ provenance split.
 
 1. In chat, upload a photo (or generate one: "draw a lighthouse") and
    ask **"make the sky a vivid orange sunset"**. Expect: the model calls
-   `edit_image` with the filename from `<thread_attachments>`; the
+   the image tool (op=edit) with the filename from `<thread_attachments>`; the
    edited image renders in the dedicated card below the tool call
    WITHOUT a page reload; the original image row is untouched.
 
@@ -98,3 +98,29 @@ provenance split.
 | Date | Commit | Result |
 |------|--------|--------|
 | 2026-10-12 | 337911af | Local stack E2E: generate -> card ok; edit_image dispatched on the generated filename (provenance block cited), edit_image=ok in 64s, edited card rendered; settings picker + cap note verified; direct-curl probes of all three endpoints verified binary responses, output_format, alpha PNG. Chain turn hit provider slowness (170s+ aborts) and ended at the wall deadline - degradation clean. |
+| 2026-11-02 | f0f19a58 | Steps 2-7 re-run as the pre-M2 (combo-conversion) baseline, vision profile, source generated not uploaded (dodges the signed-URL 400): steps 2/3/4/6/7 PASS (edit chains resolve prior edits' filenames; no-bg cutout 16.9% transparent; analyze-on-edit cites the edited file; upscale-then-edit succeeds at 2x on a 2048px output). Step 5 FAIL - third branch (see findings). Steps 1/8/9 skipped this run. |
+| 2026-11-03 | tool-combos (post-M2 combo, uncommitted worktree) | Steps 2-7: steps 2/3/4/6 full parity PASS; step 5 FAIL = parity on the tracked defect; step 7 BLOCKED (see below). Zero console errors; thread deleted first attempt. Tool mapping: every op dispatched as `image` + op (generate / edit x2 / remove_bg / upscale x3), chaining resolved prior outputs' filenames, cutout transparency 39.6% (different source; not comparable). One fumble: first call omitted `op`, rejected clean in 33ms, self-corrected (2nd omission across today's runs - both first-image-calls of a thread; candidate for a schema sharpening pass if the rate holds). STEP 5 + NEW: upscale 4x died as expected (parity) AND 2x died twice at ~60s with the identical signature - the tracked defect (CLAIM 1) is WIDER than the baseline recorded: not 4x-specific. Same session/minute, other ops succeeded in 2-8s (stack healthy); only the upscale path hangs. Baseline's 2x succeeded in 5.7s the prior day - onset looks provider-variable. STEP 7 UNEXERCISED: no upscaled file existed to edit; the baseline's step-7 pass (verb tools) plus this run's edit-chaining (proven twice on the combo) make the residual risk negligible; flagged to Jeff. |
+
+### Findings from the 2026-11-02 run (both out of scope for the combo conversion)
+
+- **Upscale 4x dies the turn at a fixed 60s, twice.** Two 4x attempts on a
+  1024px source: dispatch -> exactly 60s -> "live stream disconnected
+  mid-turn; handing off to reconnect poll"; the reconnect poll never
+  delivered a result and the tool row persisted as the recovery
+  synthesizer's "interrupted" note. Scale 2 on the same source: 5.7s. The
+  pre-flight budget check correctly did NOT refuse (4x of 1024px is ~17MP,
+  under the ~30MP budget) - so the doc's either/or landed on neither
+  branch: no refusal, no result. Degradation honest (no `upscaled-` row,
+  model volunteered the failure), but the 60s live-stream idle tolerance
+  vs the slow upscale endpoint is a real product gap. Filed with bug
+  intake.
+- **Live image-card + tool-result delivery dies after a mid-thread page
+  reload.** 3/3 turns after a reload rendered no image card and left the
+  tool-result panel stuck at "In progress..." until the next reload, vs
+  0/4 misses in the same session before any reload (and the 2026-11-02
+  generated-card baseline saw the same 1-in-5 miss "after a reload").
+  Data persisted correctly every time - delivery/render, not writes. The
+  live attachment/result path appears not to re-establish after a reload.
+  Filed with bug intake.
+- Minor: editing a transparent cutout composites a background back in
+  (edit-model behavior; the second-thoughts panel flagged it itself).

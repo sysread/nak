@@ -1,5 +1,5 @@
-// Offline unit tests for the image-op tools (edit_image, upscale_image,
-// remove_background). Pure: the fake admin client replays the query shapes
+// Offline unit tests for the image combination tool (op: generate,
+// edit, upscale, remove_bg). Pure: the fake admin client replays the query shapes
 // the tools build (same pattern as attachment-vision-tools.test.ts) and a
 // stubbed global fetch routes Venice calls by URL, so these run under
 // `deno test` with zero network. The orchestrator's harvest/attach is
@@ -13,10 +13,7 @@ import {
   decodeImageDimensions,
   upscalePreFlightMessage,
 } from '../venice/tools/_image_ops.ts';
-import { editImage } from '../venice/tools/edit_image.ts';
-import { generateImage } from '../venice/tools/generate_image.ts';
-import { upscaleImage } from '../venice/tools/upscale_image.ts';
-import { removeBackground } from '../venice/tools/remove_background.ts';
+import { image } from '../venice/tools/image.ts';
 import { GENERATED_IMAGE_RESULT_KEY } from '../venice/tools/_generated_image.ts';
 
 // 2048x1536 JPEG source: big enough that a 4x output (67MP) busts the
@@ -181,7 +178,7 @@ const pngOpResponse = (): Response =>
     headers: { 'Content-Type': 'image/png' },
   });
 
-Deno.test('edit_image resolves the configured model, posts the data URI, returns the envelope', async () => {
+Deno.test('image op=edit resolves the configured model, posts the data URI, returns the envelope', async () => {
   capTest.resetCache();
   const ctx = fakeCtx({
     attachments: [photo()],
@@ -194,8 +191,8 @@ Deno.test('edit_image resolves the configured model, posts the data URI, returns
     imageOpBody: () => pngOpResponse(),
   });
   try {
-    const out = (await editImage.execute(
-      { filename: 'photo.jpg', prompt: 'make the sky a sunset' },
+    const out = (await image.execute(
+      { op: 'edit', filename: 'photo.jpg', prompt: 'make the sky a sunset' },
       ctx,
     )) as Record<string, unknown>;
     const editCall = calls.find((c) => c.url.includes('/image/edit'));
@@ -218,7 +215,7 @@ Deno.test('edit_image resolves the configured model, posts the data URI, returns
   }
 });
 
-Deno.test('edit_image falls back to the default model when settings carry none', async () => {
+Deno.test('image op=edit falls back to the default model when settings carry none', async () => {
   capTest.resetCache();
   const ctx = fakeCtx({ attachments: [photo()] });
   const { calls, restore } = stubFetch({
@@ -228,7 +225,7 @@ Deno.test('edit_image falls back to the default model when settings carry none',
     imageOpBody: () => pngOpResponse(),
   });
   try {
-    await editImage.execute({ filename: 'photo.jpg', prompt: 'x' }, ctx);
+    await image.execute({ op: 'edit', filename: 'photo.jpg', prompt: 'x' }, ctx);
     assertEquals(calls.find((c) => c.url.includes('/image/edit'))?.body.model, 'firered-image-edit');
   } finally {
     restore();
@@ -236,7 +233,7 @@ Deno.test('edit_image falls back to the default model when settings carry none',
   }
 });
 
-Deno.test('edit_image falls back to the default model when settings carry a blocked (Grok) id', async () => {
+Deno.test('image op=edit falls back to the default model when settings carry a blocked (Grok) id', async () => {
   // Blocked-model policy (_shared/blocked-models.ts): a stored Grok id
   // reads as unset - the tool never forwards it to Venice.
   capTest.resetCache();
@@ -251,7 +248,7 @@ Deno.test('edit_image falls back to the default model when settings carry a bloc
     imageOpBody: () => pngOpResponse(),
   });
   try {
-    await editImage.execute({ filename: 'photo.jpg', prompt: 'x' }, ctx);
+    await image.execute({ op: 'edit', filename: 'photo.jpg', prompt: 'x' }, ctx);
     assertEquals(calls.find((c) => c.url.includes('/image/edit'))?.body.model, 'firered-image-edit');
   } finally {
     restore();
@@ -259,7 +256,7 @@ Deno.test('edit_image falls back to the default model when settings carry a bloc
   }
 });
 
-Deno.test('edit_image over-cap pick 403s before any image call', async () => {
+Deno.test('image op=edit over-cap pick 403s before any image call', async () => {
   capTest.resetCache();
   const ctx = fakeCtx({
     attachments: [photo()],
@@ -274,7 +271,7 @@ Deno.test('edit_image over-cap pick 403s before any image call', async () => {
   });
   try {
     const err = await assertRejects(
-      () => editImage.execute({ filename: 'photo.jpg', prompt: 'x' }, ctx),
+      () => image.execute({ op: 'edit', filename: 'photo.jpg', prompt: 'x' }, ctx),
       VeniceError,
     );
     assertEquals(err.status, 403);
@@ -285,35 +282,35 @@ Deno.test('edit_image over-cap pick 403s before any image call', async () => {
   }
 });
 
-Deno.test('edit_image miss diagnostics carry the calling tool name', async () => {
+Deno.test('image op=edit miss diagnostics carry the calling tool name', async () => {
   const pdfCtx = fakeCtx({
     attachments: [{ id: 'a', filename: 'contract.pdf', storage_path: 'p', mime_type: 'application/pdf', page_count: 4 }],
   });
   const err = await assertRejects(
-    () => editImage.execute({ filename: 'contract.pdf', prompt: 'x' }, pdfCtx),
+    () => image.execute({ op: 'edit', filename: 'contract.pdf', prompt: 'x' }, pdfCtx),
     Error,
   );
-  assertEquals(err.message.includes('so edit_image cannot read it'), true);
+  assertEquals(err.message.includes('so image (op=edit) cannot read it'), true);
   assertEquals(err.message.includes('analyze_pdf_page'), true);
 
   const emptyCtx = fakeCtx({});
   const miss = await assertRejects(
-    () => editImage.execute({ filename: 'nope.jpg', prompt: 'x' }, emptyCtx),
+    () => image.execute({ op: 'edit', filename: 'nope.jpg', prompt: 'x' }, emptyCtx),
     Error,
   );
   assertEquals(miss.message, 'No image attachment named "nope.jpg" in this thread.');
 });
 
-Deno.test('edit_image reports an expired image distinctly', async () => {
+Deno.test('image op=edit reports an expired image distinctly', async () => {
   const ctx = fakeCtx({ attachments: [photo({ storage_path: null })] });
   const err = await assertRejects(
-    () => editImage.execute({ filename: 'photo.jpg', prompt: 'x' }, ctx),
+    () => image.execute({ op: 'edit', filename: 'photo.jpg', prompt: 'x' }, ctx),
     Error,
   );
   assertEquals(err.message, 'Image "photo.jpg" has expired and its data is no longer available.');
 });
 
-Deno.test('upscale_image refuses a doomed scale before calling Venice', async () => {
+Deno.test('image op=upscale refuses a doomed scale before calling Venice', async () => {
   capTest.resetCache();
   const ctx = fakeCtx({
     attachments: [photo()],
@@ -322,7 +319,7 @@ Deno.test('upscale_image refuses a doomed scale before calling Venice', async ()
   const { calls, restore } = stubFetch({ imageOpBody: () => pngOpResponse() });
   try {
     const err = await assertRejects(
-      () => upscaleImage.execute({ filename: 'photo.jpg', scale: 4 }, ctx),
+      () => image.execute({ op: 'upscale', filename: 'photo.jpg', scale: 4 }, ctx),
       Error,
     );
     assertEquals(err.message.includes('Retry with scale 2'), true);
@@ -333,7 +330,7 @@ Deno.test('upscale_image refuses a doomed scale before calling Venice', async ()
   }
 });
 
-Deno.test('upscale_image sends raw base64 (no data URI) on the happy path', async () => {
+Deno.test('image op=upscale sends raw base64 (no data URI) on the happy path', async () => {
   capTest.resetCache();
   // 1x1-ish PNG source: pre-flight passes at any scale.
   const ctx = fakeCtx({ attachments: [photo()] });
@@ -344,7 +341,7 @@ Deno.test('upscale_image sends raw base64 (no data URI) on the happy path', asyn
     imageOpBody: () => pngOpResponse(),
   });
   try {
-    const out = (await upscaleImage.execute({ filename: 'photo.jpg', scale: 2 }, ctx)) as Record<string, unknown>;
+    const out = (await image.execute({ op: 'upscale', filename: 'photo.jpg', scale: 2 }, ctx)) as Record<string, unknown>;
     const upCall = calls.find((c) => c.url.includes('/image/upscale'));
     assertEquals((upCall?.body.image as string).startsWith('data:'), false);
     assertEquals(upCall?.body.scale, 2);
@@ -356,12 +353,12 @@ Deno.test('upscale_image sends raw base64 (no data URI) on the happy path', asyn
   }
 });
 
-Deno.test('remove_background posts a data URI and returns a no-bg envelope', async () => {
+Deno.test('image op=remove_bg posts a data URI and returns a no-bg envelope', async () => {
   capTest.resetCache();
   const ctx = fakeCtx({ attachments: [photo()] });
   const { calls, restore } = stubFetch({ imageOpBody: () => pngOpResponse() });
   try {
-    const out = (await removeBackground.execute({ filename: 'photo.jpg' }, ctx)) as Record<string, unknown>;
+    const out = (await image.execute({ op: 'remove_bg', filename: 'photo.jpg' }, ctx)) as Record<string, unknown>;
     const bgCall = calls.find((c) => c.url.includes('/image/background-remove'));
     assertEquals((bgCall?.body.image as string).startsWith('data:image/jpeg;base64,'), true);
     assertEquals((out.filename as string).startsWith('no-bg-'), true);
@@ -381,7 +378,7 @@ const generateJsonResponse = (): Response =>
     headers: { 'Content-Type': 'application/json' },
   });
 
-Deno.test('generate_image resolves the configured model and returns the envelope', async () => {
+Deno.test('image op=generate resolves the configured model and returns the envelope', async () => {
   capTest.resetCache();
   const ctx = fakeCtx({ settings: { imageModel: 'flux-dev' } });
   const { calls, restore } = stubFetch({
@@ -389,7 +386,7 @@ Deno.test('generate_image resolves the configured model and returns the envelope
       u.includes('/image/generate') ? generateJsonResponse() : pngOpResponse(),
   });
   try {
-    const out = (await generateImage.execute({ prompt: 'a lighthouse' }, ctx)) as Record<string, unknown>;
+    const out = (await image.execute({ op: 'generate', prompt: 'a lighthouse' }, ctx)) as Record<string, unknown>;
     const genCall = calls.find((c) => c.url.includes('/image/generate'));
     assertEquals(genCall?.body.model, 'flux-dev');
     assertEquals((out.filename as string).startsWith('generated-'), true);
@@ -399,7 +396,7 @@ Deno.test('generate_image resolves the configured model and returns the envelope
   }
 });
 
-Deno.test('generate_image falls back to the default model when settings carry a blocked (Grok) id', async () => {
+Deno.test('image op=generate falls back to the default model when settings carry a blocked (Grok) id', async () => {
   // Blocked-model policy (_shared/blocked-models.ts): a stored Grok id
   // reads as unset - the tool never forwards it to Venice.
   capTest.resetCache();
@@ -409,7 +406,7 @@ Deno.test('generate_image falls back to the default model when settings carry a 
       u.includes('/image/generate') ? generateJsonResponse() : pngOpResponse(),
   });
   try {
-    await generateImage.execute({ prompt: 'a lighthouse' }, ctx);
+    await image.execute({ op: 'generate', prompt: 'a lighthouse' }, ctx);
     const genCall = calls.find((c) => c.url.includes('/image/generate'));
     assertEquals(genCall?.body.model, 'venice-sd35');
   } finally {

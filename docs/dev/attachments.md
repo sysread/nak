@@ -65,7 +65,7 @@ covers the attachment-specific pieces.
   Artifacts listing, joined to each owning thread's title), and
   `deleteAttachment` (the Artifacts-tab per-file delete: mark expired +
   best-effort object remove). `listMessages` co-fetches attachments for
-  user AND assistant rows (assistant rows can carry generate_image output).
+  user AND assistant rows (assistant rows can carry image-tool output).
 - `src/lib/artifacts-store.svelte.ts` - reactive store for the Artifacts
   tab (results + query/kind/sort filters + paging), driven by
   `listArtifacts` with a monotonic load token guarding stale results.
@@ -92,7 +92,7 @@ covers the attachment-specific pieces.
 - `src/lib/ui/message-attachments.ts` - `partitionAttachments` (liveness
   on `storage_path`). Pure UI primitive.
 - `src/components/GeneratedImageCard.svelte` - the dedicated card for a
-  `generate_image` output, rendered as its own assistant bubble below
+  `image` tool output, rendered as its own assistant bubble below
   the tool-call card. Resolves the image by filename
   (`findImageByFilenameInThread`) with a bounded retry, shows a Scanner
   placeholder sized to the image's aspect ratio until it lands, then
@@ -103,8 +103,8 @@ covers the attachment-specific pieces.
   row), `aspectRatioCss`, and `generatedImagesForGroup` (which
   tool-group calls get a card). Unit-tested in
   `tests/generated-image.test.ts`.
-- `src/lib/tools/generate_image.ts` + `.schema.ts` - the generate_image
-  tool (gated `images` toolbox); returns a compact descriptor with the
+- `src/lib/tools/image.schema.ts` - the image combination tool's
+  generate op (images toolbox); returns a compact descriptor with the
   base64 payload stashed under a key the chat-loop harvests.
 - `src/lib/tools/generated-image.ts` - pure harvest/strip helpers:
   `extractGeneratedImage`, `stripGeneratedImage`,
@@ -154,7 +154,7 @@ covers the attachment-specific pieces.
 - **Message replayed on reload** - `listMessages` co-fetches attachment
   metadata (storage_path, no bytes); `MessageAttachments` resolves signed
   URLs for rendering.
-- **Model generates an image** - `generate_image` returns a compact
+- **Model generates an image** - the image tool (op=generate) returns a compact
   descriptor with the base64 under `GENERATED_IMAGE_RESULT_KEY`; the
   edge orchestrator (`getStreamingResponse.ts`) harvests it, strips it
   from the tool-result row, and attaches it per-round to that round's
@@ -307,7 +307,7 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   ~700KB base64 rides under `GENERATED_IMAGE_RESULT_KEY` and is stripped
   before `encodeToolContent`; the bytes reach the user via the bucket
   upload on the round's assistant-with-tool-calls row (per-round, not at
-  terminal commit - so a same-turn `recipe_photos_attach` can resolve
+  terminal commit - so a same-turn the `recipe_photos` combo (op=attach) can resolve
   the image by filename). Otherwise identical to uploads - same bucket,
   same RLS chain, same manual-delete path.
 - **`<thread_attachments>` system block**: built once per turn from
@@ -347,10 +347,10 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   [`./architecture.md`](./architecture.md).
 - **SupabaseService** - `extractText` (multipart upload routed through
   the venice edge function's `/text-parser` route) and `generateImage`
-  (the `generate_image` tool runs server-side inside `/stream`'s tool
+  (the `image` tool runs server-side inside `/stream`'s tool
   dispatch). See
   [`../../supabase/functions/README.md`](../../supabase/functions/README.md).
-- **Tools** ([`./tools.md`](./tools.md)) - `generate_image` (images
+- **Tools** ([`./tools.md`](./tools.md)) - `image` (images
   toolbox) flows output through the attachment path; `analyze_image`,
   `analyze_pdf_page`, `doc_save`, `recipe_photos_attach` all read
   attachment bytes via the bucket (signed URL or `downloadAttachmentBlob`).
@@ -360,14 +360,14 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   reuses the thread-scoped filename resolver (the `analyze_image` lookup)
   to find a file in the conversation, then copies its bytes out of the
   `attachments` bucket into the persistent `wiki-record-files` bucket. So
-  a chat attachment (user upload or `generate_image` output) can be
+  a chat attachment (user upload or image-tool output) can be
   promoted onto a wiki record and outlive the 30-day attachment expiry.
 - **Realtime**: `subscribeToMessages` echoes a `messages` INSERT without
   the joined attachments, so `Chat.svelte` fires a follow-up
   `listAttachmentsByMessageIds` for USER-role inserts and re-runs
   `appendMessage` with the hydrated row (upload cross-tab sync).
   Assistant rows are excluded on purpose: their only attachment source
-  is `generate_image`, which is attached server-side AFTER the row's
+  is the image tool's, attached server-side AFTER the row's
   INSERT echo, so this fetch would race ahead of the attach and find
   nothing. `GeneratedImageCard` resolves those by filename instead - see
   "Generated-image rendering" below. `mergeMessagesById` prefers the

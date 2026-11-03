@@ -664,12 +664,12 @@ export const VENICE_EMBEDDING_MODEL = 'gte-small';
 // --- Image generation ------------------------------------------------------
 
 /**
- * Default text-to-image model for the generate_image tool. A single
+ * Default text-to-image model for the image (op=generate) tool. A single
  * constant rather than a tier because image generation has no
  * smart/balanced/fast axis - it's one backend the user can repoint.
  *
  * The user's choice lives in `profiles.settings.imageModel`; the
- * generate_image tool (server-side) reads that and falls back to this id
+ * image (op=generate) tool (server-side) reads that and falls back to this id
  * when unset. This is also the value the Settings image picker shows as
  * the effective selection before the user picks anything. The edge tool
  * keeps its own mirrored copy of this string (it can't import from
@@ -678,7 +678,7 @@ export const VENICE_EMBEDDING_MODEL = 'gte-small';
 export const VENICE_DEFAULT_IMAGE_MODEL = 'venice-sd35';
 
 /**
- * Default image-EDIT model for the edit_image tool. Same shape as
+ * Default image-EDIT model for the image (op=edit) tool. Same shape as
  * VENICE_DEFAULT_IMAGE_MODEL above: the user's choice lives in
  * `profiles.settings.editImageModel`, the server-side tool falls back to
  * this id, and the edge tool keeps its own mirrored copy (it can't import

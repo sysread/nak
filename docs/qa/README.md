@@ -263,7 +263,7 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   realtime).
 - [settings-image-model-picker](./use-cases/settings-image-model-picker.md) -
   the Settings image-model dropdown, the imageModel settings round-trip,
-  and generate_image resolving the configured model (with default
+  and the image tool (op=generate) resolving the configured model (with default
   fallback).
 - [threads-management](./use-cases/threads-management.md) - thread title
   generation, manual rename pinning, topic-filter pills, and the

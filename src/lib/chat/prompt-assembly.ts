@@ -123,8 +123,7 @@ export function buildThreadAttachmentsBlock(
   }
 
   // Split the live images by who posted them. The distinction exists for
-  // vision models: an assistant-minted image (generate_image, edit_image,
-  // upscale_image, remove_background output) hangs on an earlier reply and
+  // vision models: an assistant-minted image   // output) hangs on an earlier reply and
   // is never inlined into the turn, so telling the model it is "directly
   // visible" would push it to fabricate edits from the filename instead of
   // calling analyze_image first.

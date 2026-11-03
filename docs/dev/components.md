@@ -470,7 +470,7 @@ Consumers: assistant bubble in `Chat.svelte`.
 
 File: `src/components/GeneratedImageCard.svelte`.
 
-The dedicated card for a `generate_image` tool's output, rendered as
+The dedicated card for an `image` tool call's output, rendered as
 its own `.msg.assistant` bubble directly below the tool-group card
 that produced it (`Chat.svelte`'s `generated-image` message block).
 
@@ -490,7 +490,7 @@ interface Props {
   `aspectRatio` so the card holds its space and doesn't reflow when the
   bytes land.
 - Why by-filename instead of reading the assistant row's `attachments`:
-  generate_image attaches its output server-side, per round, AFTER the
+  the image tool attaches its output server-side, per round, AFTER the
   assistant row was inserted and echoed over realtime, and the
   `message_attachments` insert fires no `messages` event. The in-memory
   row never re-hydrates, so before this card the image only appeared
