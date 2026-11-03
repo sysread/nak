@@ -10,7 +10,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { SvelteMap } from 'svelte/reactivity';
-import { ExchangeStore, mergeMessagesById } from '../src/lib/exchange/exchange-store.svelte';
+import { ExchangeStore, mergeMessagesById, stripStreamingRow } from '../src/lib/exchange/exchange-store.svelte';
 import { ExchangeSlot } from '../src/lib/exchange/exchange-slot.svelte';
 import type { Message } from '../src/lib/supabase';
 
@@ -178,5 +178,32 @@ describe('mergeMessagesById', () => {
     const buffered = [msg('own2', 2)];
     const merged = mergeMessagesById(fetched, buffered, 't1');
     expect(merged.map((m) => m.id)).toEqual(['p1', 'p2', 'own1', 'own2']);
+  });
+});
+
+describe('stripStreamingRow', () => {
+  it('removes the in-flight streaming assistant row', () => {
+    const fetched = [
+      msg('u1', 1, { role: 'user' }),
+      msg('a1', 2, { role: 'assistant', status: 'streaming' }),
+    ];
+    expect(stripStreamingRow(fetched).map((m) => m.id)).toEqual(['u1']);
+  });
+
+  it('passes the snapshot through when no row is streaming', () => {
+    const fetched = [
+      msg('u1', 1, { role: 'user' }),
+      msg('a1', 2, { role: 'assistant', status: 'complete' }),
+      msg('a2', 3, { role: 'assistant', status: 'error' }),
+    ];
+    expect(stripStreamingRow(fetched).map((m) => m.id)).toEqual(['u1', 'a1', 'a2']);
+  });
+
+  it('only strips the assistant streaming shape, not other roles', () => {
+    const fetched = [
+      msg('t1', 1, { role: 'tool', status: 'streaming' }),
+      msg('a1', 2, { role: 'assistant', status: 'complete' }),
+    ];
+    expect(stripStreamingRow(fetched).map((m) => m.id)).toEqual(['t1', 'a1']);
   });
 });

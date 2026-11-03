@@ -724,6 +724,46 @@ A chat turn goes:
   collide with a channel that is still leaving; the Broadcast helpers
   cannot (the topic is the publisher's address) and rely on the
   memoized keys alone.
+- **The messages channel's echo can die while the threads channel
+  lives - transcript correctness rests on the reconciles, not the
+  echo.** Observed in QA (three sightings, reproduced 2026-11-03): a
+  tab's messages subscription joins and then delivers NOTHING - a
+  second tab froze at its opening snapshot through a full image turn
+  (zero console errors, threads-echo title updates arriving live on
+  the same socket); a sending tab went deaf the same way, hiding the
+  turn's tool rows and generated-image card until reload. Root cause
+  unidentified (leading theory: the channel joins before the socket
+  holds the auth token and its postgres_changes RLS check runs as
+  anon - unverified; a follow-up). Three backstops heal the
+  transcript deterministically, all through `reconcileTranscript`:
+  (1) the SUBSCRIBED catch-up - the channel's status callback (see
+  `messagesSubscribeDecision` in `src/lib/chat/realtime-recovery.ts`)
+  pairs the join with a refetch that also closes the
+  fetch-then-async-join race between `selectThread`'s opening
+  snapshot and the join; (2) the cross-tab backstop - a threads
+  UPDATE echo for the active thread while this tab isn't itself
+  sending schedules a trailing-debounce reconcile (the threads echo
+  is the one signal that survives the messages echo dying; the
+  trigger is `!exchangeStore.peek(id)?.sending`, NOT a holder
+  comparison - `holderId` is device-level on purpose, so two
+  same-origin sibling tabs share it and a sibling's turn reads as
+  our own); (3) the END-time reconcile in `runExchange`'s settled
+  tail for the sending tab (skipped when a queued drain is about to
+  fire - the drained turn's own settle is that window's heal).
+  Resubscribe policy: one per consecutive-failure streak, then warn
+  logs only - a channel that never joins must not churn, and the
+  reconciles carry correctness without it. `CLOSED` is debug-only
+  (own teardown echoes through it). The channel's state-and-
+  transition matrix, as implemented in `messagesSubscribeDecision`:
+
+  | State | Entered when | Actions on entry |
+  | --- | --- | --- |
+  | JOINING | effect run; no status ack yet | streak counter unchanged (per-thread, survives resubscribe re-runs) |
+  | SUBSCRIBED | status `SUBSCRIBED` | streak resets; ONE catch-up reconcile; debug log |
+  | RESUBSCRIBE_PENDING | failure, streak was 0 | warn log; resubscribe tick bumped (fresh channel + topic) |
+  | FAILED | failure, streak already >= 1 | warn log only; reconciles carry correctness |
+  | removed | effect teardown | `removeChannel`; pending cross-tab debounce cleared |
+
 - **Auto-titling runs server-side, not from `Chat.svelte`.**
   The curation tail in the venice function
   (`supabase/functions/venice/agents/auto_title.ts`) claims
@@ -908,7 +948,8 @@ A chat turn goes:
   spinner) or unwind without it (spurious "cut off" banner) even though
   the edge function finished the turn and committed the row. The fix is
   disconnect-driven, not visibility-driven: `setupStreamSubscription`
-  (`venice.ts`) keeps listening to the channel's status callback after
+  (`src/lib/chat/stream-transport.ts`) keeps listening to the channel's
+  status callback after
   the initial SUBSCRIBED, and a later `CHANNEL_ERROR` / `TIMED_OUT` /
   `CLOSED` that this tab did not initiate flips `disconnected` and closes
   the drain, which then throws `StreamDisconnectedError`. That propagates

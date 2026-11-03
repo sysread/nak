@@ -121,7 +121,7 @@ export class ExchangeStore {
  *
  * Use case: selecting a thread whose slot is mid-exchange. Between
  * `messages = []` (clear) and `messages = fetched` (snapshot resolve),
- * the chat-loop may have fired onAssistantPersisted / onToolResultPersisted
+ * the chat-loop may have fired onAssistantPersisted
  * with new rows. The buffer captures them; the merge folds them back
  * in regardless of where they landed in the timeline.
  *
@@ -161,4 +161,24 @@ export function mergeMessagesById(
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   return inherited.concat(own);
+}
+
+/**
+ * Remove an in-flight streaming assistant row (status='streaming')
+ * from a fetched snapshot before it is assigned to the screen's
+ * `messages`. The streaming bubble (slot.streamingText) owns
+ * mid-flight rendering; merging the row bare would double-paint the
+ * answer - once as the live bubble, once as a transcript row. The
+ * realtime echo handler applies the same filter; every caller that
+ * assigns a listMessages snapshot to the view (selectThread,
+ * reconcileTranscript) strips first. Returns the input array when
+ * there is no streaming row.
+ */
+export function stripStreamingRow(fetched: Message[]): Message[] {
+  const streamingTail = fetched.find(
+    (m) => m.role === 'assistant' && m.status === 'streaming',
+  );
+  return streamingTail
+    ? fetched.filter((m) => m.id !== streamingTail.id)
+    : fetched;
 }

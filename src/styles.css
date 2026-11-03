@@ -738,6 +738,13 @@ label {
   margin: 0 0 1rem;
 }
 
+/* The AI pane's persistent save/status slot (modelInfo/modelError).
+   min-height reserves the line while the slot is empty so the first
+   save's text never shifts the sections below it. */
+.settings-pane .ai-status {
+  min-height: 1.2em;
+}
+
 /* Retry text affordance used by the catalog error lines. Borderless so
    it reads as an inline action next to the prose rather than competing
    with the real buttons in the pane. */
