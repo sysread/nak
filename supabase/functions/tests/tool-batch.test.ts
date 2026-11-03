@@ -41,7 +41,13 @@ const recipeDelete = {
   execute: (args: Record<string, unknown>, ctx: ToolContext) =>
     recipes.execute({ op: 'delete', ...args }, ctx),
 };
-import { recordDelete } from '../venice/tools/record_delete.ts';
+import { records } from '../venice/tools/records.ts';
+// Dispatch seam: the retired verb tool became the records combination
+// tool (op=delete) - assertions unchanged.
+const recordDelete = {
+  execute: (args: Record<string, unknown>, ctx: ToolContext) =>
+    records.execute({ op: 'delete', ...args }, ctx),
+};
 import { recipeRecords } from '../venice/tools/recipe_records.ts';
 // Dispatch seam: the retired verb tool became the recipe_records
 // combination tool (op=delete) - assertions unchanged.

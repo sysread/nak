@@ -81,12 +81,7 @@ import { recipeRecordsSchema } from './recipe_records.schema';
 import { researchDocsSchema } from './research_docs.schema';
 import { wikiSchema } from './wiki.schema';
 import { wikiLibrarianSchema } from './wiki_librarian.schema';
-import { recordListSchema } from './record_list.schema';
-import { recordGetSchema } from './record_get.schema';
-import { recordSearchSchema } from './record_search.schema';
-import { recordCreateSchema } from './record_create.schema';
-import { recordUpdateSchema } from './record_update.schema';
-import { recordDeleteSchema } from './record_delete.schema';
+import { recordsSchema } from './records.schema';
 import { recordFileAttachSchema } from './record_file_attach.schema';
 import { recordFileRemoveSchema } from './record_file_remove.schema';
 import { recordLinkCreateSchema } from './record_link_create.schema';
@@ -135,12 +130,7 @@ const recipeRecords = serverSideTool(recipeRecordsSchema);
 const researchDocs = serverSideTool(researchDocsSchema);
 const wiki = serverSideTool(wikiSchema);
 const wikiLibrarian = serverSideTool(wikiLibrarianSchema);
-const recordList = serverSideTool(recordListSchema);
-const recordGet = serverSideTool(recordGetSchema);
-const recordSearch = serverSideTool(recordSearchSchema);
-const recordCreate = serverSideTool(recordCreateSchema);
-const recordUpdate = serverSideTool(recordUpdateSchema);
-const recordDelete = serverSideTool(recordDeleteSchema);
+const records = serverSideTool(recordsSchema);
 const recordFileAttach = serverSideTool(recordFileAttachSchema);
 const recordFileRemove = serverSideTool(recordFileRemoveSchema);
 const recordLinkCreate = serverSideTool(recordLinkCreateSchema);
@@ -241,7 +231,9 @@ export const alwaysOnToolbox: Toolbox = {
     'Recipe browsing lives in the recipes combination tool and the ' +
     'cooking log in the recipe_records combination tool (both cooking ' +
     'toolbox); Library reading lives in the docs combination tool ' +
-    '(library toolbox) - their list/get/search ops are read-only.',
+    '(library toolbox); the wiki article log lives in the records ' +
+    'combination tool (wiki toolbox) - their list/get/search ops are ' +
+    'read-only.',
   tools: [
     contextTool,
     memoryRecall,
@@ -251,9 +243,6 @@ export const alwaysOnToolbox: Toolbox = {
     memoryGet,
     conversationSearch,
     conversationGet,
-    recordList,
-    recordGet,
-    recordSearch,
     researchDocs,
     webSearch,
     updateTitle,
@@ -360,15 +349,13 @@ export const wikiToolbox: Toolbox = {
     'tool (list / get / search / save / delete ops - the read ops ' +
     'ride inside it) for articles, and wiki_librarian to delegate a ' +
     'multi-article consolidation; plus the dated records that track ' +
-    "an article's journey: create, edit, and delete them, attach " +
-    'conversation files to a record, and cross-link related records ' +
-    '(the record reads are always-on).',
+    "an article's journey: the records combination tool (list / " +
+    'get / search / create / update / delete - its read ops ride ' +
+    'inside it), the record file tools, and the record link tools.',
   tools: [
     wiki,
     wikiLibrarian,
-    recordCreate,
-    recordUpdate,
-    recordDelete,
+    records,
     recordFileAttach,
     recordFileRemove,
     recordLinkCreate,

@@ -41,10 +41,7 @@ Deno.test('wiki toolbox is wiki CRUD + full record management + memory_search, i
     toolbox.tools.map((t) => t.name),
     [
       'wiki',
-      'record_list',
-      'record_create',
-      'record_update',
-      'record_delete',
+      'records',
       'record_link_create',
       'record_file_attach',
       'analyze_image',
@@ -53,13 +50,10 @@ Deno.test('wiki toolbox is wiki CRUD + full record management + memory_search, i
   );
 });
 
-Deno.test('wiki toolbox manages records (list/create/update/delete/link/attach) but never extracts new events', () => {
+Deno.test('wiki toolbox manages records (the records combo + link/attach) but never extracts new events', () => {
   const names = __test.buildWikiToolbox().tools.map((t) => t.name);
   for (const expected of [
-    'record_list',
-    'record_create',
-    'record_update',
-    'record_delete',
+    'records',
     'record_link_create',
     'record_file_attach',
   ]) {

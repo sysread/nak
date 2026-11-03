@@ -33,8 +33,7 @@ import {
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { wiki } from '../tools/wiki.ts';
-import { recordCreate } from '../tools/record_create.ts';
-import { recordList } from '../tools/record_list.ts';
+import { records } from '../tools/records.ts';
 import { recordLinkCreate } from '../tools/record_link_create.ts';
 import { recordFileAttach } from '../tools/record_file_attach.ts';
 import { analyzeImage } from '../tools/analyze_image.ts';
@@ -135,65 +134,48 @@ const WIKI_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
-const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
+// The extraction agent's records combo wire: list (the log's shape)
+// + create (log the event), narrowed to this agent's authority - it
+// must NOT update or delete records (append-only extraction).
+const RECORDS_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'record_list',
+    name: 'records',
     description:
-      "List an article's existing records, most recent first. Returns " +
-      '{records: [{id, date, content, tags, created_at}]}. ALWAYS call this ' +
-      'before record_create so you do not duplicate an event already logged.',
+      "Maintain a wiki article's dated records (the topic's journey). " +
+      'One tool, one op. op=list: one article\'s records, newest first. ' +
+      'op=create: log a dated event on an article (article_id + date + ' +
+      'content required; the date from the conversation, not today, ' +
+      'when the event is in the past). You NEVER update or delete ' +
+      'records - extraction is append-only.',
     parameters: {
       type: 'object',
       properties: {
-        article_id: {
+        op: {
           type: 'string',
-          description: 'UUID of the article (from wiki_search / wiki_list).',
+          enum: ['list', 'create'],
+          description: "REQUIRED. The operation to run.",
         },
-        limit: { type: 'integer', minimum: 1, maximum: 200 },
-      },
-      required: ['article_id'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const RECORD_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'record_create',
-    description:
-      'Log a dated record on a wiki article. article_id is the article the ' +
-      'event belongs to (from wiki_search / wiki_list). date is the ISO ' +
-      '"YYYY-MM-DD" day the event occurred - use the date from the ' +
-      'conversation, not today, when the event is in the past. content is ' +
-      `Markdown describing what happened and what was learned (max ${MAX_WIKI_RECORD_CONTENT_CHARS} ` +
-      'chars). tags are optional keywords for filtering.',
-    parameters: {
-      type: 'object',
-      properties: {
         article_id: {
           type: 'string',
           description: 'UUID of the article this record belongs to.',
         },
         date: {
           type: 'string',
-          description: 'ISO 8601 date the event occurred ("YYYY-MM-DD").',
+          description: 'ISO 8601 date of the event ("YYYY-MM-DD").',
         },
         content: {
           type: 'string',
           minLength: 1,
-          maxLength: MAX_WIKI_RECORD_CONTENT_CHARS,
-          description: 'Markdown body: what happened, when, what was learned.',
+          description: 'The event text, as Markdown.',
         },
         tags: {
           type: 'array',
-          items: { type: 'string', maxLength: MAX_WIKI_RECORD_TAG_CHARS },
-          maxItems: MAX_WIKI_RECORD_TAGS,
+          items: { type: 'string' },
           description: 'Optional keyword tags for filtering.',
         },
       },
-      required: ['article_id', 'date', 'content'],
+      required: ['op'],
       additionalProperties: false,
     },
   },
@@ -324,8 +306,7 @@ function buildWikiRecordsToolbox(): Toolbox {
     name: 'wiki_records',
     tools: [
       asAgentTool(wiki, WIKI_WIRE_SCHEMA),
-      asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
-      asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
+      asAgentTool(records, RECORDS_WIRE_SCHEMA),
       asAgentTool(recordLinkCreate, RECORD_LINK_CREATE_WIRE_SCHEMA),
       asAgentTool(recordFileAttach, RECORD_FILE_ATTACH_WIRE_SCHEMA),
       asAgentTool(analyzeImage, ANALYZE_IMAGE_WIRE_SCHEMA),

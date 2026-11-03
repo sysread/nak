@@ -27,8 +27,7 @@ Deno.test('extraction toolbox is reads + record_create/link/attach + analyze_ima
     toolbox.tools.map((t) => t.name),
     [
       'wiki',
-      'record_list',
-      'record_create',
+      'records',
       'record_link_create',
       'record_file_attach',
       'analyze_image',
