@@ -19,11 +19,14 @@
  * distinct from the article body) and the changelog audit trail.
  */
 
+// $shared resolves in BOTH runtimes (vite.config.ts for the browser,
+// supabase/functions/deno.json for the Deno island) - the pin test
+// that reads this schema from the Deno side needs a resolvable import.
 import {
   MAX_WIKI_RECORD_CONTENT_CHARS,
   MAX_WIKI_RECORD_TAGS,
   MAX_WIKI_RECORD_TAG_CHARS,
-} from '../wiki';
+} from '$shared/wiki-limits';
 
 function formatRecordsArgs(args: Record<string, unknown>): string {
   const lines: string[] = [];
@@ -147,6 +150,19 @@ export const recordsSchema = {
       },
     },
     required: ['op'],
+    // Per-op required fields - flat JSON Schema cannot express them
+    // (only the discriminator is unconditionally required). Consumed by
+    // the edge validator (validateToolArgs) so a compound fumble -
+    // wrong op + missing fields - reports everything in one throw.
+    // Ops absent from the map keep handler-only validation.
+    'x-per-op-required': {
+      list: ['article_id'],
+      get: ['id'],
+      search: ['query'],
+      create: ['article_id', 'date', 'content'],
+      update: ['id'],
+      delete: ['id'],
+    },
     additionalProperties: false,
   },
 } as const;

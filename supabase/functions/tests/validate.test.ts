@@ -3,7 +3,7 @@
 // JSON Schema check in isolation, the combined-error behavior,
 // the activity-param exemption, and the no-op cases.
 
-import { assertThrows, assertStringIncludes } from '@std/assert';
+import { assertEquals, assertThrows, assertStringIncludes } from '@std/assert';
 import { validateToolArgs } from '../venice/tools/_validate.ts';
 
 // Helper: a minimal object schema with the given properties, required
@@ -261,4 +261,125 @@ Deno.test('validateToolArgs: does not coerce quoted numbers - rejects type misma
     Error,
   );
   assertStringIncludes(err.message, 'type error: score expects a number, but a string was found');
+});
+
+// --- per-op rules (x-per-op-required) ---
+
+// Helper: a minimal combination-tool schema with an op enum, flat
+// properties, and the given per-op rules map.
+function comboSchema(
+  properties: Record<string, Record<string, unknown>>,
+  opEnum: string[],
+  perOp: Record<string, readonly string[]> | undefined,
+): Record<string, unknown> {
+  return {
+    type: 'object',
+    properties: { op: { type: 'string', enum: opEnum }, ...properties },
+    required: ['op'],
+    additionalProperties: false,
+    ...(perOp ? { 'x-per-op-required': perOp } : {}),
+  };
+}
+
+Deno.test('per-op: legal op + missing mapped field -> per-op error in the same throw', () => {
+  const s = comboSchema(
+    {
+      article_id: { type: 'string' },
+      date: { type: 'string' },
+      content: { type: 'string' },
+    },
+    ['list', 'create'],
+    { list: ['article_id'], create: ['article_id', 'date', 'content'] },
+  );
+  const err = assertThrows(
+    () => validateToolArgs(s, { op: 'create' }),
+    Error,
+  );
+  assertStringIncludes(err.message, 'missing required parameter: article_id (required by op=create)');
+  assertStringIncludes(err.message, 'missing required parameter: date (required by op=create)');
+  assertStringIncludes(err.message, 'missing required parameter: content (required by op=create)');
+});
+
+Deno.test('per-op: legal op + all mapped fields present -> no throw', () => {
+  const s = comboSchema(
+    { id: { type: 'string' } },
+    ['get', 'list'],
+    { get: ['id'] },
+  );
+  validateToolArgs(s, { op: 'get', id: 'r-1' });
+});
+
+Deno.test('per-op: legal op absent from a partial map -> no per-op checks', () => {
+  const s = comboSchema(
+    { question: { type: 'string' }, id: { type: 'string' } },
+    ['list', 'save', 'close'],
+    { close: ['id'] }, // save stays out - conditional requireds
+  );
+  validateToolArgs(s, { op: 'save' });
+});
+
+Deno.test('per-op: illegal op + missing fields -> op error FIRST, then the menu', () => {
+  const s = comboSchema(
+    { article_id: { type: 'string' }, content: { type: 'string' } },
+    ['list', 'create'],
+    { list: ['article_id'], create: ['article_id', 'content'] },
+  );
+  const err = assertThrows(
+    () => validateToolArgs(s, { op: 'creat' }),
+    Error,
+  );
+  const msg = err.message;
+  // The op error leads; the per-op menu clauses follow.
+  assertEquals(msg.startsWith('op must be one of: list, create'), true, msg);
+  assertStringIncludes(msg, 'op=list requires: article_id');
+  assertStringIncludes(msg, 'op=create requires: article_id, content');
+});
+
+Deno.test('per-op: missing op -> required error + the menu', () => {
+  const s = comboSchema(
+    { id: { type: 'string' } },
+    ['get', 'delete'],
+    { get: ['id'], delete: ['id'] },
+  );
+  const err = assertThrows(() => validateToolArgs(s, {}), Error);
+  assertStringIncludes(err.message, 'missing required parameter: op');
+  assertStringIncludes(err.message, 'op=get requires: id');
+  assertStringIncludes(err.message, 'op=delete requires: id');
+});
+
+Deno.test('per-op: the op enum error is reported exactly once (no duplicate from the loop)', () => {
+  const s = comboSchema(
+    { id: { type: 'string' } },
+    ['get'],
+    { get: ['id'] },
+  );
+  const err = assertThrows(() => validateToolArgs(s, { op: 'bogus' }), Error);
+  assertEquals(err.message.split('op must be one of: get').length - 1, 1, err.message);
+});
+
+Deno.test('per-op: flat errors still ride the same throw alongside per-op errors', () => {
+  const s = comboSchema(
+    { id: { type: 'string' } },
+    ['get'],
+    { get: ['id'] },
+  );
+  const err = assertThrows(
+    () => validateToolArgs(s, { op: 'get', bogus: 5 }),
+    Error,
+  );
+  assertStringIncludes(err.message, 'unrecognized parameter: bogus');
+  assertStringIncludes(err.message, 'missing required parameter: id (required by op=get)');
+});
+
+Deno.test('per-op: no key -> byte-identical legacy behavior (no per-op checks, op enum via the loop)', () => {
+  const s = comboSchema(
+    { id: { type: 'string' } },
+    ['get'],
+    undefined,
+  );
+  // No per-op checks fire for a legal op with missing mapped fields...
+  validateToolArgs(s, { op: 'get' });
+  // ...and the op enum error still fires through the ordinary loop.
+  const err = assertThrows(() => validateToolArgs(s, { op: 'bogus' }), Error);
+  assertStringIncludes(err.message, 'op must be one of: get');
 });

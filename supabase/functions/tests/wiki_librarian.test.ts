@@ -118,7 +118,7 @@ Deno.test('profile block carries the corrective name rules; suppressed when unse
   });
   assertStringIncludes(named, 'The name is **Jeff** and ONLY Jeff.');
   // The librarian's distinguishing rule: FIX wrong names already on disk.
-  assertStringIncludes(named, 'wiki_save (with the id) to replace the wrong name');
+  assertStringIncludes(named, 'a wiki save (op=save, with the id) to replace the wrong name');
 
   const bare = __test.buildWikiLibrarianPrompt({ articleList: '- `Nak` - an app' });
   assertEquals(bare.includes('**About the user:**'), false);

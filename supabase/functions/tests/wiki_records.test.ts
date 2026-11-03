@@ -1,14 +1,14 @@
 // Guards for the wiki-record extraction agent's safety-critical
 // composition.
 //
-//   - The toolbox is read-heavy with exactly TWO write tools,
-//     record_create + record_link_create. The extraction agent finds the
-//     right article (wiki_search / wiki_list), checks for duplicates
-//     (record_list), grounds with READ-ONLY memory_search, logs a record,
-//     and conservatively cross-links a continuation. It never touches
-//     article bodies (no wiki_create / wiki_update / wiki_delete), never
-//     writes memory, and never promotes conversation files autonomously
-//     (no record_file_attach).
+//   - The toolbox is read-heavy with exactly THREE write tools -
+//     the records combo (op=create), record_link_create, and
+//     record_file_attach. The extraction agent finds the right article
+//     (the wiki combo, op=search / op=list), checks for duplicates
+//     (records op=list), grounds with READ-ONLY memory_search, logs a
+//     record, and conservatively cross-links a continuation. It never
+//     touches article bodies (no wiki save/delete ops), never writes
+//     memory, and never DETACHES files (no record_file_remove).
 //   - The prompt draws the article-body (current state) vs records
 //     (journey) line and tells the agent to skip non-events.
 //
@@ -17,7 +17,7 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { __test } from '../venice/agents/wiki_records.ts';
 
-Deno.test('extraction toolbox is reads + record_create/link/attach + analyze_image, in declared order', () => {
+Deno.test('extraction toolbox is reads + records-create/link/attach + analyze_image, in declared order', () => {
   const toolbox = __test.buildWikiRecordsToolbox();
   assertEquals(toolbox.name, 'wiki_records');
   // analyze_image rides so the text-tier model can verify what an image
@@ -70,8 +70,8 @@ Deno.test('extraction prompt draws the body-vs-records line and excludes non-eve
   assertStringIncludes(p, 'journey');
   // It must tell the model to attach to an EXISTING article only.
   assertStringIncludes(p, 'EXISTING article');
-  // And to dedupe via record_list before creating.
-  assertStringIncludes(p, 'record_list');
+  // And to dedupe via the records combo's list op before creating.
+  assertStringIncludes(p, 'op=list');
 });
 
 Deno.test('extraction prompt carries the one-event-one-record dedup discipline', () => {

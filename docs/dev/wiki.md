@@ -662,10 +662,19 @@ Docs:
   `POST /wiki-records-sweep` -> `runWikiRecordsSweepTick(adminClient)`
   in `agents/wiki_records.ts`. Claims settled threads whose owner has
   `wikiRecordExtractionEnabled` and at least one article, and logs
-  discrete dated events as records via `record_create`. Independent
-  per-thread pointer (`last_wiki_record_processed_msg_id`) and claim
-  columns so it runs concurrently with the article sweep. The dev shim
-  ticks this route too.
+  discrete dated events as records via the records combo (op=create).
+  Independent per-thread pointer (`last_wiki_record_processed_msg_id`)
+  and claim columns so it runs concurrently with the article sweep.
+  The dev shim ticks this route too. **Self-report verification**: the
+  extraction agent's final reply is stored verbatim as the durable
+  audit row, so the done branch counts the thread's
+  `wiki_records` rows (tagged `source_conversation_id`) before and
+  after the run; when the reasoning claims a record was logged and
+  the count did not move, the tick warns and appends an
+  `unverified self-report` annotation to the stored reasoning.
+  Warn-and-annotate only - the pointer-advance contract (zero-event
+  threads must not pin the queue) is untouched, and a count failure
+  skips verification rather than failing the run.
 - **Librarian cron sweep**: pg_cron job `nak-wiki-librarian-sweep`
   (hourly, minute 37) -> `nak_trigger_wiki_librarian_sweep()` ->
   pg_net `POST /wiki-librarian-sweep` with the service-role bearer ->

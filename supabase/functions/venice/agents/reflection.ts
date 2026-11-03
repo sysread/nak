@@ -242,6 +242,10 @@ const FOLLOWUPS_WIRE_SCHEMA: AgentTool['wire'] = {
         },
       },
       required: ['op'],
+      // Partial map: save stays out (conditional requireds);
+      'x-per-op-required': {
+        close: ['id', 'resolution'],
+      },
       additionalProperties: false,
     },
   },

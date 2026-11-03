@@ -433,7 +433,10 @@ event isn't recorded twice.
 Like the article agent it's conservative: most conversations contain
 no record-worthy event, and that's the expected outcome. General
 discussion and Q&A don't become records; specific things that
-*happened* do.
+*happened* do. Each run leaves a row in the wiki log with a one-line
+summary of what it logged; when a run claims it logged a record but
+no record actually appeared, the row's summary carries the marker
+`[unverified self-report]` so a silent failure can't hide in the log.
 
 You can turn this off in **Settings -> Wiki -> Automatic records**
 independently of the article agent. With it off, the background agent

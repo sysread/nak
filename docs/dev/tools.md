@@ -657,14 +657,42 @@ Edge dispatch (`supabase/functions/venice/`):
   always-on set is "reads plus reflexes" by design; any new tool
   that wants always-on placement needs the same no-writes property
   or it belongs in a write toolbox.
-- **Wire-schema constraints are advisory, not enforced.** The
+- **Wire-schema constraints are advisory to Venice, runtime-enforced
+  here.** The
   `required`, `minLength`, `maxLength`, and enum bounds in a
-  `.schema.ts` are prompt text the model reads, not a contract the
-  runtime checks - Venice does no constrained decoding against the
-  JSON schema. The edge `execute()` is the only real gate, so a
-  malformed call lands there and must be rejected with a message the
-  model can act on. Tightening the schema alone never stops a fumble;
-  the server-side check is what does.
+  `.schema.ts` are prompt text the model reads - Venice does no
+  constrained decoding against the JSON schema. The edge is the real
+  gate: `validateToolArgs` checks the flat bounds (and, since the
+  x-per-op-required contract two items below, per-op requireds) before
+  dispatch, and the edge `execute()` remains the semantic gate, so a
+  malformed call must be rejected with a message the model can act on.
+  Tightening the schema alone never stops a fumble; the server-side
+  check is what does.
+- **`x-per-op-required`: the combination tools' per-op required-field
+  rules live in the schema, consumed by the validator.** A flat combo
+  schema can only mark the discriminator (`op`) required, so the
+  validator and the per-op handler each refused a malformed call but
+  never combined: a compound fumble (invalid `op` + missing fields)
+  reported only the enum problem and cost the model an extra round
+  trip. `validateToolArgs` reads `x-per-op-required` from the schema's
+  `parameters` (a JSON Schema `x-` extension key; Venice tolerates it
+  on the wire - probed) and accumulates per-op problems into the same
+  combined throw: a legal `op` gets its mapped fields' presence
+  checked (`missing required parameter: <field> (required by
+  op=<op>)`); an illegal or missing `op` cannot attribute fields, so
+  the message carries one clause per mapped op (`op=<name> requires:
+  <f1>, <f2>`), with the op error preceding the per-op menu (an
+  unknown-key clause still leads the whole message - insertion order).
+  The map may be PARTIAL -
+  ops absent from it (conditional create-or-update requireds, like
+  followups' `save`, or nothing-required ops) keep handler-only
+  validation; combos whose requireds are all conditional (wiki,
+  recipes, skills, docs) are excluded until a conditional-rule shape
+  exists. Handlers keep their own stricter falsy/trim checks - the
+  validator's presence check is purely additive. The rules must be
+  added to BOTH surfaces that reach the validator (the browser schema
+  for chat dispatch, the agent-side mirrored wire for agent dispatch);
+  `per_op_required_pins.test.ts` fails when a mirror misses the key.
 - **Write tools validate arguments all-at-once, not first-fail.**
   Each tool's `execute()` collects every argument problem into an
   `ArgErrors` accumulator (`tools/_validate.ts`) and throws once via

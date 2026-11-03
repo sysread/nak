@@ -6,7 +6,7 @@
 //
 // Same run shape as the other recall agents: trim the thread to its
 // last user turn, append a recall-instruction user turn, run the
-// headless tool loop with a wiki_search-only toolbox, parse the
+// headless tool loop with a search-only wiki-tool toolbox, parse the
 // model's JSON into a RecallNote. Read-only by design - the agent
 // can search but never mutate articles.
 
@@ -104,7 +104,7 @@ Two channels worth surfacing in either mode:
 
 Workflow:
 
-1. Pick the mode (above), then use \`wiki_search\` - usually more than
+1. Pick the mode (above), then use the wiki tool (op=search) - usually more than
    once, with different queries - to find candidate articles.
    IMPORTANT: do not stop after 2-3 near-synonym queries.
 2. Cross-check against the conversation. EXPLICIT: do not filter.
@@ -226,5 +226,9 @@ export const wikiRecall: ToolDef = {
     return await runWikiRecall(ctx, topic);
   },
 };
+
+// Test-only surface: the pin test (wiki_prompt_names.test.ts) asserts
+// the model-facing prompt names no retired tool.
+export const __test = { BASE_PROMPT, WIKI_SEARCH_WIRE_SCHEMA };
 
 registerTool(wikiRecall);

@@ -179,6 +179,19 @@ export const recipeRecordsSchema = {
       },
     },
     required: ['op'],
+    // Per-op required fields - flat JSON Schema cannot express them
+    // (only the discriminator is unconditionally required). Consumed by
+    // the edge validator (validateToolArgs) so a compound fumble -
+    // wrong op + missing fields - reports everything in one throw.
+    // Ops absent from the map keep handler-only validation.
+    'x-per-op-required': {
+      list: ['recipe_id'],
+      get: ['id'],
+      search: ['query'],
+      create: ['recipe_id', 'date', 'content'],
+      update: ['id'],
+      delete: ['id'],
+    },
     additionalProperties: false,
   },
 } as const;

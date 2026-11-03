@@ -116,6 +116,18 @@ export const followupsSchema = {
       },
     },
     required: ['op'],
+    // Per-op required fields - flat JSON Schema cannot express them
+    // (only the discriminator is unconditionally required). Consumed by
+    // the edge validator (validateToolArgs) so a compound fumble -
+    // wrong op + missing fields - reports everything in one throw.
+    // Ops absent from the map keep handler-only validation.
+    // PARTIAL map: save's requireds are conditional (question only
+    // on create) and list requires nothing - both keep handler-only
+    // validation by convention.
+    'x-per-op-required': {
+      close: ['id', 'resolution'],
+      dismiss: ['id'],
+    },
     additionalProperties: false,
   },
 } as const;

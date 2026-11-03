@@ -147,6 +147,24 @@ export function validateToolArgs(
   const errs = new ArgErrors();
   const knownKeys = Object.keys(properties);
 
+  // Per-op required-field rules (x-per-op-required, a JSON Schema x-
+  // extension key). A combination tool's flat schema can only mark the
+  // discriminator required - the per-op requireds are op-conditional -
+  // so without this the validator and the handler each refuse a
+  // malformed call but never combine: a compound fumble (invalid op +
+  // missing fields) reported only the enum problem and cost the model
+  // an extra round trip, the exact one-problem-per-round-trip failure
+  // ArgErrors exists to prevent. The map may be PARTIAL: ops absent
+  // from it (conditional create-or-update requireds, or nothing
+  // required) keep handler-only validation. Schemas without the key
+  // behave exactly as before.
+  const perOp = schema['x-per-op-required'] as
+    | Record<string, readonly string[]>
+    | undefined;
+  const opEnum = Array.isArray(properties.op?.enum)
+    ? (properties.op.enum as unknown[])
+    : [];
+
   // Unknown-key rejection. Only fires when the schema explicitly closes the
   // object with additionalProperties: false - schemas that allow extra keys
   // pass them through. This replaces the per-tool rejectUnknownArgs calls,
@@ -178,9 +196,24 @@ export function validateToolArgs(
     }
   }
 
+  // Op error first: when per-op rules are in play and the op value is
+  // present but illegal, its enum rejection leads the combined message
+  // (the coordinator's precedence story - the op error, then arg
+  // errors). Collected here rather than in the per-property loop below,
+  // which SKIPS op when per-op rules are active so the enum problem is
+  // never reported twice.
+  if (perOp && args.op !== undefined && !opEnum.includes(args.op)) {
+    errs.add(
+      `op must be one of: ${opEnum.map((v) => (v === null ? 'null' : String(v))).join(', ')}`,
+    );
+  }
+
   // Per-property checks: type, length bounds, range bounds, enum. Only keys
   // the schema declares are checked here; unknown keys were handled above.
   for (const [name, value] of Object.entries(args)) {
+    // op is owned by the per-op block (above + below) when the rules
+    // key is present - the loop's enum check would duplicate it.
+    if (perOp && name === 'op') continue;
     const propSchema = properties[name];
     if (!propSchema) continue;
 
@@ -242,6 +275,31 @@ export function validateToolArgs(
         .map((v) => (v === null ? 'null' : String(v)))
         .join(', ');
       errs.add(`${name} must be one of: ${legal}`);
+    }
+  }
+
+  // Per-op accumulation. A legal op gets its mapped fields' presence
+  // checked (the handler keeps its own stricter falsy/trim checks -
+  // this is the additive backstop that makes the whole set visible in
+  // one throw). An illegal or missing op cannot attribute fields, so
+  // the message carries one clause per mapped op - the full argument
+  // map in the same round trip. Only mapped ops appear; a legal op
+  // absent from a partial map keeps handler-only validation.
+  if (perOp) {
+    const opValue = args.op;
+    if (opValue !== undefined && opEnum.includes(opValue)) {
+      const rule = perOp[opValue as string];
+      if (rule) {
+        for (const field of rule) {
+          if (args[field] === undefined) {
+            errs.add(`missing required parameter: ${field} (required by op=${String(opValue)})`);
+          }
+        }
+      }
+    } else {
+      for (const [opName, fields] of Object.entries(perOp)) {
+        errs.add(`op=${opName} requires: ${fields.join(', ')}`);
+      }
     }
   }
 

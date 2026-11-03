@@ -10,7 +10,7 @@ The two writers of the `followups` table and the dedup between
 them ([dev: followups](../../dev/followups.md)):
 
 - **Volitional capture** - the chat model saves a follow-up
-  mid-turn via `followup_create` when the user shares a plan
+  mid-turn via the followups combo (op=save) when the user shares a plan
   with a natural "how did it go" horizon. This is the
   model-leaves-itself-a-reminder path.
 - **Date extraction** - a plan with a stated date yields
@@ -88,7 +88,7 @@ them ([dev: followups](../../dev/followups.md)):
   `status='open'`, `question` a first-person ask ("Ask how the
   lasagna turned out" or similar), `context` mentioning the
   plan, `relevant_after` on or just after Saturday,
-  `source_thread_id` = the thread. The `followup_create` call is
+  `source_thread_id` = the thread. The followups save call (op=save) is
   visible in the tool-call panel with an activity line.
 - Step 4: STILL exactly one open lasagna row - the restate did
   not mint a twin.

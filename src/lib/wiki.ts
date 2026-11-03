@@ -82,17 +82,10 @@ export const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
  */
 export const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
 
-/**
- * Max number of tags per record. A filtering facet, not prose - a
- * runaway model shouldn't be able to attach hundreds of keywords.
- */
-export const MAX_WIKI_RECORD_TAGS = 24;
-
-/**
- * Length ceiling on a single tag. Keeps the chip UI legible and the GIN
- * index entries bounded.
- */
-export const MAX_WIKI_RECORD_TAG_CHARS = 40;
+// Max tags per record (a filtering facet, not prose) and the length
+// ceiling on a single tag - single-sourced from the shared limits
+// module the edge side reads (the schema files already import it).
+export { MAX_WIKI_RECORD_TAGS, MAX_WIKI_RECORD_TAG_CHARS } from '$shared/wiki-limits';
 
 /**
  * Cap on a record cross-link's freeform label ("based on", "supersedes").

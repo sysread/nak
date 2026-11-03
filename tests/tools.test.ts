@@ -238,6 +238,20 @@ describe('tool registry', () => {
       expect(source.required ?? []).not.toContain('activity');
     }
   });
+
+  it('the projected records tool carries x-per-op-required through the wire seam', () => {
+    // Chat dispatch validates against the schema the browser sends on
+    // the wire (the projection), not the source object. A projection
+    // refactor that dropped unknown keys would silently degrade chat
+    // dispatch to handler-only validation - pin the key's survival.
+    const tool = TOOLS.find((t) => t.name === 'records');
+    expect(tool).toBeDefined();
+    const wire = toOpenAIToolDef(tool!);
+    const params = wire.function.parameters as Record<string, unknown>;
+    const map = params['x-per-op-required'] as Record<string, string[]>;
+    expect(map).toBeDefined();
+    expect(map.create).toEqual(['article_id', 'date', 'content']);
+  });
 });
 
 // The agent-only memory toolboxes' composition (soft-decay set,

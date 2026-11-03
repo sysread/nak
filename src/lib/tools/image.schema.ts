@@ -127,6 +127,17 @@ export const imageSchema = {
       },
     },
     required: ['op'],
+    // Per-op required fields - flat JSON Schema cannot express them
+    // (only the discriminator is unconditionally required). Consumed by
+    // the edge validator (validateToolArgs) so a compound fumble -
+    // wrong op + missing fields - reports everything in one throw.
+    // Ops absent from the map keep handler-only validation.
+    'x-per-op-required': {
+      generate: ['prompt'],
+      edit: ['filename', 'prompt'],
+      upscale: ['filename'], // scale is optional (defaults to 2)
+      remove_bg: ['filename'],
+    },
     additionalProperties: false,
   },
 } as const;
