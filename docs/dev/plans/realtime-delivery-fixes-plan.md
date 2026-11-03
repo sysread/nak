@@ -539,6 +539,17 @@ exit codes; run it unpiped).
 - Browser needed at: M0 (baseline + repros + rider (a)
   characterization) and M8 (post-change re-runs). The coordinator is
   messaged before each window.
+- M0 GO CONDITION: the local stack is restored by garrick
+  (the-lint-warden) and the coordinator relays the confirmation -
+  M0 does not start before that.
+- M0 NOISE DISCIPLINE (load-bearing for the diagnosis): run repro
+  turns ONE AT A TIME and record whether a concurrent garrick QA turn
+  was in flight during each. A concurrent streaming turn can
+  CPU-starve the shared local edge runtime, and a CPU-killed isolate
+  is indistinguishable from the real defect mid-run - a noisy
+  baseline would poison the sighting-(c) realtime-vs-refetch
+  distinction. Surprising or inconsistent verdicts get re-run clean,
+  not explained away.
 - Between browser windows, all work (M1-M7 code + docs + gate) is
   local and conflict-free.
 - Two-tab repro hygiene: the second tab stays on my own origin
