@@ -80,10 +80,11 @@
  *     finalizer (`finalizePendingToolTimings`) marks stragglers errored
  *     so a session-ending mid-tool doesn't leave a forever-spinning pill.
  *
- *   persistedRows - rows the chat-loop's onAssistantPersisted /
- *     onToolResultPersisted handlers have already persisted to Supabase
+ *
+ *   persistedRows - rows the chat-loop's onAssistantPersisted
+ *     handler has already persisted to Supabase
  *     during the current exchange. Mirrors what the active-thread
- *     handlers wrote into the screen's `messages` array, but kept here
+ *     handler wrote into the screen's `messages` array, but kept here
  *     too so that a thread switch mid-exchange can replay them when the
  *     user comes back. Cleared by `reset()` at the start of each
  *     exchange. See `mergeMessagesById` in `exchange-store.svelte.ts`

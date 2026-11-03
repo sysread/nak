@@ -72,10 +72,11 @@
     type TopicVocabulary,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat/loop';
+  import { messagesSubscribeDecision } from '$lib/chat/realtime-recovery';
   import { withForkPointMarker } from '$lib/chat/prompt-assembly';
   import { slopNoticeCopy } from '$lib/ui/slop-notice';
   import CopyButton from '../components/CopyButton.svelte';
-  import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
+  import { ExchangeStore, mergeMessagesById, stripStreamingRow } from '$lib/exchange/exchange-store.svelte';
   import type { ExchangeSlot } from '$lib/exchange/exchange-slot.svelte';
   import { ThreadClaimCoordinator } from '$lib/exchange/thread-claim-coordinator';
   import { resolveHolderId } from '$lib/exchange/holder-id';
@@ -250,7 +251,7 @@
     rateLimitRemainingSeconds,
     sendHintLabel,
   } from '$lib/ui/chat-screen';
-  import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
+  import { computeRegenerateRangeIds, hoverRegenIdsForRender, persistedRowIds } from '$lib/ui/regenerate';
   import { computeDeleteFromRangeIds } from '$lib/ui/message-delete';
   import { findDraftMessage } from '$lib/ui/draft-message';
   import {
@@ -985,7 +986,15 @@
    * border on every row that would be replaced before committing.
    */
   let hoverRegenerateIds = $state<string[]>([]);
-  const hoverRegenerateSet = $derived(new Set(hoverRegenerateIds));
+  // The render source is gated on "no send in flight" (see
+  // hoverRegenIdsForRender): the click path hands .regen-target to
+  // pendingDeleteSet alone, and a hover whose mouseleave was lost
+  // (the hovered row leaving the DOM mid-send) must not keep painting
+  // the outline after the turn settles. This was the intermittent
+  // ".regen-target stuck on the rebuilt transcript" QA finding.
+  const hoverRegenerateSet = $derived.by(
+    () => new Set(hoverRegenIdsForRender(hoverRegenerateIds, activeSlot?.sending === true)),
+  );
 
   /**
    * Set the hover-preview range for a given assistant message id.
@@ -1990,11 +1999,43 @@
   // that re-fetch instead of landing it live. subscribeToMessages
   // also suffixes its topic per subscription so a fast resubscribe on
   // the same thread can never collide.
+  // Messages-channel subscribe bookkeeping (see the subscribe effect
+  // below): the tick re-runs the effect for a bounded resubscribe;
+  // the streak counter is component scope keyed to the thread so it
+  // survives the tick re-run but resets on a thread switch.
+  let msgSubResubscribeTick = $state(0);
+  let msgSubAttempts = 0;
+  let msgSubAttemptsFor: string | null = null;
+  // The opening per-thread transcript fetches still in flight, keyed
+  // by thread id. Reconciles (the SUBSCRIBED catch-up, the cross-tab
+  // backstop, the END-time reconcile) order behind the entry so their
+  // refetch cannot be assigned first and then lose to the opening
+  // fetch's staler assignment (selectThread sets activeThreadId
+  // before its fetch resolves). Each selectThread call registers its
+  // own entry and the entry is deleted when it settles, so the map
+  // self-drains.
+  const inflightThreadFetches = new Map<string, Promise<void>>();
+
   $effect(() => {
     if (!app.supabase || !activeThreadId) return;
     if (activeThreadIsDraft) return;
     const threadId = activeThreadId;
-    return app.supabase.subscribeToMessages(threadId, (msg) => {
+    // A failed join resubscribes by bumping this tick: reading it here
+    // makes the effect depend on it, so the bump tears the dead channel
+    // down and opens a fresh one (a fresh topic per subscription - see
+    // uniqueTopic). A healthy channel is never torn down: only the
+    // resubscribe decision mutates the tick.
+    const resubscribeTick = msgSubResubscribeTick;
+    void resubscribeTick;
+    // The failure-streak counter is per thread: reset it when the
+    // effect starts subscribing to a different thread. Component scope
+    // (not effect scope) so the streak survives the tick re-run - a
+    // second consecutive failure must stop the churn, not reset it.
+    if (threadId !== msgSubAttemptsFor) {
+      msgSubAttempts = 0;
+      msgSubAttemptsFor = threadId;
+    }
+    const unsubMessages = app.supabase.subscribeToMessages(threadId, (msg) => {
       // Ignore echoes for threads we've since left — the effect's
       // teardown will run, but a message queued in-flight may still
       // reach this closure before removeChannel completes.
@@ -2047,7 +2088,43 @@
             // Swallowed intentionally — best-effort hydration, see above.
           });
       }
+    }, (status, err) => {
+      // Subscribe-status handling: the decision module owns the policy
+      // (its matrix is graduated into docs/dev/chat.md's gotcha "The
+      // messages channel's echo can die while the threads channel
+      // lives"). SUBSCRIBED pairs the channel with the
+      // catch-up read - any row inserted between the opening
+      // listMessages snapshot and this join is in neither (the
+      // fetch-then-async-join race) and only the refetch lands it.
+      const decision = messagesSubscribeDecision(status, msgSubAttempts);
+      msgSubAttempts = decision.nextAttempts;
+      if (decision.action === 'catch-up') {
+        log.debug(`messages channel joined for ${threadId}; running catch-up reconcile`);
+        void reconcileTranscript(threadId, 'post-subscribe-catch-up');
+      } else if (decision.action === 'resubscribe') {
+        log.warn(`messages channel ${status} for ${threadId}; resubscribing once`, err ?? '');
+        msgSubResubscribeTick++;
+      } else if (decision.action === 'log-warn') {
+        log.warn(
+          `messages channel ${status} again for ${threadId}; transcript reconciles carry correctness`,
+          err ?? '',
+        );
+      } else {
+        log.debug(`messages channel ${status} for ${threadId}`);
+      }
     });
+    // The cross-tab backstop's pending debounce dies with the channel:
+    // the messages effect's cleanup runs on both thread switch and
+    // unmount, while the threads subscription (whose onUpdate feeds
+    // the backstop) lives per signed-in user and does neither.
+    return () => {
+      unsubMessages();
+      if (crossTabReconcileTimer !== null) {
+        window.clearTimeout(crossTabReconcileTimer);
+        crossTabReconcileTimer = null;
+        crossTabReconcileThread = null;
+      }
+    };
   });
 
   // The signed-in user's id as a memoized string. The per-user
@@ -2129,6 +2206,23 @@
           prevTopics.some((p, i) => p !== nextTopics[i]);
         rebucketThread(t);
         if (topicsChanged) void refreshTopicsVocabulary();
+        // Cross-tab backstop (see scheduleCrossTabReconcile): this echo
+        // is the one threads-level signal that survives when the
+        // messages echo goes deaf. The trigger is "the active thread
+        // changed server-side while THIS tab is not itself producing a
+        // turn on it" - holderId is deliberately DEVICE-level
+        // (localStorage, holder-id.ts), so two same-origin sibling
+        // tabs share one holder id and a sibling's turn reads as
+        // holder === ours: the holder comparison cannot distinguish
+        // sibling-tab from own-turn and is NOT the gate. peek.sending
+        // is: while this tab sends, claim exclusivity means no other
+        // writer exists (the END-time reconcile owns our turns); while
+        // idle, ANY update - foreign device, sibling tab, or our own
+        // just-released claim (accepted redundancy, idempotent) -
+        // schedules the heal.
+        if (t.id === activeThreadId && !exchangeStore.peek(t.id)?.sending) {
+          scheduleCrossTabReconcile(t.id);
+        }
       },
       onDelete: (id) => {
         removeThread(id);
@@ -2762,6 +2856,15 @@
     // Drafts aren't in Supabase yet - no messages to fetch.
     const t = findThread(id);
     if (t?.isDraft) return;
+    // The tracked opening fetch: resolves only once the snapshot is
+    // ASSIGNED to the view (not when the fetch returns - a stream-state
+    // await sits between the two). Declared out here because the
+    // finally below releases it on every path (assignment, early
+    // return on a thread switch, error). Reconciles order behind the
+    // inflightThreadFetches entry; see reconcileTranscript.
+    let resolveTrackedFetch: () => void;
+    const trackedFetch = new Promise<void>((r) => (resolveTrackedFetch = r));
+    inflightThreadFetches.set(id, trackedFetch);
     try {
       // Point-read the thread's in-flight streaming state in parallel
       // with the message list. On a cold page load the route effect
@@ -2778,37 +2881,41 @@
           log.warn('thread stream-state point read failed', err);
           return null;
         });
-      const fetched = await app.supabase.listMessages(id);
+      const fetchedListPromise = app.supabase.listMessages(id);
+      const fetched = await fetchedListPromise;
       const streamState = await streamStatePromise;
       // The user may have hopped threads while we were awaiting - guard
       // against a late response stomping newer state.
       if (activeThreadId !== id) return;
-      // Pull an in-flight assistant row off the snapshot before
-      // merging. The streaming bubble (slot.streamingText) owns
-      // rendering of mid-flight content; if the row stayed in the
-      // transcript we'd double-paint the live answer alongside the
-      // bubble. Reconnect kicks off below once messages is committed
-      // so the static render lands before the bubble's first delta.
+      // Strip + merge the listMessages snapshot: stripStreamingRow
+      // pulls an in-flight assistant row (the streaming bubble owns
+      // mid-flight rendering - a merged row would double-paint the
+      // answer), and mergeMessagesById folds in any rows the slot's
+      // chat-loop persisted during the window between `messages = []`
+      // and the fetch resolving (onAssistantPersisted pushed into
+      // slot.persistedRows while the await was in flight; the
+      // snapshot may or may not include those rows depending on when
+      // its underlying query ran). mergeMessagesById de-dupes by id
+      // and slots the buffered rows into the thread's own segment by
+      // position (inherited fork-prefix rows keep their snapshot
+      // order), so either path lands the same final transcript. Empty
+      // buffer is fast-pathed inside mergeMessagesById; non-streaming
+      // threads pay nothing.
+      // Two separate reads of the streaming row, deliberately distinct:
+      // stripStreamingRow owns the VIEW strip (the bubble must not
+      // double-paint); the `streamingTail` reference below feeds the
+      // reconnect decision ("a turn is in flight AND here is its
+      // partial"), which the view strip knows nothing about.
       const streamingTail = fetched.find(
         (m) => m.role === 'assistant' && m.status === 'streaming',
       );
-      const visibleFetched = streamingTail
-        ? fetched.filter((m) => m.id !== streamingTail.id)
-        : fetched;
-      // Merge the listMessages snapshot with any rows the slot's chat-
-      // loop persisted during the window between `messages = []` and
-      // the fetch resolving. Race shape: user switches into a thread
-      // whose background slot is mid-exchange; onAssistantPersisted
-      // and onToolResultPersisted fire while the await is in flight,
-      // pushing into slot.persistedRows. The snapshot may or may not
-      // include those rows depending on when its underlying query
-      // ran. mergeMessagesById de-dupes by id and slots the buffered
-      // rows into the thread's own segment by position (inherited
-      // fork-prefix rows keep their snapshot order), so either path
-      // lands the same final transcript. Empty buffer is fast-pathed
-      // inside mergeMessagesById; non-streaming threads pay nothing.
+      const visibleFetched = stripStreamingRow(fetched);
       const bufferedRows = exchangeStore.peek(id)?.persistedRows ?? [];
       messages = mergeMessagesById(visibleFetched, bufferedRows, id);
+      // Assignment done - the tracked fetch's ordering duty ends here
+      // (the finally also fires it on the early-return and error paths,
+      // where there is nothing for a reconcile to order behind).
+      resolveTrackedFetch!();
       // Eager-cancel any pending ask_user sentinel left over from a
       // prior session. The chat-loop suspends without persisting the
       // priming state, and we can't restart inference from where it
@@ -2948,6 +3055,13 @@
       if (activeThreadId === id) pinBottomWhileSettling();
     } catch (err) {
       error = { text: err instanceof Error ? err.message : String(err) };
+    } finally {
+      // Release the tracked opening fetch on every path - settled,
+      // early-returned (thread switch), or errored. Reconciles order
+      // behind it only while an assignment is genuinely pending; the
+      // resolve is idempotent (a promise ignores second resolutions).
+      resolveTrackedFetch!();
+      if (inflightThreadFetches.get(id) === trackedFetch) inflightThreadFetches.delete(id);
     }
   }
 
@@ -3061,6 +3175,21 @@
    * the realtime-delivered state in place and logs; the user can still
    * navigate away and back to force a full reload.
    *
+   * This function is the one code home of the fetch-then-async-join
+   * race story: selectThread's opening snapshot and the messages
+   * channel's join run concurrently, so a row inserted between the two
+   * is in neither - a refetch after the join is what lands it. Three
+   * callers supply the "after": the SUBSCRIBED catch-up (the channel's
+   * join ack; see messagesSubscribeDecision), the cross-tab backstop
+   * (a threads UPDATE echo for the active thread while this tab isn't
+   * itself sending - the threads echo is the one signal that survives
+   * the messages echo dying), and the END-time reconcile in
+   * runExchange's settled tail (the edge function is the only writer
+   * of tool rows and generated-image attachments; the sender must not
+   * depend on the echo for them). docs/dev/chat.md's gotcha
+   * "The messages channel's echo can die while the threads channel
+   * lives" carries the defect family's full narrative.
+   *
    * Immediate, not delayed: every caller runs it after the rows it
    * wants are already committed (contrast scheduleVerdictBackfill,
    * which waits for a write that lands seconds after the turn).
@@ -3079,13 +3208,57 @@
     const supabase = app.supabase;
     if (!supabase || activeThreadId !== threadId) return;
     try {
+      // Order behind an in-flight opening fetch (selectThread) for this
+      // thread: that fetch assigns AFTER its listMessages resolves
+      // (it awaits the stream-state point read in between), so a
+      // reconcile that raced it could assign a fresher snapshot and
+      // then LOSE to the staler opening assignment - the exact row
+      // window the reconcile exists to close would reopen. The entry
+      // resolves only once the opening snapshot is assigned. Never
+      // rejects (selectThread owns surfacing fetch failures).
+      const inflightFetch = inflightThreadFetches.get(threadId);
+      if (inflightFetch) await inflightFetch;
+      if (activeThreadId !== threadId) return;
       const fetched = await supabase.listMessages(threadId);
       if (activeThreadId !== threadId) return;
+      // stripStreamingRow: the streaming bubble owns mid-flight
+      // rendering, and merging the row bare would double-paint the
+      // answer (bubble + transcript row). The SUBSCRIBED catch-up
+      // caller reconciles on a thread possibly opened mid-turn, where
+      // the snapshot can carry the row.
+      const visibleFetched = stripStreamingRow(fetched);
       const bufferedRows = exchangeStore.peek(threadId)?.persistedRows ?? [];
-      messages = mergeMessagesById(fetched, bufferedRows, threadId);
+      messages = mergeMessagesById(visibleFetched, bufferedRows, threadId);
     } catch (err) {
       log.warn(`${why} reconcile failed`, err);
     }
+  }
+
+  // Cross-tab reconcile backstop (trigger wired into the threads
+  // onUpdate echo below). The messages echo can join and never deliver
+  // (observed: a second tab froze at its opening snapshot for minutes
+  // while thread-level updates kept arriving, zero console errors);
+  // the reconcile family's full story lives in reconcileTranscript's
+  // docstring. Real trigger budget: heartbeat row UPDATEs echo too
+  // (the threads subscription filters on user_id, not columns), so a
+  // foreign turn triggers about once per 15s heartbeat plus
+  // stamp/clear/bump writes; the trailing debounce collapses each
+  // quiet gap into at most one reconcile, and a reconcile itself is
+  // one bounded idempotent query.
+  const CROSS_TAB_RECONCILE_DEBOUNCE_MS = 2000;
+  let crossTabReconcileTimer: number | null = null;
+  let crossTabReconcileThread: string | null = null;
+
+  function scheduleCrossTabReconcile(threadId: string): void {
+    if (crossTabReconcileTimer !== null) window.clearTimeout(crossTabReconcileTimer);
+    crossTabReconcileThread = threadId;
+    crossTabReconcileTimer = window.setTimeout(() => {
+      crossTabReconcileTimer = null;
+      const t = crossTabReconcileThread;
+      crossTabReconcileThread = null;
+      if (t === null) return;
+      void reconcileTranscript(t, 'cross-tab-threads-echo');
+    }, CROSS_TAB_RECONCILE_DEBOUNCE_MS);
   }
 
   // Active thread's cached intuition payload, coerced from the
@@ -4831,12 +5004,6 @@
               // CRT-power-off animation.
               dismissSlopNotices(slot);
             },
-            onToolResultPersisted: (msg) => {
-              slot.recordPersistedRow(msg);
-              if (ctx.threadId === activeThreadId) {
-                appendMessage(msg);
-              }
-            },
             onRowsPruned: (ids) => {
               // The server deleted empty assistant rows (the bare
               // footer-only cards). Drop them from the open transcript
@@ -5374,6 +5541,12 @@
         window.clearTimeout(reasoningCloseTimer);
         reasoningCloseTimer = 0;
       }
+      // Drop any hover-preview outline a lost mouseleave left behind:
+      // the preview cannot start during a send (previewRegenerateFrom
+      // guards), so whatever is in the set here is stale. The render
+      // gate (hoverRegenIdsForRender) already hides it while sending;
+      // clearing the state keeps it from resurfacing on the next idle.
+      hoverRegenerateIds = [];
     }
     // The turn has fully settled, including the finally's claim release -
     // so anything the user queued while it ran can go out now. Fired
@@ -5384,7 +5557,42 @@
     // The StreamDisconnectedError branch returns from the catch instead
     // of reaching here; that path hands off to reconnectInflightTurn,
     // whose own tail drains.
+    // The drain decision is computed BEFORE maybeDrainQueuedMessages
+    // runs (the drain takes the whole queue synchronously, so checking
+    // after it would always read "nothing to drain").
+    const settledSlot = exchangeStore.peek(ctx.threadId);
+    const willDrain = settledSlot
+      ? shouldDrainQueue(
+          settledSlot.queued.length,
+          settledSlot.streamingError !== null,
+          findThread(ctx.threadId) ?? null,
+        )
+      : false;
     maybeDrainQueuedMessages(ctx.threadId);
+    // END-time transcript reconcile: the edge function is the only
+    // writer of tool rows and generated-image attachments, so the
+    // sending tab's live view must not depend on the messages echo for
+    // them. One refetch after settle lands whatever the echo missed -
+    // a deaf echo otherwise hides the turn's tool cards and image cards
+    // until a reload. Fire-and-forget: awaiting it would delay the
+    // queued drain above; the merge is idempotent and the swap window
+    // self-heals on the next reconcile. Unconditional on outcome
+    // (completed, aborted, errored, suspended all refetch server
+    // truth); a conflict settle's refetch may deliver the foreign
+    // rows while the conflict banner is up - desired. The
+    // StreamDisconnectedError branch is covered by
+    // reconnectInflightTurn's own transcript refetch. Background
+    // exchanges (user navigated away) skip this on purpose: their
+    // slot's persistedRows merge on thread re-entry.
+    //
+    // SKIPPED when a queued drain is about to fire: the drain's user
+    // row appends to the view, and a reconcile whose snapshot predates
+    // that insert would assign right over it and drop the just-queued
+    // prompt from view until the drained turn's own settle. The
+    // drained turn's END-time reconcile is the heal for that window.
+    if (!willDrain && activeThreadId === ctx.threadId) {
+      void reconcileTranscript(ctx.threadId, 'post-turn');
+    }
   }
 
   /**

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   computeRegenerateRangeIds,
+  hoverRegenIdsForRender,
   persistedRowIds,
 } from '../src/lib/ui/regenerate';
 import type { Message } from '../src/lib/supabase';
@@ -70,5 +71,21 @@ describe('persistedRowIds', () => {
   it('passes ids through untouched when nothing is synthetic', () => {
     const messages = [msg({ id: 'u1', role: 'user' }), msg({ id: 'a1' })];
     expect(persistedRowIds(messages, ['a1'])).toEqual(['a1']);
+  });
+});
+
+describe('hoverRegenIdsForRender', () => {
+  it('renders the previewed range when no send is in flight', () => {
+    expect(hoverRegenIdsForRender(['a1', 'a2'], false)).toEqual(['a1', 'a2']);
+  });
+
+  it('clears the preview source while a send is in flight', () => {
+    expect(hoverRegenIdsForRender(['a1', 'a2'], true)).toEqual([]);
+  });
+
+  it('returns a copy, never the caller array', () => {
+    const ids = ['a1'];
+    expect(hoverRegenIdsForRender(ids, false)).not.toBe(ids);
+    expect(hoverRegenIdsForRender([], false)).toEqual([]);
   });
 });
