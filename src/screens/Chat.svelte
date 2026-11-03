@@ -2025,7 +2025,7 @@
       msgSubAttempts = 0;
       msgSubAttemptsFor = threadId;
     }
-    return app.supabase.subscribeToMessages(threadId, (msg) => {
+    const unsubMessages = app.supabase.subscribeToMessages(threadId, (msg) => {
       // Ignore echoes for threads we've since left — the effect's
       // teardown will run, but a message queued in-flight may still
       // reach this closure before removeChannel completes.
@@ -2102,6 +2102,18 @@
         log.debug(`messages channel ${status} for ${threadId}`);
       }
     });
+    // The cross-tab backstop's pending debounce dies with the channel:
+    // the messages effect's cleanup runs on both thread switch and
+    // unmount, while the threads subscription (whose onUpdate feeds
+    // the backstop) lives per signed-in user and does neither.
+    return () => {
+      unsubMessages();
+      if (crossTabReconcileTimer !== null) {
+        window.clearTimeout(crossTabReconcileTimer);
+        crossTabReconcileTimer = null;
+        crossTabReconcileThread = null;
+      }
+    };
   });
 
   // The signed-in user's id as a memoized string. The per-user
@@ -2183,6 +2195,16 @@
           prevTopics.some((p, i) => p !== nextTopics[i]);
         rebucketThread(t);
         if (topicsChanged) void refreshTopicsVocabulary();
+        // Cross-tab backstop (see scheduleCrossTabReconcile): this echo
+        // is the one threads-level signal that survives when the
+        // messages echo goes deaf. Our own claimed-turn bumps (holder
+        // === ours) are skipped - the END-time reconcile owns those;
+        // our own claim-RELEASE echo (holder -> null) fires this once
+        // per own turn - accepted redundancy, the reconcile is
+        // idempotent.
+        if (t.id === activeThreadId && t.response_holder_id !== holderId) {
+          scheduleCrossTabReconcile(t.id);
+        }
       },
       onDelete: (id) => {
         removeThread(id);
@@ -3179,6 +3201,35 @@
     const inflight = inflightThreadFetches.get(threadId);
     if (inflight) await inflight;
     await reconcileTranscript(threadId, 'post-subscribe-catch-up');
+  }
+
+  // Cross-tab reconcile backstop. The messages echo can join and never
+  // deliver (observed: a second tab received thread-level updates for
+  // minutes while its transcript froze at the opening snapshot, zero
+  // console errors; the threads postgres_changes echo on the same
+  // socket kept delivering). The backstop turns that surviving signal
+  // into a transcript heal: a threads UPDATE echo for the ACTIVE
+  // thread whose holder is foreign (or null - a bump that raced the
+  // claim) schedules one trailing-debounce reconcile. Real trigger
+  // budget: heartbeat row UPDATEs echo too (the threads subscription
+  // filters on user_id, not columns), so a foreign turn triggers about
+  // once per 15s heartbeat plus stamp/clear/bump writes; the trailing
+  // debounce collapses each quiet gap into at most one reconcile, and
+  // a reconcile itself is one bounded idempotent query.
+  const CROSS_TAB_RECONCILE_DEBOUNCE_MS = 2000;
+  let crossTabReconcileTimer: number | null = null;
+  let crossTabReconcileThread: string | null = null;
+
+  function scheduleCrossTabReconcile(threadId: string): void {
+    if (crossTabReconcileTimer !== null) window.clearTimeout(crossTabReconcileTimer);
+    crossTabReconcileThread = threadId;
+    crossTabReconcileTimer = window.setTimeout(() => {
+      crossTabReconcileTimer = null;
+      const t = crossTabReconcileThread;
+      crossTabReconcileThread = null;
+      if (t === null) return;
+      void reconcileTranscript(t, 'cross-tab-threads-echo');
+    }, CROSS_TAB_RECONCILE_DEBOUNCE_MS);
   }
 
   // Active thread's cached intuition payload, coerced from the
