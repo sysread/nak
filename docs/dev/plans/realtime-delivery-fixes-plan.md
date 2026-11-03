@@ -593,6 +593,20 @@ exit codes; run it unpiped).
   reconciles carry transcript correctness without it, and
   sight-of-failure in the Logs drawer is enough for this defect's
   scope.
+- **The messages-echo ROOT CAUSE is a deliberate follow-up.** This
+  branch HEALS the deafness deterministically (catch-up at SUBSCRIBED,
+  threads-echo backstop, END-time reconcile); it does not CURE it.
+  M0 established the failure is messages-channel-specific on a shared
+  healthy socket (the threads postgres_changes echo delivers to the
+  same tab the messages echo abandons). Coordinator's leading theory:
+  the messages channel joins before the socket holds the auth token,
+  so its postgres_changes RLS check runs as anon forever while the
+  later-joining threads channel escapes it - unverified. Identifying
+  the mechanism (and fixing it server-side or at join order) is
+  follow-up work; a fix here would need realtime-js socket/auth
+  lifecycle instrumentation that does not belong in this defect's
+  scope. The status logging added in fixes 1-2 is the observability
+  that follow-up starts from.
 - **Thread-open cost is two `listMessages`** (opening fetch + catch-up)
   plus the streamState point read. Accepted for a single-user stack;
   the swap window (P25) means the layered triggers, not any single
