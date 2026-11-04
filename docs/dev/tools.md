@@ -676,7 +676,8 @@ Edge dispatch (`supabase/functions/venice/`):
   reported only the enum problem and cost the model an extra round
   trip. `validateToolArgs` reads `x-per-op-required` from the schema's
   `parameters` (a JSON Schema `x-` extension key; Venice tolerates it
-  on the wire - probed) and accumulates per-op problems into the same
+  on the wire - verified by a live probe, 2026-11) and accumulates
+  per-op problems into the same
   combined throw: a legal `op` gets its mapped fields' presence
   checked (`missing required parameter: <field> (required by
   op=<op>)`); an illegal or missing `op` cannot attribute fields, so

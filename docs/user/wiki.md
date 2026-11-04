@@ -364,6 +364,13 @@ You can disable the autonomous agent in **Settings -> Wiki**. Manual
 edits and the per-article "Ask agent to update" flow keep working
 when it's off.
 
+Every run leaves a row in the wiki log with a one-line summary of
+what it did. When a summary claims it edited an article but the claim
+could not be verified against the wiki's changelog, the summary
+carries the marker `[unverified self-report]` (with the changelog row
+counts before and after the run) so a silent failure can't hide in
+the log.
+
 ### Skipped conversations
 
 Sometimes the agent can't process a conversation. The most common
@@ -397,8 +404,9 @@ agent's verdict
 inline: how many wiki edits landed (often **zero** - the agent's
 prompt tells it to be conservative and skip rather than fabricate
 content), and a one-line **reasoning** summary the agent wrote
-about why. A **Dismiss** button removes the row once you've read
-it. On failure the new error appears inline next to the button and
+about why. If that summary claims edits the wiki's changelog can't
+confirm, it carries the `[unverified self-report]` marker. A
+**Dismiss** button removes the row once you've read it. On failure the new error appears inline next to the button and
 you can retry again once you've made changes. The agent's writes
 (any new wiki articles, any updates) land regardless, since the
 wiki tools commit each call individually.
@@ -434,9 +442,11 @@ Like the article agent it's conservative: most conversations contain
 no record-worthy event, and that's the expected outcome. General
 discussion and Q&A don't become records; specific things that
 *happened* do. Each run leaves a row in the wiki log with a one-line
-summary of what it logged; when a run claims it logged a record but
-no record actually appeared, the row's summary carries the marker
-`[unverified self-report]` so a silent failure can't hide in the log.
+summary of what it logged; when the summary claims it logged a record
+but the claim could not be verified against the records actually
+written, the summary carries the marker `[unverified self-report]`
+(with the row counts before and after the run) so a silent failure
+can't hide in the log.
 
 You can turn this off in **Settings -> Wiki -> Automatic records**
 independently of the article agent. With it off, the background agent
@@ -504,6 +514,13 @@ rename, it leaves them alone.
 The 12-hour minimum interval is enforced server-side (via an atomic
 Postgres claim); exactly one scheduled run happens per cycle no
 matter how many devices you have the app open on - or none.
+
+Like the other wiki agents, the librarian leaves a one-line summary
+of what it did in the wiki log (and in the result panel when you run
+it on demand). When a summary claims merges or deletions that the
+wiki's changelog can't confirm, it carries the
+`[unverified self-report]` marker so a silent failure can't hide in
+the log.
 
 You can disable the librarian independently from the per-conversation
 agent in **Settings -> Wiki**. The two toggles are independent: you

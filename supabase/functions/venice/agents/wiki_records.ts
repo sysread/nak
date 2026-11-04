@@ -106,9 +106,12 @@ const WIKI_SEARCH_MAX_LIMIT = 20;
 // week") that an honest no-op can produce when summarizing existing
 // records. The matcher errs toward the MISS direction - it can miss a
 // false claim, and some honest no-op phrasings may still be annotated
-// (contracted negations, passive voice without a negation token) - but
-// the annotation is warn-only and carries both counts, so the audit
-// row stays truthful either way. Paired with the negation guard below
+// (passive voice without a negation token) - but the annotation is
+// warn-only and carries both counts, so the audit row stays truthful
+// either way. One example per error mode: a contracted negation
+// ("haven't logged") is a MISS - the guard below always suppresses it;
+// a passive reference-style summary with no negation token is the
+// accepted may-annotate shape. Paired with the negation guard below
 // ("no records", "logged none", and contractions like "haven't" - the
 // n't alternative has NO leading word boundary because none exists
 // inside a contraction).

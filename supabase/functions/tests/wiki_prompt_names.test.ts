@@ -10,6 +10,10 @@
 // so a retired name split across a line break is still caught) names
 // no retired tool.
 //
+// Coverage note: the recall agent's scanned surface is its BASE_PROMPT
+// plus the wiki wire schema (both via __test) - the runtime prompt's
+// flagged-topic suffixes are not scanned.
+//
 // This is a BLACKLIST, not an allowlist: it fails when a scanned
 // surface names a retired verb tool. It cannot catch a NEW tool name
 // drifting out of registration - the discipline is: when a tool

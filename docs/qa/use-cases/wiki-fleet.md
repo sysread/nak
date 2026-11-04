@@ -54,12 +54,21 @@ run with live progress narration
   shows `[wiki] picked up -> asking <model> -> finished`; the wiki
   agent updates an existing article over creating a duplicate
   (update-over-create discipline); the thread's pointer advances.
+  The stored reasoning is the agent's truthful summary with NO
+  `[unverified self-report]` annotation - the sweep counts the
+  user's changelog rows before/after and only marks a claim it
+  cannot verify (an honest edit, or a truthful no-op, passes clean).
 - (2) Result union `{kind:'ok'|'no-op'|'error'}` in the response
   body, never a transport error for agent-level failures; on ok
-  the skip marker clears.
+  the skip marker clears. A retry whose reasoning claims edits that
+  the changelog can't confirm comes back with the
+  `[unverified self-report]` annotation appended to the reasoning
+  shown on the row's chip.
 - (3) `{"accepted":true}`; one user claimed (most overdue);
   cadence stamp written BEFORE the run; articles consolidated /
-  out-of-scope ones deleted per the librarian's workflow.
+  out-of-scope ones deleted per the librarian's workflow. The stored
+  reasoning carries NO `[unverified self-report]` annotation when
+  the librarian's edits really landed.
 - (4) The strip renders live steps with model-narrated activity
   text (the explicit withProgressNarration wrapper injects the
   `activity` param on manual runs only). The step in flight is
@@ -97,3 +106,4 @@ changelog. Delete QA-created articles by hand if forged.
 | 2026-06-09 | local | aef4b0c | pass (3,4,5) | textbook sweep (delete + merge + changelog); manual run exact scoped rename; collision -> busy; gate refused stamped user |
 | 2026-06-10 | local | 8877595 | pass (4) | post-A1/A3 manual run end to end: confirm card -> live strip with model-narrated activities ("Scanning all wiki articles...") through withProgressNarration + the manualRunHandler factory -> result card with final text + "3 tool calls over 1 article" |
 | 2026-06-10 | local | 8877595 | pass (3, by shared path) | sweepHandler factory proven by the rem/deep-sleep/reflection sweep ticks earlier today (same code path); librarian sweep semantics unchanged since the 2026-06-09 pass |
+| 2026-11-04 | local (agent-sweep-verification wt, self-hosted) | 4d086e0c | pass (1,3) | Post-fix run of the self-report verification extension. ZZQA-SW fixtures (article + settled thread + third article, cadence cleared), service-role POSTs. Step 1: the article agent updated the ZZQA-SW article (3 tool calls, changelog update row landed), claimed "Updated the ZZQA-SW Test Project article..." and the stored reasoning has NO annotation - the changelog count moved, so the claim verifies. Step 3: the librarian ran (4 tool calls), gave an honest no-op ("No edits this cycle...") - no annotation (negation guard). The false-claim annotation branch is proven offline (wiki_sweep_verification.test.ts / wiki_librarian_verification.test.ts false-claim + count-failure + matcher matrices); in-situ it cannot fire on demand without a model fumble - same accepted gap as the wiki-records use case's 2026-11-03 focused run (docs/qa/use-cases/wiki-records.md results log). Fixtures cleaned up. |

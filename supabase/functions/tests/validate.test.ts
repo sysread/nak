@@ -329,7 +329,8 @@ Deno.test('per-op: illegal op + missing fields -> op error FIRST, then the menu'
     Error,
   );
   const msg = err.message;
-  // The op error leads; the per-op menu clauses follow.
+  // The op error precedes the per-op menu clauses (an unknown-key
+  // clause can still lead the whole message - insertion order).
   assertEquals(msg.startsWith('op must be one of: list, create'), true, msg);
   assertStringIncludes(msg, 'op=list requires: article_id');
   assertStringIncludes(msg, 'op=create requires: article_id, content');

@@ -626,6 +626,20 @@ Tests:
   runner's completion seam: primary-then-fallback ordering, the
   "only the classifier sentinel triggers the fallback" branch, and
   the pointer / skip-marker semantics around it.
+- `supabase/functions/tests/wiki_sweep_verification.test.ts` - the
+  article sweep's and manual retry's self-report verification:
+  count-before/after vs the reply's claim (honest success, honest
+  no-op, false claim, count failure), the ordering ledger, and the
+  edit-claim matcher matrix.
+- `supabase/functions/tests/wiki_librarian_verification.test.ts` - the
+  librarian's self-report verification: the same shapes driven
+  end-to-end through the scheduled tick and the manual run (both take
+  the completion test seam), plus the librarian matcher matrix
+  including the quoted-title claim shape.
+- `supabase/functions/tests/wiki_records_sweep.test.ts` - the
+  extraction sweep's self-report verification (the template the two
+  above follow): count-before/after on the thread's `wiki_records`
+  rows, the ordering ledger, and the record-claim matcher matrix.
 - `supabase/functions/tests/agent_run.test.ts` - the runner itself:
   the completion seam scripting model rounds, the progress hook's
   event stream, and the `activity` param injection staying
@@ -652,10 +666,25 @@ Docs:
   claims up to 3 eligible threads across all users and runs the
   agent's tool loop on each; the hourly schedule resumes a long
   drain. In local dev, `scripts/dev-backfill-cron.mjs` plays the
-  cron role.
+  cron role. **Self-report verification** (the canonical note for the
+  wiki fleet's self-report checks - the librarian paths below point
+  here): the article agent's final reply is stored verbatim as the
+  durable audit row, so the done branch counts the user's
+  `wiki_changelog` rows before and after the run - a lifetime
+  per-user count, because the changelog has no thread or run key and
+  a time window would compare the edge host's clock to the DB's
+  `now()`. When the reasoning claims an article edit and the count
+  did not move, the tick warns and appends an
+  `[unverified self-report]` annotation to the stored reasoning.
+  Warn-and-annotate only - the pointer-advance contract is untouched,
+  and a count failure skips verification rather than failing the run.
 - **Manual retry**: the Skipped panel's Retry button ->
   `SupabaseService.retryWikiThread(threadId)` -> `POST /wiki-retry`
   (user JWT) -> `retryWikiThread(adminClient, userId, threadId)`.
+  Runs the same agent over one thread with the same self-report
+  verification as the cron sweep, gated on the pointer advance
+  succeeding; the annotation also rides the result back to the
+  Skipped panel's chip.
 - **Record extraction sweep**: pg_cron job `nak-wiki-records-sweep`
   (hourly, minute 17, offset from the wiki sweep at 7 and the
   librarian at 37) -> `nak_trigger_wiki_records_sweep()` -> pg_net
@@ -671,7 +700,7 @@ Docs:
   `wiki_records` rows (tagged `source_conversation_id`) before and
   after the run; when the reasoning claims a record was logged and
   the count did not move, the tick warns and appends an
-  `unverified self-report` annotation to the stored reasoning.
+  `[unverified self-report]` annotation to the stored reasoning.
   Warn-and-annotate only - the pointer-advance contract (zero-event
   threads must not pin the queue) is untouched, and a count failure
   skips verification rather than failing the run.
@@ -682,15 +711,27 @@ Docs:
   `claim_next_user_for_wiki_librarian` stamps the cadence column for
   the most-overdue eligible user and the tick runs the standard
   five-step review for them. The dev shim ticks this route too.
+  **Self-report verification**: the librarian's final reply is stored
+  verbatim as the durable audit row; `runLibrarianReviewVerified`
+  (the wrapper all three librarian paths share) counts the user's
+  `wiki_changelog` rows before and after the run and annotates per
+  the cron sweep's contract above. Librarian-specifics: the cadence
+  stamp, the in-flight guard, and the run's outcome are untouched;
+  a count failure skips verification rather than failing the run.
 - **Librarian manual run**: the Wiki panel's sparkles button ->
   `SupabaseService.runWikiLibrarian({ instructions, runId })` ->
   `POST /wiki-librarian-run` (user JWT) -> `runWikiLibrarianManual`.
   Live step events publish to `agent-runs:<userId>`; the browser
   subscribes BEFORE posting. Never touches the cadence stamp, and
-  skips the min-articles check - the user explicitly asked.
+  skips the min-articles check - the user explicitly asked. Same
+  self-report verification as the scheduled tick; the annotation also
+  rides the returned final text to the Wiki panel.
 - **Librarian chat dispatch**: the gated `wikiToolbox`'s registered
   `wiki_librarian` ToolDef, always the custom-instructions prompt
-  variant, run inline in the chat round's tool call.
+  variant, run inline in the chat round's tool call. Same
+  self-report verification as the other librarian paths; the
+  annotation rides the tool's `summary` result, which the chat model
+  may relay into the transcript.
 - **Manual per-article update**: the article view's "Ask agent to
   update" panel -> `SupabaseService.runWikiManualUpdate({ articleId,
   instructions })` -> `POST /wiki-manual-update` (user JWT) ->

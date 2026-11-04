@@ -940,6 +940,101 @@ function normaliseReasoning(finalText: string): string {
   return finalText.replace(/\s+/g, ' ').trim() || '(none)';
 }
 
+// ---------------------------------------------------------------------------
+// Self-report verification. The sweep tick's and the manual retry's
+// final replies are stored verbatim as the durable audit row; a run
+// that skips the writes and then claims an edit is otherwise
+// invisible. The done branches count this user's wiki_changelog rows
+// before and after the run and annotate the reasoning when a claim is
+// not backed by a count move. The selector is a lifetime per-user
+// count because the changelog has no thread or run key, and a
+// time-window comparison would pit the edge host's clock against the
+// DB's now(). Two accepted holes, both warn-only: a concurrent writer
+// for the same user inflates the after-count and can mask a false
+// claim (the allowed miss direction), and reset_wiki_data deleting
+// rows mid-run can shrink the after-count below the before-count and
+// annotate an honest run. Warn-and-annotate only: the pointer-advance
+// contract is untouched, the run's outcome is untouched, and a count
+// failure skips verification rather than failing the run.
+// ---------------------------------------------------------------------------
+
+// An affirmative edit claim: a write verb BEFORE an article/record
+// noun within a short same-sentence window ("Updated the Nak
+// article."). The verb-before-noun window deliberately excludes
+// reference-style past tense ("The Nak article was updated in March")
+// that an honest no-op can produce when summarizing existing work.
+// The matcher errs toward the MISS direction - it can miss a false
+// claim, and some honest no-op phrasings may still be annotated
+// (passive voice without a negation token) - but the annotation is
+// warn-only and carries both counts, so the audit row stays truthful
+// either way. One example per error mode: a contracted negation
+// ("hasn't updated") is a MISS - the guard below always suppresses
+// it; a passive reference-style summary with no negation token is the
+// accepted may-annotate shape. The guard covers "No edits",
+// "no articles", and contractions like "hasn't" - the n't
+// alternative has NO leading word boundary because none exists inside
+// a contraction. Ports the shipped wiki_records.ts done-branch
+// verification.
+const ARTICLE_CLAIM_RE =
+  /\b(updated|created|saved|wrote|added|deleted|edited)\b\s+(?:\w+\s+){0,3}?\b(articles?|entry|entries|pages?|records?)\b/i;
+const EDIT_NEGATION_RE = /\b(no|none|zero|not|never|nothing)\b|n't\b/i;
+
+function claimsArticleEdit(reasoning: string): boolean {
+  return ARTICLE_CLAIM_RE.test(reasoning) && !EDIT_NEGATION_RE.test(reasoning);
+}
+
+// Count the user's changelog rows - all kinds, since every agent
+// write path (article saves/deletes and record writes alike) lands
+// here. Returns null on any failure - the caller skips verification
+// (the tripwireArmed precedent in samskara.ts: the count is a
+// best-effort read, never a gate). The null path warns so a
+// persistently failing count (verification silently disabled
+// fleet-wide) leaves a trace.
+async function countChangelogForUser(
+  adminClient: SupabaseClient,
+  userId: string,
+): Promise<number | null> {
+  try {
+    const { count, error } = await adminClient
+      .from('wiki_changelog')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId);
+    if (error) {
+      console.warn(`[wiki] self-report count failed, skipping verification: ${error.message}`);
+      return null;
+    }
+    return typeof count === 'number' ? count : null;
+  } catch (err) {
+    console.warn(
+      `[wiki] self-report count failed, skipping verification: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
+// Shared tail of the two done branches (sweep tick + manual retry):
+// warn-and-annotate when the reply claims an edit the counts can't
+// back. Each branch keeps its own gating (the claim test, non-null
+// counts, the unmoved-count comparison); this only renders the
+// warning and the annotation.
+function annotateUnverifiedEditClaim(
+  reasoning: string,
+  before: number,
+  after: number,
+  log: EdgeLogger,
+  threadId: string,
+  titleTag = '',
+): string {
+  log.warn(
+    `thread ${threadId}: unverified self-report - reasoning claims an edit ` +
+      `but wiki_changelog rows for this user went from ${before} to ${after} ${titleTag}`,
+  );
+  return (
+    `${reasoning} [unverified self-report: claimed an edit, ` +
+    `but wiki_changelog rows for this user went from ${before} to ${after}]`
+  );
+}
+
 type WikiRunOutcome =
   | { kind: 'done'; toolCalls: number; reasoning: string; messageCount: number }
   | { kind: 'empty-slice' }
@@ -1272,6 +1367,7 @@ export async function runWikiSweepTick(
 
     try {
       log.info(`picked up thread ${threadId} @ msg ${terminalMsgId} ${titleTag}`);
+      const changelogBefore = await countChangelogForUser(adminClient, userId);
       const outcome = await runWikiAgentOnThread(
         adminClient,
         userId,
@@ -1296,10 +1392,27 @@ export async function runWikiSweepTick(
         // re-processing it every tick would be wasted Venice spend.
         const marked = await markWikiProcessed(adminClient, threadId, holderId, terminalMsgId, userId);
         if (marked) {
+          let reasoning = outcome.reasoning;
+          const changelogAfter = await countChangelogForUser(adminClient, userId);
+          if (
+            claimsArticleEdit(reasoning) &&
+            changelogBefore !== null &&
+            changelogAfter !== null &&
+            changelogAfter === changelogBefore
+          ) {
+            reasoning = annotateUnverifiedEditClaim(
+              reasoning,
+              changelogBefore,
+              changelogAfter,
+              log,
+              threadId,
+              titleTag,
+            );
+          }
           log.info(
             `finished thread ${threadId} ` +
               `(${outcome.toolCalls} tool calls over ${outcome.messageCount} messages, ` +
-              `reasoning="${outcome.reasoning}") ${titleTag}`,
+              `reasoning="${reasoning}") ${titleTag}`,
           );
           await appendWikiAgentLog(adminClient, userId, {
             agent: 'wiki',
@@ -1307,7 +1420,7 @@ export async function runWikiSweepTick(
             threadId,
             terminalMsgId,
             toolCalls: outcome.toolCalls,
-            reasoning: outcome.reasoning,
+            reasoning,
           });
           summary.processed += 1;
         } else {
@@ -1429,6 +1542,7 @@ export async function retryWikiThread(
   adminClient: SupabaseClient,
   userId: string,
   threadId: string,
+  // Test seam, forwarded to runHeadlessAgent (defaults to the live call).
   opts: { complete?: AgentCompleteFn } = {},
 ): Promise<WikiRetryResult> {
   const log = createEdgeLogger(userId, 'wiki');
@@ -1470,6 +1584,7 @@ export async function retryWikiThread(
     }
 
     log.info(`manual retry on thread ${threadId} @ msg ${terminalMsgId}`);
+    const changelogBefore = await countChangelogForUser(adminClient, userId);
     const outcome = await runWikiAgentOnThread(
       adminClient,
       userId,
@@ -1501,8 +1616,22 @@ export async function retryWikiThread(
     }
 
     const toolCalls = outcome.kind === 'done' ? outcome.toolCalls : 0;
-    const reasoning = outcome.kind === 'done' ? outcome.reasoning : '(none)';
+    let reasoning = outcome.kind === 'done' ? outcome.reasoning : '(none)';
     const messageCount = outcome.kind === 'done' ? outcome.messageCount : 0;
+    // Self-report verification (same contract as the sweep tick's
+    // done branch). Empty-slice retries have nothing to verify.
+    const changelogAfter = outcome.kind === 'done'
+      ? await countChangelogForUser(adminClient, userId)
+      : null;
+    if (
+      outcome.kind === 'done' &&
+      claimsArticleEdit(reasoning) &&
+      changelogBefore !== null &&
+      changelogAfter !== null &&
+      changelogAfter === changelogBefore
+    ) {
+      reasoning = annotateUnverifiedEditClaim(reasoning, changelogBefore, changelogAfter, log, threadId);
+    }
     log.info(
       `manual retry finished thread ${threadId} ` +
         `(${toolCalls} tool calls over ${messageCount} messages, reasoning="${reasoning}")`,
@@ -1548,4 +1677,5 @@ export const __test = {
   isContentFilterRejection,
   buildWikiAutonomousPrompt,
   renderUserProfileBlock,
+  claimsArticleEdit,
 };

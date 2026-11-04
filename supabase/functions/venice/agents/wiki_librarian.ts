@@ -58,6 +58,7 @@ import { asAgentTool } from './_agent_tools.ts';
 import { appendWikiAgentLog } from './_wiki_agent_log.ts';
 import {
   runHeadlessAgent,
+  type AgentCompleteFn,
   type AgentProgressEvent,
   type AgentTool,
   type AgentToolContext,
@@ -1351,6 +1352,8 @@ interface LibrarianReviewArgs {
   parentDepth: number;
   onProgress?: (event: LibrarianProgressEvent) => void;
   log: EdgeLogger;
+  /** Test seam, forwarded to runHeadlessAgent (defaults to the live call). */
+  complete?: AgentCompleteFn;
 }
 
 interface LibrarianReviewResult {
@@ -1418,6 +1421,7 @@ async function runLibrarianReview(args: LibrarianReviewArgs): Promise<LibrarianR
       maxTokens: 8_192,
       reasoningEffort: 'low',
       onProgress: args.onProgress,
+      complete: args.complete,
     },
     args.parentDepth,
   );
@@ -1432,6 +1436,113 @@ async function runLibrarianReview(args: LibrarianReviewArgs): Promise<LibrarianR
 /** Normalise the model's operator summary for the single-line log convention. */
 function normaliseReasoning(finalText: string): string {
   return finalText.replace(/\s+/g, ' ').trim() || '(none)';
+}
+
+// ---------------------------------------------------------------------------
+// Self-report verification. All three librarian paths store the final
+// reply verbatim as the durable audit row; a run that skips the writes
+// and then claims an edit is otherwise invisible. The verified wrapper
+// counts the user's wiki_changelog rows before and after the run and
+// annotates the reply when a claim is not backed by a count move. The
+// selector is a lifetime per-user count because the changelog has no
+// run key, and a time-window comparison would pit the edge host's
+// clock against the DB's now(). Two accepted holes, both warn-only: a
+// concurrent writer for the same user inflates the after-count and
+// can mask a false claim (the allowed miss direction), and
+// reset_wiki_data deleting rows mid-run can shrink the after-count
+// below the before-count and annotate an honest run.
+// Warn-and-annotate only: the cadence
+// stamp, the in-flight guard, and the run's outcome are untouched, and
+// a count failure skips verification rather than failing the run.
+// ---------------------------------------------------------------------------
+
+// An affirmative edit claim: a reorganise verb BEFORE an article
+// reference within a short same-sentence window. The librarian names
+// either the noun ("merged the two 'Maya' articles") or the quoted
+// title itself ("Deleted 'Kermit protocol' as out-of-scope" - its
+// prompt's own example shape), so the noun side accepts both. The
+// verb-before-noun window deliberately excludes reference-style past
+// tense ("The Kermit entry was deleted last cycle") that an honest
+// no-op can produce when summarizing existing work. The matcher errs
+// toward the MISS direction - it can miss a false claim, and some
+// honest no-op phrasings may still be annotated (passive voice
+// without a negation token) - but the annotation is warn-only and
+// carries both counts, so the audit row stays truthful either way.
+// One example per error mode: a contracted negation ("hasn't merged")
+// is a MISS - the guard below always suppresses it (the n't
+// alternative has NO leading word boundary because none exists inside
+// a contraction); a passive reference-style summary with no negation
+// token is the accepted may-annotate shape. The nothing token in the
+// guard is load-bearing: without it the verb window crosses filler
+// words into the quoted title ("Merged nothing and 'Maya' stays as
+// is" would claim). Ports the shipped wiki_records.ts done-branch
+// verification.
+const LIBRARIAN_CLAIM_RE =
+  /\b(merged|deleted|updated|saved|consolidated|folded|combined|rewrote|renamed|edited)\b\s+(?:\w+\s+){0,3}?(?:\b(articles?|entry|entries|pages?|duplicates?|records?)\b|['"][^'"]+['"])/i;
+const EDIT_NEGATION_RE = /\b(no|none|zero|not|never|nothing)\b|n't\b/i;
+
+function claimsLibrarianEdit(reasoning: string): boolean {
+  return LIBRARIAN_CLAIM_RE.test(reasoning) && !EDIT_NEGATION_RE.test(reasoning);
+}
+
+// Count the user's changelog rows - all kinds, since every librarian
+// write path (article saves/deletes and record writes alike) lands
+// here. Returns null on any failure - the caller skips verification
+// (the tripwireArmed precedent in samskara.ts: the count is a
+// best-effort read, never a gate). The null path warns so a
+// persistently failing count (verification silently disabled
+// fleet-wide) leaves a trace.
+async function countChangelogForUser(
+  adminClient: SupabaseClient,
+  userId: string,
+): Promise<number | null> {
+  try {
+    const { count, error } = await adminClient
+      .from('wiki_changelog')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId);
+    if (error) {
+      console.warn(`[wiki-librarian] self-report count failed, skipping verification: ${error.message}`);
+      return null;
+    }
+    return typeof count === 'number' ? count : null;
+  } catch (err) {
+    console.warn(
+      `[wiki-librarian] self-report count failed, skipping verification: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * runLibrarianReview plus self-report verification (same contract as
+ * the article sweep's done branch). The three entry points all funnel
+ * through here; none has a claim to lose after the run, so the
+ * before/after counts bracket the review itself.
+ */
+async function runLibrarianReviewVerified(
+  args: LibrarianReviewArgs,
+): Promise<LibrarianReviewResult> {
+  const changelogBefore = await countChangelogForUser(args.adminClient, args.userId);
+  const result = await runLibrarianReview(args);
+  const changelogAfter = await countChangelogForUser(args.adminClient, args.userId);
+  if (
+    claimsLibrarianEdit(result.finalText) &&
+    changelogBefore !== null &&
+    changelogAfter !== null &&
+    changelogAfter === changelogBefore
+  ) {
+    args.log.warn(
+      `librarian run: unverified self-report - final reply claims an edit ` +
+        `but wiki_changelog rows for this user went from ${changelogBefore} to ${changelogAfter}`,
+    );
+    // Annotated on the raw text; the sites' normaliseReasoning keeps
+    // the annotation on the stored row.
+    result.finalText =
+      `${result.finalText} [unverified self-report: claimed an edit, ` +
+      `but wiki_changelog rows for this user went from ${changelogBefore} to ${changelogAfter}]`;
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -1455,6 +1566,7 @@ export interface WikiLibrarianSweepSummary {
  */
 export async function runWikiLibrarianSweepTick(
   adminClient: SupabaseClient,
+  opts: { /** Test seam, forwarded to runHeadlessAgent (defaults to the live call). */ complete?: AgentCompleteFn } = {},
 ): Promise<WikiLibrarianSweepSummary> {
   let userId: string;
   try {
@@ -1490,7 +1602,7 @@ export async function runWikiLibrarianSweepTick(
       return { outcome: 'too-small', articleCount: articles.length };
     }
 
-    const result = await runLibrarianReview({
+    const result = await runLibrarianReviewVerified({
       adminClient,
       userId,
       customInstructions: null,
@@ -1498,6 +1610,7 @@ export async function runWikiLibrarianSweepTick(
       signal: new AbortController().signal,
       parentDepth: 0,
       log,
+      complete: opts.complete,
     });
     log.info(
       `librarian finished (${result.toolCalls} tool calls over ` +
@@ -1543,6 +1656,7 @@ export async function runWikiLibrarianManual(
   userId: string,
   instructions: string | null,
   onProgress?: (event: LibrarianProgressEvent) => void,
+  opts: { /** Test seam, forwarded to runHeadlessAgent (defaults to the live call). */ complete?: AgentCompleteFn } = {},
 ): Promise<WikiLibrarianManualResult> {
   const log = createEdgeLogger(userId, 'wiki-librarian');
   const holderId = crypto.randomUUID();
@@ -1555,7 +1669,7 @@ export async function runWikiLibrarianManual(
     log.info(
       `manual librarian run requested (${custom ? 'custom-instructions' : 'standard'})`,
     );
-    const result = await runLibrarianReview({
+    const result = await runLibrarianReviewVerified({
       adminClient,
       userId,
       customInstructions: custom,
@@ -1564,6 +1678,7 @@ export async function runWikiLibrarianManual(
       parentDepth: 0,
       onProgress,
       log,
+      complete: opts.complete,
     });
     log.info(
       `manual librarian finished (${result.toolCalls} tool calls over ` +
@@ -1620,7 +1735,11 @@ export const wikiLibrarian: ToolDef = {
         );
       }
       log.info('chat-delegated librarian run requested (custom-instructions)');
-      const result = await runLibrarianReview({
+      // No completion test seam here on purpose: the seam can't be
+      // accepted from model-controlled tool args. The wrapper's
+      // behavior is pinned at the wrapper level + the sweep tick's
+      // wiring test instead.
+      const result = await runLibrarianReviewVerified({
         adminClient: ctx.adminClient,
         userId: ctx.userId,
         customInstructions: instructions,
@@ -1661,4 +1780,5 @@ export const __test = {
   buildLibrarianToolbox,
   buildWikiLibrarianPrompt,
   renderArticleList,
+  claimsLibrarianEdit,
 };
