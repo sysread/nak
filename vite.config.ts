@@ -172,6 +172,40 @@ export default defineConfig({
           }
           return 'assets/[name]-[hash].js';
         },
+        // Vendor chunks for the two largest eager dependency groups, so
+        // the entry chunk stays under the 750 kB advisory (bundle-split
+        // plan, docs/dev/plans/bundle-split-plan.md). The rule is
+        // deliberately SELECTIVE, not "all of node_modules": highlight.js,
+        // katex, marked-katex-extension, and pdfjs are dynamically
+        // imported (src/lib/markdown.ts, src/lib/highlight.ts,
+        // src/lib/pdf-pages.ts), and a matcher that caught them would
+        // drag the whole lazy grammar/katex/pdf graph back into an eager
+        // chunk - the same granularity mistake the facadeModuleId choice
+        // above exists to avoid.
+        //
+        // vendor-supabase is the supabase-js family (auth/postgrest/
+        // storage/realtime/functions) plus its two transitive deps the
+        // matcher must name explicitly: @supabase/phoenix rides in via
+        // realtime-js and iceberg-js via storage-js. vendor-svelte is the
+        // svelte 5 runtime. Both are leaf vendor graphs - nothing in them
+        // imports src/ - which is the safe class for manualChunks: a
+        // cross-chunk cycle is what surfaces as TDZ "Cannot access ...
+        // before initialization" at load. Unmatched shared deps (tslib,
+        // ws, esm-env) stay on Rollup's default placement; if that ever
+        // creates an entry-to-vendor cycle, the preview smoke in the plan
+        // is the catcher. Worker bundles never see this function - they
+        // build through the separate worker pipeline (the `worker` block
+        // above), so the pdfjs worker and the toolboxes are unaffected.
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('/@supabase/') || id.includes('/iceberg-js/')) {
+              return 'vendor-supabase';
+            }
+            if (id.match(/\/node_modules\/svelte\//)) {
+              return 'vendor-svelte';
+            }
+          }
+        },
       },
     },
     // Bump the chunk-size advisory from Rollup's 500 kB default to

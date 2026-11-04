@@ -55,6 +55,11 @@ docs imported via `import.meta.glob`.
 - **`pnpm preview`** — serves the built `dist/` on
   `http://localhost:4173`. Use for a PWA smoke test (the dev
   server does not emit a service worker).
+- **`NAK_BUNDLE_STATS=1 pnpm build`** — also emits
+  `dist/stats.html`, the rollup-plugin-visualizer treemap.
+  The recipe for bundle-shape work: parse it per-chunk to see
+  which modules occupy a chunk (the bundle-split plan used
+  this to measure the 882 kB entry before splitting it).
 - **`mise run check`** — the canonical full gate. Fires unit
   tests (which include the markdownlint guardrail),
   svelte-check, and ESLint. CI runs the same task via
@@ -162,6 +167,56 @@ docs imported via `import.meta.glob`.
   and the About pane both read that flag; both drive the
   same `applyUpdate()` that posts `SKIP_WAITING` to the
   waiting SW and reloads.
+
+## Chunking structure
+
+The build's chunk shape is a contract between three files:
+`vite.config.ts` (`chunkFileNames` + `manualChunks`), the precache
+globs in the PWA plugin config, and `src/sw.ts`. Changing one means
+checking the other two.
+
+**Buckets.** `chunkFileNames` routes three species of lazy chunk into
+subdirectories the precache ignores (`globIgnores`) and `src/sw.ts`
+runtime-caches on first fetch (stale-while-revalidate):
+
+- `assets/hljs/` — highlight.js per-language grammars.
+- `assets/docs/` — the bundled Help corpus.
+- `assets/screens/` — lazily-opened screens (Settings, Memories,
+  Library, ...). Cookbook and Wiki are deliberately NOT here: they
+  render the offline cache, so they must be precached (see the
+  Contracts section's service-worker entry for the failure this
+  avoids).
+
+Everything else falls through to `assets/[name]-[hash].js` and is
+precached.
+
+**Vendor chunks.** `manualChunks` splits the two largest eager
+dependency groups out of the entry: `vendor-supabase` (the supabase-js
+family plus `@supabase/phoenix` via realtime-js and `iceberg-js` via
+storage-js) and `vendor-svelte` (the svelte 5 runtime). Both land in
+the precached default bucket. Two constraints the next editor must
+not violate:
+
+- The rule is **selective, not "all of node_modules."** highlight.js,
+  katex, `marked-katex-extension`, and pdfjs are dynamically
+  imported; a matcher that caught them would drag that lazy graph
+  back into an eager chunk and re-bloat the entry.
+- Both vendor graphs are **leaf graphs** (nothing in them imports
+  `src/`), which is what makes manualChunks safe here: a cross-chunk
+  cycle surfaces at load as TDZ "Cannot access ... before
+  initialization". If a future change adds a dynamic import of a
+  vendor module, Rollup's `(!)` warning will say so - the gate grep
+  for `(!)` (see `./testing.md`) is the detector.
+
+Worker bundles never see these rules: workers build through Vite's
+separate worker pipeline (the `worker` block in `vite.config.ts`
+sets only `plugins` and `format`), so the pdfjs worker and the
+svelte-rune-importing toolboxes are unaffected by `manualChunks`.
+
+Independently-hashed vendor chunks also mean an app-only deploy
+re-downloads no vendor code during a PWA update: `vendor-supabase`
+changes hash only when a supabase dependency changes,
+`vendor-svelte` only when the svelte runtime does.
 
 ## Interactions with other features
 

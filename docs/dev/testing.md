@@ -359,11 +359,12 @@ gate failure, not a lint suggestion.
   A component that needs no props still needs an empty
   `<script lang="ts">` block; `src/components/SleepSpinner.svelte`
   carries one with a comment against deletion.
-- **The Rollup chunk-size warning is pre-existing.** The threshold
-  is `chunkSizeWarningLimit: 750` in `vite.config.ts`, and a clean
-  tree already trips it.
-  Do not treat it as introduced by your change without checking a
-  clean tree first.
+- **Rollup chunk-size warnings are not pre-existing.** The threshold
+  is `chunkSizeWarningLimit: 750` in `vite.config.ts`; since the
+  vendor-chunk split (see `./build-deploy.md`), a clean tree builds
+  with no chunk over the limit and no `(!)` warnings at all.
+  Treat ANY `(!)` warning in your build output as introduced by your
+  change and grep for it per CLAUDE.md before declaring victory.
 
 ## Where to go next
 
