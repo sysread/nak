@@ -201,8 +201,10 @@ async function manageConfig(ref) {
 // Seed the two Vault secrets the pg_cron embedding backfill reads at dispatch
 // time (see supabase/schema.sql, nak_trigger_embed_backfill). Idempotent:
 // updates the secret in place when it already exists, creates it otherwise.
-// `project_url` is the edge-function base; `service_role_key` MUST be the legacy
-// JWT key - the function gateway rejects a non-JWT (sb_secret_) bearer.
+// `project_url` is the edge-function base; `service_role_key` is the
+// project's current service secret key - the function's cron-auth check
+// accepts either key format, but the hosted gateway rejects the legacy
+// JWT-shaped one.
 async function seedCronSecrets(ref, projectUrl, serviceRoleKey) {
   const esc = (v) => String(v).replace(/'/g, "''");
   await runSql(
@@ -218,7 +220,7 @@ begin
   end if;
   select id into v_id from vault.secrets where name = 'service_role_key';
   if v_id is null then
-    perform vault.create_secret('${esc(serviceRoleKey)}', 'service_role_key', 'nak: legacy JWT service-role key for cron->function auth');
+    perform vault.create_secret('${esc(serviceRoleKey)}', 'service_role_key', 'nak: service secret key for cron->function auth');
   else
     perform vault.update_secret(v_id, '${esc(serviceRoleKey)}', 'service_role_key');
   end if;
@@ -516,24 +518,29 @@ if (wantsUser) {
 step(7, 'Schedule background embedding backfill');
 info(
   'Embedding backfill runs server-side on a pg_cron schedule that POSTs to the ' +
-    'venice edge function. It authenticates with the legacy JWT service-role key, ' +
-    'stored in Supabase Vault. Until both secrets are seeded the schedule no-ops.'
+    'venice edge function. It authenticates with the project\'s service secret ' +
+    'key, stored in Supabase Vault. Until both secrets are seeded the schedule no-ops.'
 );
-// Specifically the LEGACY JWT key: the function gateway validates the bearer as
-// a JWT, and the modern opaque sb_secret_ key is not one (same reason the local
-// realtime stack rejects sb_publishable_).
-const legacyServiceRole =
+// The project's current service secret key: the modern sb_secret_ key when
+// the project has one, the legacy service_role JWT otherwise (projects that
+// never created modern keys). The function accepts either format; the hosted
+// gateway rejects legacy keys outright, so prefer the modern one whenever it
+// exists. Deliberately NOT the SUPABASE_SECRET_KEY env var: that may hold a
+// different project's key, and a key the cron path cannot authenticate with
+// fails silently for days (exactly how the 2026-11 outage went unnoticed -
+// cron's own tables only show that the POST was queued).
+const cronServiceKey =
+  keys.find((k) => k.type === 'secret') ||
   keys.find((k) => k.type === 'legacy' && k.name === 'service_role') ||
   keys.find((k) => k.name === 'service_role' || k.tags?.includes('service_role'));
-if (!legacyServiceRole?.api_key) {
-  warn('No legacy JWT service-role key available; cron backfill auth cannot be seeded.');
+if (!cronServiceKey?.api_key) {
+  warn('No service secret key available; cron backfill auth cannot be seeded.');
   hint(
-    'Enable the legacy JWT keys in Supabase -> Project Settings -> API, then rerun this task. ' +
-      'The modern sb_secret_ key will not work: the gateway rejects a non-JWT bearer.'
+    'Create the modern API keys in Supabase -> Project Settings -> API, then rerun this task.'
   );
 } else {
   try {
-    await seedCronSecrets(project.id, supabaseUrl, legacyServiceRole.api_key);
+    await seedCronSecrets(project.id, supabaseUrl, cronServiceKey.api_key);
     ok('Cron backfill secrets seeded into Vault (project_url, service_role_key).');
   } catch (err) {
     warn(`Could not seed cron secrets: ${err.message}`);

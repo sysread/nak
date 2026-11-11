@@ -91,6 +91,7 @@ import {
   isBlockedModelId,
   stripBlockedCatalogEntries,
 } from '../_shared/blocked-models.ts';
+import { isServiceRole } from '../_shared/service-role-auth.ts';
 // MCP integration surface. Pure OAuth/transport helpers in
 // ./mcp/oauth.ts (fetch-injectable, unit-testable) per-user token
 // storage in ./mcp/token-store.ts (b-strict service-role), and the
@@ -197,40 +198,6 @@ async function requireVeniceEnv(): Promise<
     return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
   }
   return { admin, apiKey };
-}
-
-/**
- * True when the request is authenticated as the service role. The cron job
- * (pg_net) sends the project's service-role JWT as the bearer (the gateway
- * needs a JWT, so the cron secret is the legacy JWT key, not the modern opaque
- * `sb_secret_` one - same reason the local realtime stack rejects
- * `sb_publishable_`).
- *
- * We decode the bearer's `role` claim rather than string-comparing it to the
- * injected SUPABASE_SERVICE_ROLE_KEY. That equality check shipped first and
- * 403'd every cron call: the bearer must be a JWT for the gateway to accept it,
- * but SUPABASE_SERVICE_ROLE_KEY is not guaranteed to be the same string (legacy
- * JWT vs modern `sb_secret_`), so the bytes differ even though both grant the
- * service role. Checking the claim is robust to which key format the project
- * uses. SECURITY: this trusts the decoded payload, which is only safe because
- * the gateway's `verify_jwt` (on by default, per supabase/config.toml; no
- * per-route override) has already validated the signature. Do NOT disable
- * verify_jwt for this function without replacing this with signature
- * verification - otherwise a forged `role: service_role` token would pass.
- */
-function isServiceRole(req: Request): boolean {
-  const auth = req.headers.get('Authorization') ?? '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  const parts = token.split('.');
-  if (parts.length !== 3) return false; // not a JWT
-  try {
-    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    while (b64.length % 4) b64 += '=';
-    const payload = JSON.parse(atob(b64)) as { role?: unknown };
-    return payload.role === 'service_role';
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -748,7 +715,7 @@ async function handleBackfill(req: Request): Promise<Response> {
 
 /**
  * Cron-driven sweep route: service-role only (pg_cron -> pg_net sends
- * the service JWT). The tick runs DETACHED under EdgeRuntime.waitUntil
+ * the service-role bearer). The tick runs DETACHED under EdgeRuntime.waitUntil
  * and the response is an immediate `{accepted: true}`: an agent sweep
  * can outlive the HTTP window (pg_net's timeout is seconds; the local
  * gateway's is ~2.5 minutes), and a synchronous handler gets killed

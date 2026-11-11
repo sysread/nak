@@ -8,13 +8,17 @@
 // Standalone like attachment-gc: it only touches Postgres + Storage,
 // never Venice, so it isn't a venice route. The auth/client helpers are
 // duplicated from venice/index.ts on purpose - independent functions over a
-// shared module. The sweep orchestration is pure and unit-tested in
-// ../_shared/recipe-image-gc.ts; this file is glue.
+// shared module - except the service-role bearer check, which lives in
+// ../_shared/service-role-auth.ts: every cron route must accept the same
+// key formats in lockstep, and a drifted copy silently kills its route
+// (the 2026-11 legacy-key outage). The sweep orchestration is pure and
+// unit-tested in ../_shared/recipe-image-gc.ts; this file is glue.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 // edge-log is a _shared module like the GC driver itself - the "independent
 // functions" stance in the header is about the auth/client glue, not _shared.
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 import { runRecipeImageGc, type RecipeImageGcDeps } from '../_shared/recipe-image-gc.ts';
+import { isServiceRole } from '../_shared/service-role-auth.ts';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -40,24 +44,8 @@ function adminClient(): SupabaseClient | null {
   return createClient(url, serviceKey, { auth: { persistSession: false } });
 }
 
-// Trust the decoded bearer `role` only because the gateway's verify_jwt
-// has already validated the signature (see the longer note in
-// venice/index.ts). Do NOT disable verify_jwt without replacing this.
-function isServiceRole(req: Request): boolean {
-  const auth = req.headers.get('Authorization') ?? '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  const parts = token.split('.');
-  if (parts.length !== 3) return false;
-  try {
-    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    while (b64.length % 4) b64 += '=';
-    const payload = JSON.parse(atob(b64)) as { role?: unknown };
-    return payload.role === 'service_role';
-  } catch {
-    return false;
-  }
-}
-
+// Trust the bearer check's own module (../_shared/service-role-auth.ts) for
+// the two-shape contract and the security note.
 async function handleGc(req: Request): Promise<Response> {
   if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
 
