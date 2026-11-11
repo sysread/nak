@@ -121,3 +121,4 @@ PGPASSWORD=postgres psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -c \
 | Date | Env | Commit | Result | Notes |
 | --- | --- | --- | --- | --- |
 | 2026-08-11 | local | 2c97416 | pass | Full stack test: /embed returns 384 dims, search finds test memory by meaning, backfill re-embeds nulled row, all rows show embedding_model=gte-small at 2048 dims |
+| 2026-11-11 | local (`functions serve` standalone, dev@nak.local) | 9512bdf1 | pass | Re-run after the detached-ack + 6-row-cap change: manual backfill acks `{"accepted":true}` immediately; the nulled row re-embedded (gte-small, 2048 dims) within ~25s; the serve log shows the detached tick's drawer line "embedded 1 item(s) in the background". Steps 1-4 not re-run (the `/embed` and search paths are unchanged). |
