@@ -75,8 +75,8 @@ async function listOp(_args: Record<string, unknown>, ctx: ToolContext) {
     .limit(CLOSED_LIST_CAP);
 
   const [openRes, closedRes] = await Promise.all([openPromise, closedPromise]);
-  if (openRes.error) throw new Error(`followup_list failed: ${openRes.error.message}`);
-  if (closedRes.error) throw new Error(`followup_list failed: ${closedRes.error.message}`);
+  if (openRes.error) throw new Error(`followups op=list failed: ${openRes.error.message}`);
+  if (closedRes.error) throw new Error(`followups op=list failed: ${closedRes.error.message}`);
   return {
     open: openRes.data ?? [],
     recently_closed: closedRes.data ?? [],
@@ -120,7 +120,7 @@ async function doCreate(
     })
     .select('id, question, context, status, relevant_after, created_at')
     .single();
-  if (error) throw new Error(`followup_save (create) failed: ${error.message}`);
+  if (error) throw new Error(`followups op=save (create) failed: ${error.message}`);
   return row;
 }
 
@@ -183,10 +183,10 @@ async function doUpdate(
     .eq('status', 'open')
     .select('id, question, context, status, relevant_after, created_at')
     .maybeSingle();
-  if (error) throw new Error(`followup_save (revise) failed: ${error.message}`);
+  if (error) throw new Error(`followups op=save (revise) failed: ${error.message}`);
   if (!row) {
     throw new Error(
-      'followup not found or not open - only open follow-ups can be revised (use followup_list to check status)',
+      'followup not found or not open - only open follow-ups can be revised (use followups op=list to check status)',
     );
   }
   return row;
@@ -244,7 +244,7 @@ async function closeOp(args: Record<string, unknown>, ctx: ToolContext) {
   const resolution = typeof args.resolution === 'string' ? args.resolution.trim() : '';
 
   const errs = new ArgErrors();
-  if (!id) errs.add('id is required (from followup_list)');
+  if (!id) errs.add('id is required (from followups op=list)');
   if (!resolution) errs.add('resolution is required - one line on what the answer was');
   else if (resolution.length > MAX_FOLLOWUP_RESOLUTION_CHARS) {
     errs.add(
@@ -268,10 +268,10 @@ async function closeOp(args: Record<string, unknown>, ctx: ToolContext) {
     .eq('status', 'open')
     .select('id, question, status, resolution')
     .maybeSingle();
-  if (error) throw new Error(`followup_close failed: ${error.message}`);
+  if (error) throw new Error(`followups op=close failed: ${error.message}`);
   if (!row) {
     throw new Error(
-      'followup not found or already closed (use followup_list to check status)',
+      'followup not found or already closed (use followups op=list to check status)',
     );
   }
   return row;
@@ -284,7 +284,7 @@ async function closeOp(args: Record<string, unknown>, ctx: ToolContext) {
 async function dismissOp(args: Record<string, unknown>, ctx: ToolContext) {
   const id = typeof args.id === 'string' ? args.id.trim() : '';
   const errs = new ArgErrors();
-  if (!id) errs.add('id is required (from followup_list)');
+  if (!id) errs.add('id is required (from followups op=list)');
   errs.throwIfAny();
 
   // RLS OFF: filter by userId. Only open loops are dismissable.
@@ -296,10 +296,10 @@ async function dismissOp(args: Record<string, unknown>, ctx: ToolContext) {
     .eq('status', 'open')
     .select('id, question, status')
     .maybeSingle();
-  if (error) throw new Error(`followup_dismiss failed: ${error.message}`);
+  if (error) throw new Error(`followups op=dismiss failed: ${error.message}`);
   if (!row) {
     throw new Error(
-      'followup not found or not open (use followup_list to check status)',
+      'followup not found or not open (use followups op=list to check status)',
     );
   }
   return row;

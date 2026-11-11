@@ -146,7 +146,7 @@ Deno.test('list: a read failure on either leg fails the call', async () => {
       ],
     },
   });
-  await assertRejects(() => run('list', {}, ctx), Error, 'followup_list failed: boom');
+  await assertRejects(() => run('list', {}, ctx), Error, 'followups op=list failed: boom');
 });
 
 // --- save: create ------------------------------------------------------
