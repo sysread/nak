@@ -1,5 +1,6 @@
 /**
- * Schema-only export for wiki_librarian. Impl lives in `./wiki_librarian`.
+ * Schema-only export for wiki_librarian. Impl lives in
+ * supabase/functions/venice/agents/wiki_librarian.ts.
  */
 export const wikiLibrarianSchema = {
   name: 'wiki_librarian',
@@ -12,9 +13,10 @@ export const wikiLibrarianSchema = {
     'Side effects (creates, updates, deletes) land directly on the ' +
     "user's wiki; returns {summary, articleCount, toolCalls} where " +
     '`summary` is the librarian\'s 1-2 sentence operator note of what ' +
-    'it merged, deleted, or considered-but-left-alone. Use wiki_list / ' +
-    'wiki_get to scope your instructions BEFORE calling - vague ' +
-    'instructions burn tokens and produce vague results. One run at a ' +
+    'it merged, deleted, or considered-but-left-alone. Use the `wiki` ' +
+    "tool's op=list / op=get to scope your instructions BEFORE " +
+    'calling - vague instructions burn tokens and produce vague ' +
+    'results. One run at a ' +
     'time; a concurrent run from the Wiki panel returns an error.',
   shortDescription: 'delegate a wiki maintenance task',
   parameters: {
