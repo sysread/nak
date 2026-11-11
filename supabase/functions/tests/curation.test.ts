@@ -3,8 +3,9 @@
 // memory_topics,recipe_topics,curation}.ts). The units are ports of
 // the browser worker fleet and their prompts/validators are a QA
 // contract - these tests assert the validator behavior matches the
-// browser suites (tests/title-gen.test.ts, tests/topics-agent.test.ts
-// and siblings) on the cases that have bitten before, and pin the
+// deleted browser suites (tests/title-gen.test.ts,
+// tests/topics-agent.test.ts and siblings) on the cases that have
+// bitten before, and pin the
 // composition invariants ./curation.ts documents.
 //
 // Pure: every assertion drives an exported __test surface; no DB,

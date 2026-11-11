@@ -118,8 +118,8 @@ conversations, and your [wiki](./wiki.md) articles — and assembles a
 short index the assistant reads as its own prior recollection before
 the next reply. Matching memory facts are dropped in verbatim;
 related conversations and wiki articles come in as a short list of
-titles the assistant can open in full (with `conversation_get` /
-`wiki_get`) if a lead looks worth pulling. There is no extra model
+titles the assistant can open in full (with `conversation_get` or
+the `wiki` get op) if a lead looks worth pulling. There is no extra model
 step massaging the findings into prose, so what the assistant recalls
 is exactly what the stores hold. The main model can also call
 `memory_recall`, `conversation_recall`, `wiki_recall`, or the

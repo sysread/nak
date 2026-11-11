@@ -7,9 +7,7 @@
 // response_text delta every 30-50ms (~20 msg/sec) which is comfortable
 // solo but adds up under multiple concurrent streams. When the
 // upstream complains, we widen the flush window per tier; when it
-// stays quiet, we narrow back to the snappy default. See
-// docs/dev/in-progress/venice-edge-functions/streaming-root.md
-// section 2.6 for the design rationale.
+// stays quiet, we narrow back to the snappy default.
 //
 // What gets buffered:
 //

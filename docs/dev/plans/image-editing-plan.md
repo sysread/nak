@@ -2,9 +2,9 @@
 
 Status: LANDED - kept for the design rationale. The living references
 are [`../image-editing.md`](../image-editing.md) (dev internals),
-[`../../../user/image-editing.md`](../../../user/image-editing.md)
+[`../../../docs/user/image-editing.md`](../../../docs/user/image-editing.md)
 (the user-facing page), and the QA use-case
-[`../../../qa/use-cases/image-editing.md`](../../../qa/use-cases/image-editing.md);
+[`../../../docs/qa/use-cases/image-editing.md`](../../../docs/qa/use-cases/image-editing.md);
 where the implementation diverged from this plan, those docs win.
 Divergences worth knowing: the edit card's tool-name filter needed an
 actual edit (the plan assumed one line; it is the IMAGE_TOOL_NAMES set

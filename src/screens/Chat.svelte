@@ -26,7 +26,7 @@
    *      clear `slot.streamingText`, refresh the thread list so the
    *      sidebar ordering reflects updated_at.
    *   4. Conversation titles are named by the model itself via the
-   *      always-on `update_title` tool (see src/lib/tools/update_title.ts).
+   *      always-on `update_title` tool (see src/lib/tools/update_title.schema.ts).
    *      The chat-loop injects a per-turn system-prompt note telling the
    *      model the current title and when to call the tool; a manual
    *      rename via the title input pins the title (sets
@@ -311,7 +311,7 @@
   // Chat-surface companions lazy-loaded for the same reason as the
   // drawers above: each is conditionally rendered (drawer tabs,
   // expanded cohort panel, ask_user tool call) or late-firing
-  // (SamskaraToasts seeds from its own DB query on mount, so a
+  // (SamskaraMoodSync seeds from its own DB query on mount, so a
   // post-first-paint load misses nothing). All five together carry
   // ~19 kB gz of weight out of the main bundle.
   type RecipeListComponent = typeof import('../components/RecipeList.svelte').default;
@@ -2408,7 +2408,7 @@
   // venice function (turn tail + hourly sweep), so a fresh mint reaches
   // the mood pill as a private samskara-mint Broadcast event, relayed
   // into the same window event the old in-tab worker dispatched.
-  // SamskaraToasts.svelte is the unchanged consumer.
+  // SamskaraMoodSync.svelte is the consumer.
   $effect(() => {
     if (!app.supabase || !sessionUserId) return;
     return app.supabase.subscribeToSamskaraInserts(sessionUserId, notifySamskaraMint);
@@ -9726,7 +9726,7 @@
   {#if ExtractedTextDrawerComp}
     <ExtractedTextDrawerComp />
   {/if}
-  <!-- SamskaraToasts and IntuitionPill mount inside .messages-wrap
+  <!-- SamskaraMoodSync and IntuitionPill mount inside .messages-wrap
        (see above) so they share a coordinate system with the
        scroll-to-bottom arrow and stack as a vertical column at the
        bottom-right of the messages pane. Only rendered on the chats

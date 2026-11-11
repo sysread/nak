@@ -16,9 +16,9 @@ them ([dev: followups](../../dev/followups.md)):
 - **Date extraction** - a plan with a stated date yields
   `relevant_after` just past that date; a plan with no date
   yields null (semantic-only surfacing, no proactive ask).
-- **Reschedule** - a plan that moved is a `followup_update`
-  (new `relevant_after`, same row, still open), not a close and
-  not a second create.
+- **Reschedule** - a plan that moved is a `followups` save with
+  the row's id (new `relevant_after`, same row, still open), not a
+  close and not a second create.
 - **Subconscious capture** - the reflection agent
   ([dev: memory](../../dev/memory.md)) records unresolved plans
   from settled threads, so capture works even when the mid-turn
@@ -93,15 +93,15 @@ them ([dev: followups](../../dev/followups.md)):
 - Step 4: STILL exactly one open lasagna row - the restate did
   not mint a twin.
 - Step 5: still the SAME row (same id), now with `relevant_after`
-  on or just after Sunday, still `open` - a visible
-  `followup_update` call, no close, no second create.
+  on or just after Sunday, still `open` - a visible `followups`
+  op=save call carrying the id, no close, no second create.
 - Step 7: a new open row for the manager conversation, created
   by reflection (no tool call in the chat transcript; the
   reflection log lines show the create). `relevant_after` is
   NULL - no stated date, so no proactive-ask basis.
 - Step 9: the lasagna row is `status='answered'` with a
   `resolution` mentioning the outcome, closed by REFLECTION (no
-  `followup_close` in any chat transcript; the reflection log
+  `followups` op=close call in any chat transcript; the reflection log
   lines show the close). The manager row is untouched - closing
   is per-loop judgment, not a sweep.
 - At no point does a row exist for chit-chat without a pending

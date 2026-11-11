@@ -7,7 +7,7 @@
  *
  * Parallel to `memories-store.svelte.ts`. Search semantics call
  * `searchWikiArticlesSemantic` so the drawer matches the assistant's
- * `wiki_search` tool exactly.
+ * wiki search exactly.
  */
 import {
   DEFAULT_LIST_PAGE_SIZE,
@@ -81,7 +81,7 @@ export const wikiStore = $state<WikiStore>({
   loadingMore: false,
 });
 
-// Match the assistant's `wiki_search` per-call cap so a search never
+// Match the assistant's wiki-search per-call cap so a search never
 // hides articles the assistant can reach.
 const WIKI_LIST_LIMIT = 100;
 

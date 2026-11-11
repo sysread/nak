@@ -8,7 +8,8 @@ export default [
     // supabase/functions is a Deno island - it uses Deno globals, URL/npm:/jsr:
     // imports, and its own deno.json/deno lint+fmt toolchain. The Node ESLint
     // config here would false-flag all of it; keep the two toolchains apart by
-    // directory. See docs/dev/in-progress/venice-edge-functions/.
+    // directory. See supabase/functions/README.md ("Deno island,
+    // intentionally").
     ignores: [
       'dist/**',
       'node_modules/**',

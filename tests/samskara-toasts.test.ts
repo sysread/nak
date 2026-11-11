@@ -2,7 +2,7 @@
  * Unit coverage for the mood-pill UI primitives. Pure functions -
  * no runes, no DOM, no reactive state - tested via plain vitest.
  *
- * The companion `src/components/SamskaraToasts.svelte` is the only
+ * The companion `src/components/SamskaraMoodSync.svelte` is the only
  * caller that wires these into Svelte reactivity (the `current`
  * rune, the monotonic `nextId` that keys the fly transition, the
  * `$effect` that reseeds on thread switch, the window event

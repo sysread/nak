@@ -227,7 +227,7 @@ describe('ILIKE pattern escaping', () => {
     ]);
   });
 
-  // Regression for the recipe_list tool: a query of "Joy" returned an empty
+  // Regression for the recipes list op: a query of "Joy" returned an empty
   // list even though a recipe titled "Joy's Favorite Bread" existed, because
   // the standalone title filter was being double-quoted to `"%Joy%"` and
   // matching literal quote characters. The wire value must be bare `%Joy%`.

@@ -36,10 +36,10 @@ import { SUMMARY_MODEL } from '../../_shared/agent-models.ts';
  * angle dilutes signal, while the first-person angle keeps the
  * writing focused on what the thread was actually about.
  *
- * Verbatim copy of SUMMARY_PROMPT in src/lib/agents/summary/prompt.ts
- * so the model gets identical guidance whichever path drove it; the
- * literal's em-dashes are preserved to keep the two copies
- * diff-identical (same exception the reflection prompt documents).
+ * Verbatim copy of the retired browser agent's SUMMARY_PROMPT; the
+ * literal's em-dashes are preserved so the prompt bytes stay exactly
+ * what the model has seen (same exception the reflection prompt
+ * documents).
  *
  * Format rationale (from the browser original):
  *   - 2-3 sentences, prose not bullets - bge-m3 handles prose more

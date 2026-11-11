@@ -1,9 +1,10 @@
 // Tool-level guards for the favorite-lock on wiki articles.
 //
-// A favorited article is locked from agent edits: wiki_save (both the
-// update form and the natural-key-matched create form) and wiki_delete
-// must refuse the call with a clear error before any write reaches the
-// DB. wiki_save must never set the favorite flag. These tests stub the
+// A favorited article is locked from agent edits: the `wiki` save op
+// (both the update form and the natural-key-matched create form) and
+// the delete op must refuse the call with a clear error before any
+// write reaches the DB. The save op must never set the favorite flag.
+// These tests stub the
 // admin client to verify the guard fires at the right point in the
 // tool's query chain - before the write, after the read that surfaces
 // the favorite flag.

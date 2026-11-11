@@ -7,9 +7,9 @@ The chat model's direct write access to the wiki
 [dev: wiki](../../dev/wiki.md), "Tool toolbox split").
 Specifically the chat-dispatched `wiki` combination tool
 (op=save is the create/update-merged writer; op=delete removes)
-and the record write tools grouped with
-them (`record_create` / `record_update` / `record_delete`), and the
-changelog rows every chat-driven write lands. The `wiki_librarian`
+and the record writes that ride the `records` combination tool
+(op=create / update / delete), plus the changelog rows every
+chat-driven write lands. The `wiki_librarian`
 delegation living alongside the direct tools is exercised by
 [wiki-fleet](./wiki-fleet.md); this case is the direct-write path.
 

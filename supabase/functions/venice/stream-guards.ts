@@ -1,10 +1,10 @@
-// Output guards armed for the function-side streaming chat path. This
-// file is the Deno-side mirror of src/lib/stream-guards.ts (browser):
-// same special-token-leak detector, same retry-temperature schedule,
-// same model arming decision - but operating on the Venice wire body
-// rather than the browser's ChatRequest type, and with the leaky-model
-// list duplicated here so the function does not need to reach into the
-// browser's models registry.
+// Output guards armed for the function-side streaming chat path: the
+// special-token-leak detector, the retry-temperature schedule, and the
+// model arming decision, operating on the Venice wire body rather than
+// the browser's ChatRequest type. The leaky-model list is duplicated
+// here (mirroring the curated registry's `leaksSpecialTokens` flags,
+// src/lib/models/index.ts) so the function does not need to reach into
+// the browser's models registry.
 //
 // Why duplicated rather than shared: the model arming list is small
 // (a handful of DeepSeek/llama-family ids today) and the StreamGuard

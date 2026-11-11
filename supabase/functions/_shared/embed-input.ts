@@ -13,7 +13,7 @@
 // (astral-plane) sitting on a truncation boundary would make a SQL-composed
 // string differ by a code point from the historical browser-composed one. The
 // claim RPCs return the raw columns; we compose here so the cap semantics match
-// byte-for-byte. See docs/dev/in-progress/venice-edge-functions/embeddings.md.
+// byte-for-byte. See docs/dev/embeddings.md.
 
 // Defensive truncation so a historical row can't loop the backfill on an
 // input the model rejects for context overflow.

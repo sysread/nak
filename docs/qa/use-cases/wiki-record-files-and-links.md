@@ -69,7 +69,7 @@ badge fed by the `wiki_record_files(count)` embed.
    into `wiki-record-files`, a DISTINCT object key from the chat
    attachment) and the new edge.
 10. Ask: `What files and links does that record have?` and confirm the
-    model answers from `record_get` (it should name the file and the
+    model answers from a `records` op=get call (it should name the file and the
     linked record, not guess).
 11. **Part D - content dedup + collapsed-row badge.** With the record
     still carrying its attached image, **collapse** it (click the row).
@@ -117,7 +117,7 @@ badge fed by the `wiki_record_files(count)` embed.
   `record_link_create` lands the edge. Both write `record_update`
   changelog rows.
 - (10) The answer names the actual attached file + linked record,
-  sourced from `record_get` (visible as a `record_get` tool call).
+  sourced from a `records` op=get call (visible in the tool-call panel).
 - (11) The collapsed row shows a paperclip glyph and the file count
   (e.g. `2`); a record with no files shows no badge.
 - (12-13) Re-attaching identical bytes is a no-op on both paths: `rows`

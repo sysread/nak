@@ -1,7 +1,6 @@
 // The `recipe-image-gc` edge function - the idempotent server-side
 // replacement for the old AFTER DELETE orphan trigger on
-// recipe_version_images (see
-// docs/dev/in-progress/recipe-images-storage-migration.md). Cron-triggered
+// recipe_version_images (see docs/dev/cookbook.md). Cron-triggered
 // (pg_cron -> pg_net -> here; nak_trigger_recipe_image_gc in schema.sql).
 // Service-role only.
 //

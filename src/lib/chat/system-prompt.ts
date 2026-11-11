@@ -469,9 +469,9 @@ function buildCatalog(mcpToolboxes: readonly Toolbox[] = []): string {
  * umbrella `context` tool as the preferred first step when it wants
  * broad context on the user across every layer. Per-layer recall
  * tools (`memory_recall`, `conversation_recall`, `wiki_recall`)
- * stay available as targeted drill-downs; the search tools
- * (`memory_search`, `conversation_search`, `wiki_search`) remain
- * the path for direct lookups by phrase.
+ * stay available as targeted drill-downs; the search surfaces
+ * (`memory_search`, `conversation_search`, the `wiki` tool's search
+ * op) remain the path for direct lookups by phrase.
  *
  * **Tool surface.** The every-tool-available framing, the
  * activity-parameter narration rule

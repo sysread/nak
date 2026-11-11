@@ -190,10 +190,10 @@ end $$;
 -- Project-global configuration shared by every member of this Supabase
 -- project - NOT keyed to a user. One Venice API key serves the owner and
 -- anyone they invite (for example a family member on a separate account
--- but the same project), so both the embeddings edge function and the
--- browser read the single shared key from here instead of each user
--- supplying their own. See
--- docs/dev/in-progress/venice-edge-functions/ for the broader plan.
+-- but the same project), so every Venice call routes through the venice
+-- edge function, which reads the single shared key from here instead of
+-- each user supplying their own. See docs/dev/architecture.md ("Where
+-- state lives") for the custody model.
 --
 -- Singleton table: `id boolean primary key default true` plus the
 -- `check (id)` constraint permits only the value true, so the table holds
@@ -332,9 +332,9 @@ alter table public.threads
 alter table public.threads
   add column if not exists verbosity text;
 
--- Removed 2026-04: web citations are now sourced from the client-side
--- `web_search` tool (see src/lib/tools/web_search.ts), not from a per-
--- thread or per-user toggle. The main chat loop never sets
+-- Removed 2026-04: web citations are now sourced from the `web_search`
+-- tool (see supabase/functions/venice/tools/web_search.ts), not from a
+-- per-thread or per-user toggle. The main chat loop never sets
 -- `venice_parameters.enable_web_search` any more, so a per-thread
 -- override for citations has nothing to override. Drop is idempotent
 -- so re-applying on a fresh DB or a DB that never had the column is
@@ -581,7 +581,7 @@ create policy "messages are self-deletable via thread" on public.messages
   );
 
 -- The only writer that needs UPDATE access on messages is the ask_user
--- suspend/resume path (src/lib/tools/ask_user.ts +
+-- suspend/resume path (supabase/functions/venice/tools/ask_user.ts +
 -- src/lib/supabase.ts updateToolMessageContent): the chat-loop writes a
 -- pending sentinel into a role='tool' row's content when the model
 -- calls ask_user, and the UI rewrites that content to the real answer
@@ -1486,8 +1486,8 @@ drop function if exists public.expire_old_attachments(int);
 
 -- Reflection pipeline ----------------------------------------------------
 --
--- The memory-reflection agent (src/lib/agents/reflection/*) sweeps
--- completed conversations and updates long-term memory based on what it
+-- The memory-reflection agent (supabase/functions/venice/agents/reflection.ts)
+-- sweeps completed conversations and updates long-term memory based on what it
 -- learned. These columns on `threads` are the ground truth for two
 -- questions:
 --
@@ -1664,7 +1664,7 @@ drop function if exists public.clear_thread_embedding_on_change();
 -- contributes nothing to
 -- the dot product and scales both vectors' norms identically), so we can
 -- eventually switch to a native-2048 model without a column-type
--- migration. See src/lib/models.ts for the padding helper.
+-- migration. See src/lib/models/index.ts for the padding helper.
 --
 -- No HNSW index: pgvector caps HNSW at 2000 dims for the `vector` type
 -- (halfvec goes to 4000 but trades precision). Sequential scan is plenty
@@ -2892,7 +2892,7 @@ create table if not exists public.recipe_images (
 -- drop the retired legacy base64 `data` column (the migrate button moved
 -- every row's bytes into the bucket; nothing reads or writes `data`
 -- anymore). Idempotent: no-ops once the column is gone / the column
--- exists. See docs/dev/in-progress/recipe-images-storage-migration.md.
+-- exists. See docs/dev/cookbook.md.
 alter table public.recipe_images
   add column if not exists storage_path text;
 alter table public.recipe_images
@@ -3032,7 +3032,7 @@ create policy "recipe_version_images are self-insertable"
 -- orphans (a row upserted but never linked because the save failed). The
 -- sweep reclaims BOTH orphan kinds and deletes the bucket object. Drop
 -- the old trigger + function so a sync removes them.
---   See docs/dev/in-progress/recipe-images-storage-migration.md.
+--   See docs/dev/cookbook.md.
 drop trigger if exists gc_orphan_recipe_image on public.recipe_version_images;
 drop function if exists public.gc_orphan_recipe_image();
 
@@ -4852,7 +4852,7 @@ alter table public.recipes
 
 -- Invalidate the embedding whenever the text that produced it changes.
 -- The embedding source builds its input from title + source + cooklang
--- (see src/lib/embeddings/sources/recipes.ts), so any of those three
+-- (see supabase/functions/_shared/embed-input.ts), so any of those three
 -- diverging means the stored vector is stale. Null the claim columns
 -- too so an in-flight worker save (which guards on holder + expires >
 -- now()) cannot land a stale vector against the new text.
@@ -11841,8 +11841,8 @@ alter table public.threads
 -- User Wiki ---------------------------------------------------------------
 --
 -- Flat (no nesting) encyclopedia-style articles peer to chats and
--- memories. A background worker (src/lib/agents/wiki/) reads
--- conversations the day after they settle and either updates an
+-- memories. A background worker (supabase/functions/venice/agents/wiki.ts)
+-- reads conversations the day after they settle and either updates an
 -- existing article or creates a new one. The user can also search,
 -- view, edit, add, delete, and ask an agent to rewrite a single
 -- article with explicit instructions.

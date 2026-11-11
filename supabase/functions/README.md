@@ -15,7 +15,7 @@ The Deno half of nak. Five functions today:
 - **`recipe-image-gc/`** - I/O-free orchestration for the
   recipe-image GC sweep, kicked by `pg_cron`. Replaces the old
   AFTER DELETE orphan trigger; covered in
-  `../docs/dev/in-progress/recipe-images-storage-migration.md`.
+  `../docs/dev/cookbook.md`.
 - **`wiki-record-file-gc/`** - I/O-free orchestration for wiki
   record file GC, kicked by `pg_cron`.
 - **`grocery-image-gc/`** - orphan GC for grocery-item product

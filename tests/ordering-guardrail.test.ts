@@ -1,6 +1,6 @@
 /**
  * Guardrail: per-thread message ordering must use `position`, not
- * `created_at`. See docs/dev/in-progress/conversation-forking.md (M1).
+ * `created_at`. See docs/dev/forking.md.
  *
  * The failure mode this guards is invisible on fresh data: created_at
  * order and position order coincide for normally-appended rows, so a

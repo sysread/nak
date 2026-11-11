@@ -12,7 +12,7 @@
 //
 // Wire schema lives in src/lib/tools/ask_user.schema.ts; the magic
 // flag, the pending-content shape, and the answer-write helpers live
-// in src/lib/tools/ask_user.ts on the browser side. On suspend the
+// in src/lib/ask-user.ts on the browser side. On suspend the
 // browser parses the persisted sentinel via parseAskUserContent and
 // renders AskUserCard; on answer the browser UPDATEs the same tool
 // row's content via buildAskUserAnswerContent and re-invokes the
@@ -20,9 +20,9 @@
 
 import { registerTool, type ToolDef } from '../performToolCall.ts';
 
-// Mirror of src/lib/tools/ask_user.ts ASK_USER_PENDING_FLAG. Already
+// Mirror of src/lib/ask-user.ts's ASK_USER_PENDING_FLAG. Already
 // duplicated in getStreamingResponse.ts for the orchestrator's
-// suspend detection; same string, kept in lock-step in both places.
+// suspend detection; same string, kept in lock-step in all places.
 const ASK_USER_PENDING_FLAG = '__ask_user_pending__';
 
 // Mirror of the limits in src/lib/tools/ask_user.schema.ts. The

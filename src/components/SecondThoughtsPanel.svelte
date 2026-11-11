@@ -22,7 +22,7 @@
 
   v1 is display-only: this never alters the answer. A raised doubt just
   shows here, unresolved - the correction round that would adjudicate it
-  is phase 2 (docs/dev/in-progress/second-thoughts.md).
+  is deferred (docs/dev/second-thoughts.md).
 -->
 <script lang="ts">
   import { cubicOut } from 'svelte/easing';

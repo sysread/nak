@@ -4,7 +4,7 @@
 // worker used to run, relocated behind the venice edge function and driven by
 // pg_cron instead of an open tab. The browser worker, its Web Lock, and its
 // per-user lease are gone; the server owns backfill now. See
-// docs/dev/in-progress/venice-edge-functions/embeddings.md.
+// docs/dev/embeddings.md.
 //
 // runBackfill is deliberately I/O-free: it takes injected claim/embed/save
 // callbacks so the round-robin, batch-cap, time-budget, and error policy are

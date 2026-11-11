@@ -25,7 +25,7 @@ facts can't drift at the point of retrieval. The memory, conversation,
 and wiki hits are gathered with their ids; the smoothing pass weaves
 them into the recollection and cites each by id (`^N^`), and the model
 opens any lead on demand with `memory_get` / `conversation_get` /
-`wiki_get`. The same gather is exposed to the main model as the
+the `wiki` get op. The same gather is exposed to the main model as the
 umbrella `context` tool, which returns the index structured rather than
 rendered.
 
@@ -55,7 +55,8 @@ The pipeline keeps that lesson but splits the two concerns:
   verified retrieval, every claim traceable, not synthesis AS retrieval.
 
 Conversations and wiki articles are large, so they ride as id
-references the model opens on demand (`conversation_get` / `wiki_get`);
+references the model opens on demand (`conversation_get` / the
+`wiki` get op);
 memories are small but also cited by id (`memory_get`), so a recalled
 specific can be checked against the verbatim row before the main model
 asserts it.
@@ -91,7 +92,7 @@ table; nothing substitutes for any of the others.
 |---|---|---|---|
 | Memory | `memories` | Atomic facts and preferences ("Maya is the user's sister", "the user prefers tabs") | gathered with id, body, real `created_at`, and confidence tag; woven into the recollection and cited by id (`memory_get` to verify) |
 | Conversation | `threads` (titles + summaries) | What was worked through in prior threads | `title (id)` reference -> `conversation_get` |
-| Wiki | `wiki_articles` | Encyclopedic prose ABOUT topics in the user's life (projects, people, places) | `title (id)` reference -> `wiki_get` |
+| Wiki | `wiki_articles` | Encyclopedic prose ABOUT topics in the user's life (projects, people, places) | `title (id)` reference -> the `wiki` get op |
 
 A fourth arm rides the same gather: **follow-ups** (`followups` -
 the assistant's own pending questions, surfaced semantically AND
@@ -275,7 +276,7 @@ The recollection:
   `shaky` memories as low-confidence.
 - **Cites by id** - `^N^` superscripts keyed to the payload's
   `citations[]`, which the model drills into with `memory_get` /
-  `conversation_get` / `wiki_get` and which the Recall modal renders as
+  `conversation_get` / the `wiki` get op and which the Recall modal renders as
   clickable source links.
 
 An all-empty gather (or a smoothing pass that judges nothing relevant)
@@ -381,7 +382,7 @@ tool result is not a synthetic turn):
 {
   memories: [{ id, label, data, confidence_tag }],   // verbatim
   conversations: [{ id, title }],                     // -> conversation_get
-  wiki: [{ id, title }],                              // -> wiki_get
+  wiki: [{ id, title }],                              // -> wiki get op
 }
 ```
 
@@ -395,7 +396,7 @@ strong. Cheap conversational turns skip recall entirely.
 ## conversation_get
 
 `src/lib/tools/conversation_get.schema.ts` is the conversation-layer
-counterpart to `wiki_get`: a primary-key fetch of one prior thread by
+counterpart to the wiki get op: a primary-key fetch of one prior thread by
 id, returning `{found, conversation: {id, title, summary, updated_at,
 archived, truncated, messages}}`. It is what makes the conversation
 ids in the index (and in `context` / `conversation_search` results)
@@ -433,8 +434,9 @@ readable content. Registered in the always-on toolbox.
   `ConversationRecallAgent`.
 - **Wiki ([./wiki.md](./wiki.md))** - the pipeline reads the wiki
   layer via `searchWikiArticlesSemantic` (sole-source-from-this-thread
-  articles excluded, same hygiene as `wiki_search` in recall mode) and
-  the model drills in with `wiki_get`. The `wiki_recall` TOOL still
+  articles excluded, same hygiene as the wiki search op in recall
+  mode) and the model drills in with the `wiki` get op. The
+  `wiki_recall` TOOL still
   wraps `WikiRecallAgent`.
 - **Follow-ups ([./followups.md](./followups.md))** - the fourth
   gather arm (`gatherFollowups`) and the follow-up rules in the

@@ -80,8 +80,9 @@ describe('buildThreadAttachmentsBlock', () => {
   });
 
   it('splits assistant-minted images into their own not-visible line (vision tier)', () => {
-    // A user upload is inlined (visible); a generate_image / edit_image
-    // output hangs on an assistant row and is never inlined. Telling the
+    // A user upload is inlined (visible); a generated / edited image
+    // (the `image` tool's generate / edit ops) hangs on an assistant
+    // row and is never inlined. Telling the
     // vision model both are "directly visible" pushes it to fabricate
     // edits from the filename - the split exists so it analyzes first.
     const block = buildThreadAttachmentsBlock(

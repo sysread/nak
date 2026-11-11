@@ -1,7 +1,6 @@
 // Headless tool-call loop - the agent-side counterpart to
-// getStreamingResponse. Mirror of src/lib/tools/run.ts at the function
-// side: drives a sequence of model turns and concurrent tool
-// executions entirely in memory, no DB writes, no streaming callbacks,
+// getStreamingResponse: drives a sequence of model turns and concurrent
+// tool executions entirely in memory, no DB writes, no streaming callbacks,
 // no catalog-prompt prepend. Returns the final text once the model
 // settles into a text-only (no-tool-calls) response.
 //

@@ -16,7 +16,6 @@
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { FORK_POINT_MARKER } from '../agents/_fork_framing.ts';
 
-// Mirrors MAX_TRANSCRIPT_CHARS in src/lib/tools/conversation_get.ts.
 // Lower than the wiki cap (16000) because transcripts are
 // lower-density than edited articles.
 const MAX_TRANSCRIPT_CHARS = 12_000;

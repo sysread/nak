@@ -4,7 +4,7 @@
  * Owns the jsonb coercion + every disposition-to-display transform
  * (label, tone, icon, collapsed headline, note fallback) so the
  * companion `SecondThoughtsPanel.svelte` holds only composition. See
- * docs/dev/in-progress/second-thoughts.md for the feature and
+ * docs/dev/second-thoughts.md for the feature and
  * docs/dev/frontend-organization.md for why these live here.
  *
  * The verdict is written server-side by the reviewer agent

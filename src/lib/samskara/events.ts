@@ -4,7 +4,7 @@
  * dispatcher. Chat.svelte's realtime relay calls the dispatcher when
  * the server-side formation pipeline INSERTs a fresh samskara row.
  *
- * The reactive toast UI is in `src/components/SamskaraToasts.svelte`
+ * The reactive toast UI is in `src/components/SamskaraMoodSync.svelte`
  * and listens for this event on `window`. Keep any `$state` /
  * `$derived` / `$effect` rune code OUT of this file.
  */

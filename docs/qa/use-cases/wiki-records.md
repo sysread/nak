@@ -114,7 +114,8 @@ backfill for records, and the `wikiRecordExtractionEnabled` toggle.
   the realtime relay.
 - (8a) The inline dated entries are **migrated** into `wiki_records`
   rows and the body is trimmed to current-state prose. The entry that
-  was pre-seeded as a record is NOT duplicated (dedup via record_list);
+  was pre-seeded as a record is NOT duplicated (dedup via the records
+  list op);
   no dated line is removed from the body without a matching record
   existing first.
 - (9) With extraction off, the sweep claims nothing for that user

@@ -98,9 +98,9 @@ import { splitLeakedThink } from './think-leak.ts';
 import { runServerPriming, type PrimingInputs } from './priming.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
-// pending a user answer. Mirrors src/lib/tools/ask_user.ts'
-// ASK_USER_PENDING_FLAG. Duplicated here so the function does not
-// have to drag the browser's tool module in.
+// pending a user answer. Duplicated from tools/ask_user.ts (and the
+// browser's src/lib/ask-user.ts) so neither runtime imports the
+// other; same string, kept in lock-step in all three places.
 const ASK_USER_PENDING_FLAG = '__ask_user_pending__';
 
 // Hard cap on rounds before we treat the turn as runaway. Single-
@@ -174,7 +174,7 @@ type EncodedToolResult =
 function encodeToolContent(result: EncodedToolResult): string {
   if (result.ok) {
     try {
-      // Strip the generate_image heavy payload before encoding. The
+      // Strip the generated-image heavy payload before encoding. The
       // ~700KB base64 blob lives on the tool outcome only long enough
       // for the orchestrator to harvest it for the end-of-turn
       // attachment write; the model-visible tool row carries only the
@@ -1012,11 +1012,11 @@ export async function getStreamingResponse(
       //
       // Persist mid-round: attach the images to THIS round's
       // assistant-with-tool-calls row immediately so a subsequent
-      // round's tool that resolves by filename (recipe_photos_attach,
-      // analyze_image) can find the row in message_attachments. The
+      // round's tool that resolves by filename (the recipe_photos
+      // attach op, analyze_image) can find the row in message_attachments. The
       // earlier shape deferred attachment to the terminal commit at
-      // end-of-turn, which broke same-turn referential lookups - a
-      // generate_image -> recipe_photos_attach sequence in a single
+      // end-of-turn, which broke same-turn referential lookups - an
+      // image-generate -> photo-attach sequence in a single
       // turn would error "not in this thread" because the
       // message_attachments row didn't exist yet when the second
       // tool's filename lookup ran. Per-round attachment fixes that
@@ -1044,8 +1044,8 @@ export async function getStreamingResponse(
         );
       }
       // The terminal-commit path's attachGeneratedImages call has been
-      // retired in favour of this per-round attachment. generate_image
-      // can only fire in a round that issued tool_calls (a terminal
+      // retired in favour of this per-round attachment. The image
+      // generate op can only fire in a round that issued tool_calls (a terminal
       // round has none by definition), so every harvested image
       // belongs to a non-terminal round and gets its message-row
       // anchor here.
@@ -1915,7 +1915,7 @@ async function publishToolResponse(
 }
 
 /**
- * Upload one or more harvested generate_image payloads into the
+ * Upload one or more harvested generated-image payloads into the
  * `attachments` Storage bucket and insert message_attachments rows
  * pointing at the persisted assistant row. Mirrors
  * SupabaseService.addAttachments on the browser side: each

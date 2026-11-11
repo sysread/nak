@@ -322,7 +322,7 @@ nak's own system prompt. Two distinct risks:
    refresh and a notion of which device owns the token. Per
    the spec's per-device rule, two nak tabs refreshing the
    same integration's token must not race. Claim-RPC pattern
-   (per [`../embeddings.md`](../embeddings.md)) on the
+   (per [`./embeddings.md`](./embeddings.md)) on the
    `mcp_oauth_tokens` row is the precedent.
 
 ## Open questions (status after implementation)

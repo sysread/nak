@@ -5,7 +5,7 @@ review round 2; as-built matches the plan). Bug report: the
 interrupted-exchange recovery machinery "always triggers" on
 `ask_user` turns.
 
-Read [`../dev/chat.md`](../dev/chat.md) for the ask_user suspend/resume
+Read [`../chat.md`](../chat.md) for the ask_user suspend/resume
 contract and [`conversation-recovery.ts`](../../../src/lib/conversation-recovery.ts)
 for the recovery vocabulary used here.
 

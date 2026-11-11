@@ -5,7 +5,7 @@
 // memory librarians) never hard-delete on their own authority, they
 // only decay confidence so a superseded memory drops below the search
 // floor while staying recoverable. Wire schema in
-// src/lib/tools/memory_invalidate.schema.ts.
+// venice/agents/_agent_tools.ts (agent-only; not in the chat catalog).
 //
 // Same read+compute+write shape as memory_doubt rather than the
 // auth.uid()-scoped decay_memory_confidence RPC: the admin client has

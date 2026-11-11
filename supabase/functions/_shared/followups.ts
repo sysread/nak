@@ -8,10 +8,11 @@
 // due-side judgment - cooldown, expiry, cap - as pure functions so the
 // anti-nag behavior is vitest-pinned without a DB. The DB I/O wrapper
 // lives in supabase/functions/venice/priming/context-recall.ts; the
-// write tools live in supabase/functions/venice/tools/followup_*.ts.
+// write tool lives in supabase/functions/venice/tools/followups.ts (the
+// `followups` combination tool).
 
-// Tool-boundary caps. Mirrored in the browser wire schemas
-// (src/lib/tools/followup_*.schema.ts) - the schema numbers are
+// Tool-boundary caps. Mirrored in the browser wire schema
+// (src/lib/tools/followups.schema.ts) - the schema numbers are
 // advisory prompt text; these are what the edge validators enforce.
 export const MAX_FOLLOWUP_QUESTION_CHARS = 200;
 export const MAX_FOLLOWUP_CONTEXT_CHARS = 500;

@@ -188,8 +188,8 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   skipped-thread retry, librarian sweep + manual run with live
   narration.
 - [wiki-chat-crud](./use-cases/wiki-chat-crud.md) - the chat model's
-  direct article + record writes (wiki_create / wiki_update /
-  wiki op=delete and record_create), with the changelog audit.
+  direct article + record writes (the `wiki` and `records`
+  combination tools), with the changelog audit.
 - [wiki-records](./use-cases/wiki-records.md) - dated records:
   manual add/edit/filter/search/export, the extraction sweep, the
   librarian promoting learnings while preserving records.

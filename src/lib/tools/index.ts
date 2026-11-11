@@ -171,35 +171,35 @@ const skillsTool = serverSideTool(skillsSchema);
  *   - `conversation_get` - primary-key fetch of one prior thread
  *     (title, summary, windowed transcript) once the model knows the
  *     id, from a search hit or an auto-injected context block. The
- *     conversation-layer counterpart to `wiki_get`.
- *   - `wiki_search` - semantic search over the user's flat wiki
+ *     conversation-layer counterpart to the wiki get op.
+ *   - `wiki` search op - semantic search over the user's flat wiki
  *     (encyclopedic articles about topics in their life). Articles
  *     are never auto-injected; this and the two reads below are the
  *     only paths to reach them.
- *   - `wiki_list` / `wiki_get` - alphabetical projection and
+ *   - `wiki` list / get ops - alphabetical projection and
  *     primary-key body fetch for the wiki. Same shape as the
  *     recipe pair below; together they let the model survey wiki
  *     shape and read a specific article without paying for a
  *     vector search when it already knows the id.
- *   - `record_list` / `record_get` / `record_search` - read paths
+ *   - `records` list / get / search ops - read paths
  *     for wiki records (dated entries linked to an article: the
  *     topic's journey, vs the article body's current state).
- *     `record_list` walks one article's timeline, `record_get`
- *     fetches one by id, `record_search` runs semantic search
+ *     The list op walks one article's timeline, the get op
+ *     fetches one by id, the search op runs semantic search
  *     across every article's records. Reads ride always-on like
- *     the wiki reads; the record writes ride the `wiki` toolbox
- *     alongside the article writes.
- *   - `recipe_list` / `recipe_get` - browse and fetch the user's
+ *     the wiki reads; the record writes ride the same `records`
+ *     combo from the `wiki` toolbox alongside the article writes.
+ *   - `recipes` list / get ops - browse and fetch the user's
  *     saved recipes.
- *   - `recipe_record_list` / `recipe_record_get` /
- *     `recipe_record_search` - read paths for the cooking log (dated
- *     records attached to a recipe: what happened when the user
- *     cooked it, vs the recipe's cooklang current state).
- *     `recipe_record_list` walks one recipe's timeline,
- *     `recipe_record_get` fetches one by id, `recipe_record_search`
- *     runs semantic search across every recipe's records. Reads ride
+ *   - `recipe_records` list / get / search ops - read paths for
+ *     the cooking log (dated records attached to a recipe: what
+ *     happened when the user cooked it, vs the recipe's cooklang
+ *     current state). The list op walks one recipe's timeline,
+ *     the get op fetches one by id, the search op runs semantic
+ *     search across every recipe's records. Reads ride
  *     always-on like the recipe reads; the record writes ride the
- *     `cooking` toolbox alongside the recipe writes.
+ *     same `recipe_records` combo from the `cooking` toolbox
+ *     alongside the recipe writes.
  *   - `research_docs` - bounded sub-agent that answers
  *     meta-questions about Nak itself by reading the bundled
  *     in-app help corpus.
@@ -313,10 +313,10 @@ export const memoriesToolbox: Toolbox = {
 
 /**
  * Wiki toolbox - every chat-driven wiki write, articles and records
- * alike. Wiki reads (wiki_search, wiki_list, wiki_get,
- * wiki_recall) and record reads (record_list, record_get,
- * record_search) live in the always-on set; this toolbox carries only
- * the writes.
+ * alike. Wiki reads (the `wiki` combo's search/list/get ops,
+ * `wiki_recall`) and record reads (the `records` combo's
+ * list/get/search ops) live in the always-on set; this toolbox
+ * carries only the writes.
  *
  * Members, in catalog order:
  *   - `wiki_save` / `wiki_delete` - direct article

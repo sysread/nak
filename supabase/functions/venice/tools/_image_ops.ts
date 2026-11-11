@@ -1,5 +1,5 @@
-// Shared machinery for the image-op tools (edit_image, upscale_image,
-// remove_background) and the analyze_image lookup they all need.
+// Shared machinery for the `image` tool's edit / upscale / remove_bg
+// ops and the analyze_image lookup they all need.
 //
 // Why this exists: the three edit-family tools are the same pipeline with a
 // different Venice endpoint at the middle - resolve args, cap check, find
@@ -294,9 +294,9 @@ export function assertResultStorable(imageBase64: string, scale?: number): void 
 // --- Result envelope --------------------------------------------------------
 
 /**
- * Byte length of a base64 string (no `data:` prefix) - mirrors
- * generate_image.ts's local helper; duplicated here because the edit tools
- * live in this module and generate_image stays an untouched mirror.
+ * Byte length of a base64 string (no `data:` prefix) - mirrors the
+ * generate op's local helper (image.ts); duplicated here because the
+ * edit ops live in this module.
  */
 export function base64ByteLength(b64: string): number {
   const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;

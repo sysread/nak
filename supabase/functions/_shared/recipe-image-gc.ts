@@ -1,6 +1,6 @@
 // I/O-free orchestration for the recipe-image GC sweep - the idempotent
 // server-side replacement for the old AFTER DELETE orphan trigger (see
-// docs/dev/in-progress/recipe-images-storage-migration.md). All I/O is
+// docs/dev/cookbook.md). All I/O is
 // injected so this runs under `deno test` with fakes; the edge function
 // (recipe-image-gc/index.ts) wires the real Supabase service-role client.
 //

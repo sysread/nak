@@ -1,4 +1,4 @@
-// Guards for the recipe-record tools (venice/tools/recipe_record_*.ts).
+// Guards for the recipe-record tools (venice/tools/recipe_records.ts).
 //
 // Harness modeled on recipe_save.test.ts's stubbed-adminClient shape,
 // extended to a per-table FIFO response queue + call recorder so the

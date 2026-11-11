@@ -1,6 +1,6 @@
 /**
  * UI-behavior primitives for the mood pill rendered by
- * `src/components/SamskaraToasts.svelte`. Pure functions only - no
+ * `src/components/SamskaraMoodSync.svelte`. Pure functions only - no
  * runes, no Svelte imports, no DOM. The companion component owns
  * the framework-coupled bits (the `current` rune, the monotonic
  * `nextId` that keys the fly transition, the `$effect` that

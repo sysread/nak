@@ -125,7 +125,7 @@
   let outcomeFilter = $state('');
 
   // --- semantic search state -------------------------------------------
-  // Search is cross-recipe by design (the recipe_record_search tool's
+  // Search is cross-recipe by design (the recipe_records search op's
   // twin), so a hit may belong to another recipe; the row is annotated
   // with that recipe's batch-resolved title and clicking navigates.
   let searchQuery = $state('');

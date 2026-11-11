@@ -189,8 +189,8 @@ describe('buildSystemPrompt', () => {
     //       step for broad lookups - one round-trip across all three
     //       layers instead of three sequential per-layer calls;
     //   (5) route explicit "what do you remember" lookups to the
-    //       *_search tools (memory_search, conversation_search,
-    //       wiki_search) rather than the *_recall tools.
+    //       search surfaces (memory_search, conversation_search,
+    //       the wiki tool's search op) rather than the *_recall tools.
     const prompt = gatedPrompt();
     expect(prompt).toMatch(/long-term memory/i);
     // Every per-layer recall tool and the umbrella context tool.

@@ -80,7 +80,7 @@ The date axis and the anti-nag containment
    note.
 5. Back in either thread, answer the ask: "Oh right - the
    meeting went really well, they approved the budget."
-6. Re-run the step-2 query; confirm a `followup_close` tool call
+6. Re-run the step-2 query; confirm a `followups` op=close call
    and a new outcome memory (as in
    [followup-semantic-recall](./followup-semantic-recall.md)).
 7. Expiry, forged via SQL (deterministic, like

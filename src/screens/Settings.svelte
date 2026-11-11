@@ -2393,7 +2393,7 @@
           settle and either updates an existing article or creates a
           new one. Articles are never auto-injected into the chat;
           the assistant reaches them through the always-on
-          <code>wiki_search</code> tool.
+          <code>wiki</code> tool's search op.
         </p>
 
         <h3 class="pane-section">Automatic articles</h3>

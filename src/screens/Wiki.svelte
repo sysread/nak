@@ -397,7 +397,8 @@
       // Append the changelog row after the update lands. Best-effort -
       // the article already updated, and a failed log write should
       // not roll back a successful edit. Errors here are silent for
-      // the same reason as the tool path (see wiki_save.ts).
+      // the same reason as the tool path (the `wiki` save op in
+      // supabase/functions/venice/tools/wiki.ts).
       try {
         await app.supabase.createWikiChangelogEntry({
           article_id: id,
@@ -573,7 +574,8 @@
       return;
     }
     // Capture the title BEFORE the delete so the changelog row can
-    // snapshot it - same reasoning as wiki_delete.ts. Reads off the
+    // snapshot it - same reasoning as the `wiki` delete op
+    // (supabase/functions/venice/tools/wiki.ts). Reads off the
     // in-store row to avoid a round-trip.
     const article = wikiStore.results.find((a) => a.id === id) ?? null;
     try {
@@ -1180,7 +1182,7 @@
         // finalize or refresh.
         librarianError = LIBRARIAN_BUSY_MESSAGE;
       } else if (result.kind === 'error') {
-        // Run errored server-side mid-loop; earlier wiki_save calls may
+        // Run errored server-side mid-loop; earlier wiki save-op calls may
         // already be committed. Settle the spinner, refresh to surface them.
         librarianError = `${result.error ?? 'Librarian run failed.'} ${LIBRARIAN_PARTIAL_SAVE_NOTE}`;
         librarianSteps = finalizeLibrarianSteps(librarianSteps, 'error');

@@ -2,7 +2,7 @@
   /*
    * Inline card rendered when the model calls `ask_user`. Three states,
    * all driven off the persisted tool-result row content (see
-   * src/lib/tools/ask_user.ts for the sentinel/answered shapes):
+   * src/lib/ask-user.ts for the sentinel/answered shapes):
    *
    *   - pending  : full question card with chip-style options + an
    *                "Other" chip that expands to an inline textarea.

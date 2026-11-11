@@ -109,7 +109,7 @@ The semantic surfacing axis and the close-on-answer lifecycle:
   line shows a nonzero follow-ups hit count.
 - Step 6-7: the follow-up row is `status='answered'` with a
   `resolution` mentioning the outcome ("made it; too salty"),
-  via a visible `followup_close` call. An outcome memory exists
+  via a visible `followups` op=close call. An outcome memory exists
   - immediately if the model wrote one volitionally, otherwise
   after the forced reflection pass. No duplicate outcome
   memories after reflection runs (the search-before-create +

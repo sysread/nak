@@ -23,7 +23,6 @@ import { localEmbed } from '../../_shared/local-embed.ts';
 
 const MEMORY_SEARCH_DEFAULT_LIMIT = 10;
 const MEMORY_SEARCH_MAX_LIMIT = 50;
-// Mirror of SEARCH_RELATION_FANOUT in src/lib/tools/memory_search.ts.
 const SEARCH_RELATION_FANOUT = 5;
 
 interface MemoryRow {

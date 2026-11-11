@@ -1,8 +1,8 @@
 // Venice wire-shape for the edge function (Deno side). This is a deliberate
 // duplicate of the embed half of src/lib/venice.ts: the app is Node/Vite and
 // this is a Deno island, and coupling the two toolchains before the function
-// surface settles is premature (see
-// docs/dev/in-progress/venice-edge-functions/). Sharing the browser client
+// surface settles is premature (see supabase/functions/README.md, "Deno
+// island, intentionally"). Sharing the browser client
 // is a consolidation-phase decision, not a step-5 one.
 //
 // Kept pure and fetch-injectable on purpose: the handler in venice/index.ts is

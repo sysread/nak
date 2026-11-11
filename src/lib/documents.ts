@@ -1,7 +1,7 @@
 /**
  * Library document primitives, shared by the UI
  * (`src/screens/Library.svelte`, `src/components/LibraryList.svelte`) and the
- * LLM-facing tools (`src/lib/tools/doc_*.ts`):
+ * LLM-facing `docs` combination tool (`src/lib/tools/docs.schema.ts`):
  *
  *   - ingestDocument: the browser-side upload pipeline (create row, upload the
  *     original, extract text).

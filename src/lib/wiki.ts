@@ -2,8 +2,9 @@
  * Shared semantic-search pipeline for the user wiki. Parallel to
  * `src/lib/memories.ts` - the
  * UI (`src/components/WikiList.svelte`, `src/screens/Wiki.svelte`) and
- * the LLM-facing tool (`src/lib/tools/wiki_search.ts`) both call
- * `searchWikiArticlesSemantic` so the user finds what the assistant
+ * the LLM-facing `wiki` tool's search op
+ * (supabase/functions/venice/tools/wiki.ts) serve the same semantic
+ * search, so the user finds what the assistant
  * finds.
  *
  * The merge contract lives in `SupabaseService.searchWikiArticles`:
@@ -27,7 +28,7 @@ export interface SearchWikiDeps {
    * Sole-source exclusion. When set, drop any article whose ONLY row
    * in `wiki_article_sources` is `thread_id = excludeSoleSourceThreadId`.
    * Articles linked to other threads (or with no source rows at all)
-   * still come through. Used by the `wiki_search` tool when ctx flags
+   * still come through. Used by the wiki search op when ctx flags
    * recall-hygiene mode so a thread does not see its own synthesised
    * article echoed back as recall.
    *

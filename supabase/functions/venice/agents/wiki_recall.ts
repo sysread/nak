@@ -1,8 +1,7 @@
 // Wiki-recall agent. Sibling of memory_recall and conversation_recall
 // but the recall target is the user's wiki - flat encyclopedic
-// articles ABOUT topics in their life. Mirror of
-// src/lib/agents/wiki_recall/ (agent.ts + prompt.ts) and the
-// wiki_recall tool wrapping it.
+// articles ABOUT topics in their life. Runs behind the `wiki_recall`
+// tool (wire schema in src/lib/tools/wiki_recall.schema.ts).
 //
 // Same run shape as the other recall agents: trim the thread to its
 // last user turn, append a recall-instruction user turn, run the

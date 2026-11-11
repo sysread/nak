@@ -56,7 +56,7 @@ You can reach these pages two ways:
 - [Wiki](./wiki.md) — a flat encyclopedia about you: titled articles
   about projects, people, places, and topics, maintained by both you
   and a background agent. The assistant reaches them through the
-  always-on `wiki_search` tool.
+  always-on `wiki` tool (its search op).
 - [Skills](./skills.md) — reusable task guidance (formats, procedures,
   checklists) Nak loads when a task matches and helps keep current:
   the per-message skills scan, proactive capture from the chat, and

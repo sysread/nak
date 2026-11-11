@@ -17,8 +17,8 @@ import {
   MAX_WIKI_RECORD_CONTENT_CHARS,
 } from '../../_shared/wiki-limits.ts';
 
-// Re-export so record_create.ts / record_update.ts keep their
-// existing import path.
+// Re-export so the records combo keeps a single import site for the
+// shared caps.
 export { MAX_WIKI_RECORD_CONTENT_CHARS };
 
 export const MAX_WIKI_RECORD_TAGS = 24;

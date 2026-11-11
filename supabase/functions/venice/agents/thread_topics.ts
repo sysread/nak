@@ -31,9 +31,9 @@ const UNTAGGED_TOPIC_SENTINEL = '(untagged)';
 
 /**
  * The topics instruction, appended as the final user turn after the
- * conversation transcript. Verbatim copy of TOPICS_PROMPT_PREFIX /
- * TOPICS_PROMPT_SUFFIX in src/lib/agents/topics/prompt.ts so the
- * model gets identical guidance whichever path drove it.
+ * conversation transcript. Verbatim copy of the retired browser
+ * agent's TOPICS_PROMPT_PREFIX / SUFFIX; the bytes stay stable so
+ * the model's guidance does not drift.
  *
  * Design notes (from the browser original):
  *   - "Reuse names from the existing list if any fit" is the

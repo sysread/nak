@@ -11,7 +11,7 @@
    * the main panel renders that article's full body.
    *
    * Search is the same debounced semantic-search pipeline the assistant
-   * uses for `wiki_search` - see `searchWikiArticlesSemantic` in
+   * uses for the wiki search op - see `searchWikiArticlesSemantic` in
    * `$lib/wiki`. Drives `runWikiSearch` on the store.
    */
   import { app } from '$lib/state.svelte';

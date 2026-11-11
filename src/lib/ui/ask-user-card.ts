@@ -7,7 +7,7 @@
  * textarea event bindings, the markup).
  *
  * The persisted-row shape this module reads from lives in
- * `src/lib/tools/ask_user.ts` - `AskUserAnsweredContent` for the
+ * `src/lib/ask-user.ts` - `AskUserAnsweredContent` for the
  * answered/abandoned payloads, `AskUserOption` for the original
  * options, `AskUserVia` for the routing tag.
  */

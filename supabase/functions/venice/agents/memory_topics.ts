@@ -34,10 +34,9 @@ import { MEMORY_TOPICS_MODEL } from '../../_shared/agent-models.ts';
 const UNTAGGED_TOPIC_SENTINEL = '(untagged)';
 
 /**
- * The memory-topics instruction. Verbatim copy of
- * MEMORY_TOPICS_PROMPT_PREFIX / MEMORY_TOPICS_PROMPT_SUFFIX in
- * src/lib/agents/memory_topics/prompt.ts so the model gets identical
- * guidance whichever path drove it.
+ * The memory-topics instruction. Verbatim copy of the retired
+ * browser agent's MEMORY_TOPICS_PROMPT_PREFIX / SUFFIX; the bytes
+ * stay stable so the model's guidance does not drift.
  *
  * Why a different prompt from the thread topics unit: the input shape
  * is different. The thread unit gets a conversation transcript and is

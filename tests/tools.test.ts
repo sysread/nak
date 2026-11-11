@@ -85,8 +85,10 @@ describe('tool registry', () => {
   });
 
   it('cookingToolbox, memoriesToolbox, and wikiToolbox are write-only subsets', () => {
-    // Reads (recipe_list, recipe_get, memory_search, wiki_search,
-    // wiki_list, wiki_get) live in alwaysOnToolbox. The write boxes
+    // Read surfaces (memory_search, conversation_search/get, the
+    // wiki combo's search/get ops, plus the recall trio and context)
+    // live in alwaysOnToolbox; each write toolbox's combo carries its
+    // own read-only list/get ops. The write boxes
     // carry only the tools that mutate user data.
     expect(cookingToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'recipes',

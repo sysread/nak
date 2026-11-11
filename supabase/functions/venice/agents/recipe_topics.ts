@@ -43,10 +43,9 @@ const UNTAGGED_TOPIC_SENTINEL = '(untagged)';
 const MAX_RECIPE_TOPICS = 6;
 
 /**
- * The recipe-topics instruction. Verbatim copy of
- * RECIPE_TOPICS_PROMPT_PREFIX / RECIPE_TOPICS_PROMPT_SUFFIX in
- * src/lib/agents/recipe_topics/prompt.ts so the model gets identical
- * guidance whichever path drove it.
+ * The recipe-topics instruction. Verbatim copy of the retired
+ * browser agent's RECIPE_TOPICS_PROMPT_PREFIX / SUFFIX; the bytes
+ * stay stable so the model's guidance does not drift.
  *
  * Why a different prompt from the memory topics unit: the input is
  * structured Cooklang source, not free-form prose, and the topic

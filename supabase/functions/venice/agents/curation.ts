@@ -128,9 +128,8 @@ interface CurationUnit {
    * consumed a row (saved it, lost it to a racing run, or released it
    * for retry) and the queue may hold more. Everything else - empty
    * queue, empty model output left to TTL - stops the drain; this
-   * mirrors the browser supervisor's progress/nap classification
-   * (src/lib/agents/supervisor/loop.ts), where only these outcomes
-   * counted as 'progress'.
+   * mirrors the retired browser supervisor's progress/nap
+   * classification, where only these outcomes counted as 'progress'.
    *
    * ERROR_OUTCOME is deliberately absent from every unit's set and is
    * NOT classified here: it is neither progress nor a reason to stop,

@@ -155,7 +155,7 @@ Deno.test('prompt keeps the anti-fabrication rule on the unknown-name path', () 
 });
 
 Deno.test('prompt carries no inline-citation guidance', () => {
-  // Twin of the browser-side librarian-prompt assertion
+  // Twin of the deleted browser-side librarian-prompt assertion
   // (tests/wiki-tools.test.ts): wiki articles link sources through the
   // bibliography (wiki_article_sources), not inline ?cid= markdown.
   const prompt = __test.buildWikiAutonomousPrompt({ userProfile: null });

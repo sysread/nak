@@ -24,7 +24,7 @@
    *
    * Data source is `cookbook.recipes` from the cookbook store (see
    * `src/lib/cookbook-store.svelte.ts`). We load on mount and listen
-   * for `COOKBOOK_CHANGE_EVENT` so an LLM `recipe_save` call mid-
+   * for `COOKBOOK_CHANGE_EVENT` so an LLM `recipes` save call mid-
    * session refreshes the detail automatically.
    */
   import { flushSync } from 'svelte';

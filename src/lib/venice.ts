@@ -170,7 +170,7 @@ export interface Citation {
  * only way to keep the default chat path from burning quota on
  * questions the model could have answered from weights. The sole
  * caller that sets these is the `web_search` tool (see
- * `src/lib/tools/web_search.ts`), which runs a one-shot sub-
+ * `supabase/functions/venice/tools/web_search.ts`), which runs a one-shot sub-
  * completion with search on and returns the answer + citations as a
  * structured tool result.
  *
