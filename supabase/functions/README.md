@@ -7,8 +7,7 @@ The Deno half of nak. Five functions today:
   per-round image attachment, broadcast/realtime fan-out, the
   reconnect probe for orphan stream recovery, and embedding
   backfill (the `/backfill` route). See
-  `../docs/dev/in-progress/venice-edge-functions/` for the
-  feature-level architecture notes.
+  `../docs/dev/embeddings.md` for the feature-level notes.
 - **`attachment-gc/`** - I/O-free orchestration for the daily
   attachment-bucket orphan GC sweep, kicked by `pg_cron`.
   Reclaims objects whose `message_attachments` row is gone (a

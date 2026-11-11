@@ -47,8 +47,7 @@
 // `supabase status` and refuses any non-loopback API target, so a shell with
 // prod creds in the environment can never point it at the hosted project.
 //
-// See docs/dev/embeddings.md, docs/dev/wiki.md, and
-// docs/dev/in-progress/venice-edge-functions/embeddings.md.
+// See docs/dev/embeddings.md and docs/dev/wiki.md.
 // ===========================================================================
 import { runCapture } from './lib/shell.mjs';
 import { banner, info, ok, warn, bail, style } from './lib/ui.mjs';

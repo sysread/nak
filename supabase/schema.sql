@@ -15359,19 +15359,23 @@ create policy "documents bucket is self-deletable" on storage.objects
 -- Scheduled embedding backfill (pg_cron -> pg_net -> venice/backfill)
 --
 -- Replaces the browser embeddings worker: a cron tick POSTs to the venice edge
--- function's /backfill route, which drains pending embeddings server-side
--- across every member. See docs/dev/in-progress/venice-edge-functions/embeddings.md.
+-- function's /backfill route, which acks immediately and drains pending
+-- embeddings detached, server-side across every member. See
+-- docs/dev/embeddings.md.
 --
 -- Auth + endpoint custody live in two Vault secrets the owner seeds once via
 -- `mise run supabase-init`:
 --   project_url       - e.g. https://<ref>.supabase.co
---   service_role_key  - the LEGACY JWT service-role key. The modern opaque
---                       sb_secret_ key is NOT a JWT, and the function gateway
---                       rejects a non-JWT bearer (the same reason the local
---                       realtime stack rejects sb_publishable_). The /backfill
---                       handler also requires the bearer to equal its injected
---                       SUPABASE_SERVICE_ROLE_KEY, so an ordinary signed-in user
---                       can't trigger a cross-member sweep.
+--   service_role_key  - the service-role key, in either supported shape. The
+--                       legacy JWT form is what the local dev stack's cron
+--                       shim sends (its gateway rejects the modern opaque
+--                       key); the modern sb_secret_ key is what the hosted
+--                       project's vault holds (its gateway resolves the
+--                       opaque key server-side). The function-side bearer
+--                       check (_shared/service-role-auth.ts, shared by every
+--                       cron route) accepts both shapes and rejects anything
+--                       else, so an ordinary signed-in user can't trigger a
+--                       cross-member sweep.
 -- Until both secrets exist the trigger no-ops - backfill simply does not run on
 -- an unseeded project, it never errors.
 -- ---------------------------------------------------------------------------
