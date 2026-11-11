@@ -28,7 +28,7 @@ call, or as a silently-wrong render.
 ## Files
 
 - `vite.config.ts` - the `test` block: environment split, setup
-  file, include/exclude globs, integration-test gating.
+  file, include/exclude globs.
 - `tests/setup.ts` - `setupFiles` for **every** vitest file, node
   and jsdom alike.
 - `tests/styles.test.ts` - postcss parse of every stylesheet under
@@ -132,16 +132,11 @@ the gate.
 
 ## Integration tests
 
-Files matching `tests/**/*.integration.test.ts` hit live Venice and
-are **excluded unless `VENICE_INFERENCE_KEY` is set**:
-
-```sh
-VENICE_INFERENCE_KEY=<key> pnpm test tests/web-search.integration.test.ts
-```
-
-Presence of the key **is** the opt-in - there is no separate flag to
-remember. The default `pnpm test` stays hermetic, so CI never
-depends on outbound network or a credential.
+There are none today. The default `pnpm test` is hermetic by
+contract - CI never depends on outbound network or a credential - so
+any future live-network test must exclude itself from the default
+run (a self-gating filename or its own task) rather than relying on
+a config-level gate.
 
 ## Scratch Postgres for schema-section validation
 

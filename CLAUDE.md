@@ -839,7 +839,7 @@ passes locally under the old jsdom default, the rebase is clean, the
 files are disjoint, and it fails only in CI.
 
 Full details - the other two test islands, the guardrail tests,
-integration-test gating, `tests/setup.ts` - are in
+`tests/setup.ts` - are in
 [`docs/dev/testing.md`](docs/dev/testing.md).
 
 ### Check exit codes, not piped output
