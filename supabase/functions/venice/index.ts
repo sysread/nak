@@ -11,7 +11,10 @@
 //                /usage-analytics cannot give, since Venice bills per account.
 //                Authenticated as the calling user.
 //   /backfill  - cron-triggered (pg_cron -> pg_net), drains pending embeddings
-//                across every table server-side. Service-role only.
+//                across every table server-side. Service-role only. Acks
+//                {accepted: true} immediately and drains detached (the
+//                sweepHandler shape) - see runBackfillTick for the batch
+//                sizing and why the drain cannot ride the response.
 //   /text-parser - browser-triggered, forwards a multipart file upload to
 //                  Venice's /augment/text-parser. Bug-driven: browser direct
 //                  calls were CORS-rejected on non-image files; the function
@@ -110,16 +113,29 @@ const CORS_HEADERS: Record<string, string> = {
 };
 
 // Backfill tunables. One invocation processes at most BACKFILL_MAX_ROWS rows or
-// runs for at most BACKFILL_TIME_BUDGET_MS, whichever comes first, then returns;
-// the cron tick resumes from the same claim state. With local inference
-// (Supabase.ai.Session), each embed call takes ~100-180ms of CPU. The edge
-// runtime's 2s CPU-time budget per worker is the binding constraint, but
-// overshooting it is safe: the worker is killed mid-batch, the claim TTL
-// (120s) expires the unfinished rows, and the next tick re-claims them. Net
-// throughput is higher at 25 than at a "safe" 12 because the kill-and-retry
-// overhead is small compared to the extra rows each tick completes. The time
-// budget is secondary since inference is CPU-bound, not I/O-bound.
-const BACKFILL_MAX_ROWS = 25;
+// runs for at most BACKFILL_TIME_BUDGET_MS, whichever comes first, then stops;
+// the every-minute cron tick resumes from the same claim state.
+//
+// The row cap is sized against the edge runtime's 2s CPU-time budget per
+// isolate, and the sizing assumes a COLD isolate: a tick that spends ~1s of
+// CPU crosses the isolate's 50% retirement line, so consecutive ticks never
+// share a warm isolate and every tick pays the bundle parse plus the
+// gte-small ONNX session load before the first inference. With local
+// inference (Supabase.ai.Session) at ~100-180ms of CPU per embed call, 6
+// rows fit under the budget with margin.
+//
+// A larger cap is not free throughput: past 2s of CPU the isolate is
+// terminated mid-batch and the caller gets HTTP 546 WORKER_RESOURCE_LIMIT.
+// This is the project's only every-minute cron route, so a per-minute 546
+// cadence reads as "the cron fleet is dying" in net._http_response even
+// while the drain keeps landing rows (each save commits before the kill).
+// A rare overshoot - one unusually slow inference run - is still safe: the
+// claim TTL expires the unfinished rows and the next tick re-claims them.
+// The cap exists so the overshoot is the exception, not the cadence.
+//
+// BACKFILL_TIME_BUDGET_MS is the outer wall-clock bound (a slow model load,
+// an RPC stall); the row cap binds first on a healthy tick.
+const BACKFILL_MAX_ROWS = 6;
 const BACKFILL_TIME_BUDGET_MS = 30_000;
 const ROW_CLAIM_TTL_SECONDS = 120;
 
@@ -620,89 +636,6 @@ async function handleTextParser(req: Request): Promise<Response> {
   }
 }
 
-/**
- * Cron-driven server-side backfill. Claims pending rows across every embeddable
- * table, embeds them with the shared key, and writes the vectors back through
- * the service-definer claim/save RPCs. Bounded per invocation (see the tunables
- * above); the schedule resumes the drain.
- */
-async function handleBackfill(req: Request): Promise<Response> {
-  if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
-
-  // The backfill needs the admin client for claim/save RPCs but no
-  // longer needs the Venice API key - embeddings are produced locally
-  // by Supabase.ai.Session (see _shared/local-embed.ts).
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-
-  // One holder id per invocation. The claim/save RPCs guard on it so an
-  // overlapping invocation (a slow tick still running when the next fires)
-  // can't save over a row this one claimed.
-  const holderId = crypto.randomUUID();
-
-  // Per-user drawer attribution. The claim RPCs return each row's
-  // user_id; saves tally per owner so the tick can emit one
-  // "embedded N item(s)" summary into each affected user's Logs
-  // drawer. Keyed per source+id because ids are only unique within
-  // a table.
-  const rowOwner = new Map<string, string>();
-  const embeddedByUser = new Map<string, number>();
-
-  const deps: BackfillDeps = {
-    claim: async (sourceIndex) => {
-      const source = EMBED_SOURCES[sourceIndex];
-      const { data, error } = await admin.rpc(source.claimRpc, {
-        p_holder_id: holderId,
-        p_ttl_seconds: ROW_CLAIM_TTL_SECONDS,
-      });
-      if (error) throw error;
-      const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | undefined;
-      if (!row) return null;
-      if (typeof row.user_id === 'string') {
-        rowOwner.set(`${sourceIndex}:${String(row.id)}`, row.user_id);
-      }
-      return { id: String(row.id), input: source.buildInput(row) };
-    },
-    embed: async (input) => {
-      return await localEmbed(input);
-    },
-    save: async (sourceIndex, id, embedding) => {
-      const source = EMBED_SOURCES[sourceIndex];
-      const { data, error } = await admin.rpc(source.saveRpc, {
-        p_id: id,
-        p_holder_id: holderId,
-        p_embedding: embedding,
-        p_embedding_model: EMBEDDING_MODEL,
-      });
-      if (error) throw error;
-      const saved = data === true;
-      if (saved) {
-        const owner = rowOwner.get(`${sourceIndex}:${id}`);
-        if (owner) {
-          embeddedByUser.set(owner, (embeddedByUser.get(owner) ?? 0) + 1);
-        }
-      }
-      return saved;
-    },
-  };
-
-  const summary = await runBackfill(deps, {
-    sourceCount: EMBED_SOURCES.length,
-    maxRows: BACKFILL_MAX_ROWS,
-    timeBudgetMs: BACKFILL_TIME_BUDGET_MS,
-  });
-
-  // One drawer line per affected user, after the drain settles. Most
-  // ticks touch nobody (queues run empty) and emit nothing.
-  for (const [userId, count] of embeddedByUser) {
-    const log = createEdgeLogger(userId, 'embeddings');
-    log.info(`embedded ${count} item(s) in the background`);
-    await log.flush();
-  }
-
-  return json(summary);
-}
-
 // ---------------------------------------------------------------------------
 // Fleet route factories. Every agent fleet exposes the same two route
 // shapes - a cron-driven sweep and (for some) a user-triggered manual
@@ -832,9 +765,97 @@ function detachedManualRunHandler(
   };
 }
 
+/**
+ * Embeddings-backfill tick: the drain body sweepHandler detaches for the
+ * every-minute cron route. Claims pending rows across every registered
+ * source (EMBED_SOURCES), embeds them locally (no Venice key - see
+ * _shared/local-embed.ts), and writes the vectors back through the
+ * service-definer claim/save RPCs. Non-throwing by construction:
+ * runBackfill folds claim/embed/save failures into its summary, so a
+ * rejection at this layer is an infrastructure bug the factory's catch
+ * surfaces in the function log.
+ *
+ * Two reasons the drain cannot ride the HTTP response. pg_net's request
+ * window is seconds, and a cold tick spends ~7s loading the ONNX model
+ * alone, so a synchronous handler is killed with the dropped request.
+ * And nobody reads the body anyway (pg_net ignores it): per-user
+ * outcomes reach the Logs drawer from inside the tick, and the drain's
+ * real progress signal is the pending-embed count falling.
+ */
+async function runBackfillTick(admin: SupabaseClient): Promise<void> {
+  // One holder id per invocation. The claim/save RPCs guard on it so an
+  // overlapping invocation (a slow tick still running when the next fires)
+  // can't save over a row this one claimed.
+  const holderId = crypto.randomUUID();
+
+  // Per-user drawer attribution. The claim RPCs return each row's
+  // user_id; saves tally per owner so the tick can emit one
+  // "embedded N item(s)" summary into each affected user's Logs
+  // drawer. Keyed per source+id because ids are only unique within
+  // a table.
+  const rowOwner = new Map<string, string>();
+  const embeddedByUser = new Map<string, number>();
+
+  const deps: BackfillDeps = {
+    claim: async (sourceIndex) => {
+      const source = EMBED_SOURCES[sourceIndex];
+      const { data, error } = await admin.rpc(source.claimRpc, {
+        p_holder_id: holderId,
+        p_ttl_seconds: ROW_CLAIM_TTL_SECONDS,
+      });
+      if (error) throw error;
+      const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | undefined;
+      if (!row) return null;
+      if (typeof row.user_id === 'string') {
+        rowOwner.set(`${sourceIndex}:${String(row.id)}`, row.user_id);
+      }
+      return { id: String(row.id), input: source.buildInput(row) };
+    },
+    embed: async (input) => {
+      return await localEmbed(input);
+    },
+    save: async (sourceIndex, id, embedding) => {
+      const source = EMBED_SOURCES[sourceIndex];
+      const { data, error } = await admin.rpc(source.saveRpc, {
+        p_id: id,
+        p_holder_id: holderId,
+        p_embedding: embedding,
+        p_embedding_model: EMBEDDING_MODEL,
+      });
+      if (error) throw error;
+      const saved = data === true;
+      if (saved) {
+        const owner = rowOwner.get(`${sourceIndex}:${id}`);
+        if (owner) {
+          embeddedByUser.set(owner, (embeddedByUser.get(owner) ?? 0) + 1);
+        }
+      }
+      return saved;
+    },
+  };
+
+  await runBackfill(deps, {
+    sourceCount: EMBED_SOURCES.length,
+    maxRows: BACKFILL_MAX_ROWS,
+    timeBudgetMs: BACKFILL_TIME_BUDGET_MS,
+  });
+
+  // One drawer line per affected user, after the drain settles. Most
+  // ticks touch nobody (queues run empty) and emit nothing.
+  for (const [userId, count] of embeddedByUser) {
+    const log = createEdgeLogger(userId, 'embeddings');
+    log.info(`embedded ${count} item(s) in the background`);
+    await log.flush();
+  }
+}
+
 // The fleet routing table. One line per route; the referenced
 // tick/run functions carry the fleet semantics and their doc
 // comments.
+// Embeddings backfill: the every-minute drain of pending vectors,
+// batch-sized against the isolate CPU budget (see runBackfillTick
+// above and the tunables at the top of the file).
+const handleBackfill = sweepHandler(runBackfillTick);
 const handleWikiSweep = sweepHandler(runWikiSweepTick);
 const handleWikiRecordsSweep = sweepHandler(runWikiRecordsSweepTick);
 const handleWikiLibrarianSweep = sweepHandler(runWikiLibrarianSweepTick);

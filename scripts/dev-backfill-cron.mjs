@@ -5,9 +5,10 @@
 // Stands in for the hosted pg_cron jobs that drive the venice
 // function's scheduled routes.
 //
-// In production, supabase/schema.sql schedules nine pg_net dispatches:
-//   - `nak_trigger_embed_backfill()` every 5 minutes -> POST /backfill
-//     (drains pending embeddings server-side);
+// In production, supabase/schema.sql schedules the pg_net dispatches:
+//   - `nak_trigger_embed_backfill()` every minute -> POST /backfill
+//     (acks immediately; drains pending embeddings detached
+//     server-side);
 //   - `nak_trigger_wiki_sweep()` hourly -> POST /wiki-sweep (runs the
 //     autonomous wiki agent on day-gate-eligible threads);
 //   - `nak_trigger_wiki_librarian_sweep()` hourly -> POST
@@ -52,9 +53,9 @@
 import { runCapture } from './lib/shell.mjs';
 import { banner, info, ok, warn, bail, style } from './lib/ui.mjs';
 
-// Prod cron fires every 5 minutes; locally a tighter cadence gives faster
-// feedback while testing. Override with the first CLI arg (seconds) or
-// NAK_BACKFILL_INTERVAL.
+// Prod cron fires every minute; the 60s default matches it, and a
+// smaller interval gives faster feedback while testing. Override
+// with the first CLI arg (seconds) or NAK_BACKFILL_INTERVAL.
 const DEFAULT_INTERVAL_SECONDS = 60;
 
 function parseInterval() {
@@ -155,18 +156,14 @@ async function postRoute(apiUrl, serviceRoleKey, route, stamp) {
   }
 }
 
-// One cron tick: POST /backfill and report the BackfillSummary.
+// One cron tick for the embeddings backfill. The route acks
+// `{accepted:true}` and drains detached server-side, so postRoute's
+// dispatch line is the whole report - per-user outcomes land in the
+// in-app Logs drawer, and drain progress is the pending-embed count
+// falling.
 async function tickBackfill(apiUrl, serviceRoleKey) {
   const stamp = new Date().toISOString().slice(11, 19);
-  const body = await postRoute(apiUrl, serviceRoleKey, 'backfill', stamp);
-  if (!body) return;
-  const { embedded = 0, rejected = 0, noEmbedding = 0, errors = 0, rateLimited = false } = body;
-  const headline = embedded > 0 ? style.green(`embedded ${embedded}`) : style.dim('nothing pending');
-  const extras =
-    rejected || noEmbedding || errors || rateLimited
-      ? ` (rejected ${rejected}, noEmbedding ${noEmbedding}, errors ${errors}, rateLimited ${rateLimited})`
-      : '';
-  info(`[${stamp}] backfill: ${headline}${extras}`);
+  await postRoute(apiUrl, serviceRoleKey, 'backfill', stamp);
 }
 
 // One cron tick per agent sweep. Every sweep handler ACKs
@@ -265,7 +262,7 @@ async function main() {
   banner('Venice cron shim (DEV): backfill + all agent sweeps');
   const { apiUrl, serviceRoleKey } = await readLocalStack();
   ok(`Targeting ${style.cyan(apiUrl)} every ${style.bold(intervalSeconds + 's')}. Ctrl-C to stop.`);
-  info(style.dim('Local stand-in for the hosted pg_cron jobs (prod: backfill every 5 min, agent sweeps hourly).'));
+  info(style.dim('Local stand-in for the hosted pg_cron jobs (prod: backfill every minute, agent sweeps hourly).'));
 
   ok(
     `Slow group (curation / bias / samskara sweeps) fires every ` +

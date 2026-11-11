@@ -6,7 +6,7 @@ The Deno half of nak. Five functions today:
   round chain, tool dispatch, output guards, last_error writes,
   per-round image attachment, broadcast/realtime fan-out, the
   reconnect probe for orphan stream recovery, and embedding
-  backfill (the `/embed-backfill` route). See
+  backfill (the `/backfill` route). See
   `../docs/dev/in-progress/venice-edge-functions/` for the
   feature-level architecture notes.
 - **`attachment-gc/`** - I/O-free orchestration for the daily

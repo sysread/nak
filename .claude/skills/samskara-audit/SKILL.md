@@ -63,7 +63,7 @@ tail); last_advance is recent when the user has been active.
 ### 2. Assimilation -> embedding
 
 Contract: assimilated rows get embeddings promptly (backfill cron
-every 5 min).
+every minute).
 
 Check pending-embed depth (the Health snapshot's `pending_embed` or
 the substrate embedding-null count). Healthy: ~0.

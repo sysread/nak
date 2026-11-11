@@ -14,9 +14,11 @@ A memory that's just been written is `embedding is null`; so is a
 thread chunk the rechunk unit just rewrote, and the
 same for recipes, wiki articles, and substrate rows. A `pg_cron` job
 fires every minute, POSTs to the edge function's `/backfill`
-route, and the function claims pending rows across all seven tables,
-embeds them with the built-in gte-small model, and writes them
-back under a claim guard - all server-side, no open tab required.
+route, and the function acks immediately, then - detached, under
+`EdgeRuntime.waitUntil` - claims pending rows across every
+registered source, embeds them with the built-in gte-small model,
+and writes them back under a claim guard - all server-side, no open
+tab required.
 
 Embeddings are produced by `Supabase.ai.Session('gte-small')`, a
 native Rust ONNX runtime pre-bundled in the edge-runtime Docker
@@ -24,8 +26,8 @@ image. No external API call, no Venice dependency. The model emits
 384-dim vectors, zero-extended to the 2048-dim storage column by
 `padEmbeddingForStorage`. Cold start (model load) takes ~7s on a
 fresh worker; warm inference is ~100-180ms per call. The edge
-runtime's 2s CPU-time budget per worker caps the backfill batch at
-12 rows per invocation.
+runtime's 2s CPU-time budget per isolate caps the backfill batch at
+6 rows per invocation (see Timing below for the sizing).
 
 Downstream: `memory_search`, `conversation_search`, and the drawer
 searches run cosine-similarity against these vectors. Unembedded
@@ -51,8 +53,9 @@ call site is which client handle they hold.
   the `string -> number[]` function all embed callers use.
 - `supabase/functions/venice/index.ts` - the edge function.
   `/embed` is the thin per-call proxy (one vector for a query);
-  `/backfill` is the cron target that runs the server-side drain.
-  Service-role-only on `/backfill`.
+  `/backfill` is the cron target that acks `{accepted:true}` and
+  runs the server-side drain detached. Service-role-only on
+  `/backfill`.
 - `supabase/functions/_shared/backfill.ts` - `runBackfill`, the
   claim -> embed -> pad -> save orchestration. I/O-free (injected
   deps) so it unit-tests offline. Also holds the ported
@@ -78,15 +81,15 @@ call site is which client handle they hold.
   The every-minute cadence (up from every 5) was set when the model
   switched from Venice's bge-m3 to local gte-small inference; once
   the re-embedding drain completes, the cadence can be relaxed.
-- **`handleBackfill` in the function** - authenticates the caller as
-  the service role by decoding the bearer JWT's `role` claim and
-  requiring `role === 'service_role'` (the gateway's verify_jwt has
-  already validated the signature). It then drives `runBackfill` over
-  the seven sources, bounded by a batch cap (12 rows) and a time budget
-  (30s) per invocation. The schedule resumes the drain next tick.
-  (The source count is whatever `EMBED_SOURCES` holds at runtime -
-  eight as of the recipe-records addition; do not trust a number
-  quoted here.)
+- **`handleBackfill` in the function** - authenticates the caller
+  with the shared service-role bearer check (both the legacy
+  service-role JWT and the modern `sb_secret_` key; see
+  `_shared/service-role-auth.ts`), acks `{accepted:true}`
+  immediately, and drives `runBackfill` detached over every
+  registered source, bounded by a batch cap (6 rows) and a time
+  budget (30s) per invocation. The schedule resumes the drain next
+  tick. (The source count is whatever `EMBED_SOURCES` holds at
+  runtime - do not trust a number quoted here.)
 - **`runBackfill(deps, opts)`** - round-robins one claim attempt per
   source per pass; embeds and saves whatever it claims; stops when a
   full pass claims nothing (queue drained), the cap or budget is
@@ -131,13 +134,17 @@ the SQL) so the stored shape is consistent.
 ### Timing
 
 - Cron cadence: every minute (`* * * * *`).
-- Per-invocation bounds: 12 rows or 30s, whichever first. The 12-row
-  cap is set by the edge runtime's 2s CPU-time budget: at ~130ms CPU
-  per gte-small inference, 12 rows stays safely under the limit with
-  headroom for claim/save RPC round-trips.
-- Row claim TTL: 120s. No rate-limit back-off (local inference has no
-  rate limits); the invocation bails on the time/row budget and the
-  next tick resumes.
+- Per-invocation bounds: 6 rows or 30s, whichever first.
+- The 6-row cap is set by the edge runtime's 2s CPU-time budget per
+  isolate, and the sizing assumes a COLD isolate: a tick that spends
+  ~1s of CPU crosses the isolate's 50% retirement line, so
+  consecutive ticks never share a warm worker and every tick pays
+  the bundle parse plus the ~7s model load before the first
+  inference. At ~100-180ms of CPU per gte-small inference, 6 rows
+  fit with margin.
+- Row claim TTL: 120s. No rate-limit back-off (local inference has
+  no rate limits); a rare budget overshoot strands the unfinished
+  rows until the TTL lapses, and the next tick re-claims them.
 
 ## Worker-fleet coordination (retired)
 
@@ -166,7 +173,7 @@ lease era.
 
 ## Interactions with other features
 
-- **Memory** - `memories` is one of the seven backfill sources. The
+- **Memory** - `memories` is one of the backfill sources. The
   `clear_memory_embedding_on_change` trigger reselects edited rows.
   `memory_search`'s vector path reads `memories.embedding`; ILIKE
   fallback covers unembedded rows. See `./memory.md`.
@@ -214,11 +221,13 @@ lease era.
   open (`has_function_privilege('authenticated', oid, 'execute')`
   stays true). Verify with exactly that query after any change; don't
   "tidy" the grants away.
-- **Cron auth needs the LEGACY JWT key.** The function gateway
-  validates the bearer as a JWT; the modern opaque `sb_secret_` key
-  is not one and gets rejected (same gotcha as the local realtime
-  stack rejecting `sb_publishable_`). The Vault `service_role_key`
-  secret must be the legacy key.
+- **Cron auth accepts two key shapes.** The shared bearer check
+  (`_shared/service-role-auth.ts`) admits both a service-role JWT
+  (the local stack's shape - its gateway rejects the modern key) and
+  the modern `sb_secret_` service key matched against the injected
+  env (the hosted project's shape). The Vault `service_role_key`
+  secret may hold either; the 2026-11 outage came from a JWT-only
+  check meeting a vault re-seeded with the modern key.
 - **Text composition stays in TS.** Moving the per-source builders
   into the SQL claim RPCs would diverge from historical vectors: JS
   `String.slice` counts UTF-16 units, SQL `left()` counts characters,
@@ -239,9 +248,17 @@ lease era.
 - **CPU time, not I/O, is the binding constraint.** The Venice-era
   backfill was I/O-bound (most of the 25s budget was awaiting Venice
   HTTP responses). Local inference is CPU-bound: each `session.run()`
-  call uses ~130ms of the worker's 2s CPU-time budget. The 12-row
-  batch cap is sized for this. Bumping it risks the edge runtime
-  killing the worker mid-batch.
+  call uses ~100-180ms of the isolate's 2s CPU-time budget. The
+  6-row batch cap is sized for a cold isolate (see Timing). Past
+  the budget, the isolate is killed mid-batch and the caller gets
+  HTTP 546 WORKER_RESOURCE_LIMIT - and because the backfill is the
+  project's only every-minute cron route, a per-minute 546 cadence
+  in net._http_response reads as "the cron fleet is dying" even
+  while the drain keeps landing rows.
+- **The tick acks, it does not summarize.** Nobody reads the
+  `/backfill` response body (pg_net ignores it), so the drain runs
+  detached and reports through the Logs drawer. Drain progress is
+  the pending-embed count falling, not anything on the HTTP surface.
 
 ## Where to go next
 

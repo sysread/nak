@@ -300,7 +300,8 @@ Venice base URL; the function does.
   `Supabase.ai.Session('gte-small')` (local ONNX inference, no Venice
   key); the rest relay to Venice.
 - `/backfill` - service-role-only, the embedding backfill cron
-  target.
+  target; acks immediately and drains detached (same shape as the
+  sweep routes).
 
 See [`../../supabase/functions/README.md`](../../supabase/functions/README.md)
 for the function-side layout and the Deno-island duplication stance.

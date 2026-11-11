@@ -78,7 +78,9 @@ curl -s -X POST http://127.0.0.1:54321/functions/v1/venice/backfill \
   -H "Content-Type: application/json"
 ```
 
-1. Verify the row was re-embedded with the correct model:
+1. Wait a few seconds (the tick acks immediately and drains
+   detached), then verify the row was re-embedded with the correct
+   model:
 
 ```sh
 PGPASSWORD=postgres psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -c \
@@ -99,11 +101,11 @@ PGPASSWORD=postgres psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -c \
   debounced query, followed by
   `POST /rest/v1/rpc/search_memories_by_embedding` returning 200.
 - (4) Clearing the search restores the normal memory browse list.
-- (5) The manual backfill returns a JSON summary with
-  `embedded: 0` (or a small count if rows were pending). No
-  errors, no rate-limited flag.
-- (6) After nulling and re-running backfill, the summary shows
-  `embedded: 1` (the nulled row was picked up and re-embedded).
+- (5) The manual backfill returns `{"accepted":true}` immediately.
+  The drain runs detached; no errors in the function log.
+- (6) The second backfill acks the same way; a few seconds later
+  the detached drain has re-embedded the nulled row (verified by
+  the next step's query).
 - (7) The row shows `embedding_model = 'gte-small'` and
   `dims = 2048` again.
 
