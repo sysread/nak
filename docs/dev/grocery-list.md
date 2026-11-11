@@ -43,20 +43,24 @@ panel" split:
   names), the collapsed acquired history, the inline
   item editor (name / count / unit / note / section / photo /
   delete - name/note/section/photo save to the product, count/unit
-  to its current entry), item drag-to-file (an on-list row's handle
-  drops onto a section card, saving its section - with an accent
-  highlight on the hovered card; the section manager's reorder
-  shows an insertion line via `sectionDropEdge`), whole-card
+  to its current entry), item drag-to-file (press-and-hold anywhere
+  on the row lifts it - accent ring, raised shadow - then slide
+  onto a section card, which highlights, and release to save its
+  section; the drop path resolves the row in BOTH the on-list and
+  acquired arrays, so In-cart and history rows re-file too; the
+  section manager's reorder shows an insertion line via
+  `sectionDropEdge`), whole-card
   section reorder (title-bar handles, shown ONLY when "Show empty
   sections" is on - with cards hidden, a drag would silently
   leapfrog invisible sections), and section management. Full-width,
   which is what a phone at the store sees once the drawer closes.
-  Both drags work on touch via the Settings custom-prompts
-  long-press pattern (hold the grip ~1s, haptic tick, slide,
-  release); native HTML5 DnD covers pointer. The editor's section
-  picker remains the keyboard path. The panel checkbox's uncheck IS
-  a purchase (stamps the open entry's `acquired_at`); its re-check
-  opens a fresh entry, leaving the old purchase in the log.
+  Pointer drags work anywhere on the row via native HTML5 DnD;
+  touch uses the long-press lift pattern (hold ~1s, haptic tick,
+  slide, release). The editor's section
+  picker remains the keyboard path. The panel row tap is a
+  purchase (an OPTIMISTIC move - see the store below - that stamps
+  the open entry's `acquired_at`); tapping the row again opens a
+  fresh entry, leaving the old purchase in the log.
 
 Originally shipped from the plan at
 [`plans/grocery-list-plan.md`](./plans/grocery-list-plan.md); this doc
@@ -79,7 +83,13 @@ owns current reality.
   `GroceryProductPatch`, `GroceryEntryPatch`.
 - `src/lib/grocery-store.svelte.ts` - module-level `$state`:
   `sections`, the complete `onList` array, the windowed `acquired`
-  array (+ `acquiredHasMore` / `loadMoreAcquired`), `loadGroceries`.
+  array (+ `acquiredHasMore` / `loadMoreAcquired`),
+  `loadGroceries` (generation-guarded: start order wins over
+  resolve order, with a shared abort-signal timeout on every
+  query), the OPTIMISTIC check-off flow
+  (`toggleGroceryProductOnList` + `pendingToggles` + `writeError`),
+  and a post-load reconcile that re-asserts in-flight optimistic
+  rows. `loadGroceries`.
 - `src/lib/grocery-events.ts` - the rune-free event bus
   (`nak:grocery:changed`): `emitGroceryChange` / `onGroceryChange`.
   Mirrors `cookbook-events.ts`.
@@ -94,7 +104,10 @@ owns current reality.
   insertion-line decision), the shopping-trip helpers
   (`isShoppingTripActive` - a delegate of the shared session policy,
   `splitAcquiredForTrip`, `CART_IDLE_MESSAGE`, `shoppingToggleLabel`),
-  the sidebar browse
+  the optimistic toggle moves (`applyOptimisticPurchase` /
+  `applyOptimisticRevival`, with disagreement no-op guards) plus
+  `reconcilePendingToggles` and the check-slot render decision
+  (`rowCheckState`), the sidebar browse
   helpers (status/section filter mapping, `splitBrowseRows`
   provenance grouping, the `computeBrowseView` render decision),
   name normalization, and the recipe-bridge helpers
@@ -118,11 +131,14 @@ owns current reality.
   action.
 - `src/screens/Groceries.svelte` - the main-panel shopping list:
   add-input with debounced catalog suggestions, the section cards
-  (row taps toggle list membership - uncheck is a purchase; the
-  pencil opens the inline editor: name / count / unit / note /
-  section / photo / delete), the empty-sections toggle, both drags
-  (item-to-card filing and whole-card reorder, pointer + long-press
-  touch), the Start/Finish shopping trip toggle with the In-cart
+  (the whole ROW is the tap target - role=button with a visual
+  check glyph and a busy spinner in its slot while the optimistic
+  write is pending; the pencil opens the
+  inline editor: name / count / unit / note / section / photo /
+  delete), the empty-sections toggle, both drags
+  (row-to-card filing from any list state and whole-card reorder,
+  pointer + long-press touch with a click-suppression lifecycle),
+  the Start/Finish shopping trip toggle with the In-cart
   section, the collapsed acquired history, and the Sections manage
   mode (add / rename / delete / DnD reorder).
 - `src/screens/Cookbook.svelte` - the recipe side of the bridge:
@@ -349,6 +365,20 @@ the legacy key - the same read-side migration pattern as
 
 ## Refresh model
 
+The check-off flow is OPTIMISTIC and concurrent. A row tap runs
+`toggleGroceryProductOnList` (grocery-store.svelte.ts): the row
+moves in the store the moment it is tapped (a purchase stamps
+`acquired_at` locally, which is what routes it into In cart
+mid-trip), the write fires per-row, and when the LAST pending
+write lands, one settle-reload picks up every write at once - a
+burst of taps is one reload, not one three-query reload per tap.
+A failed write reverts the row, sets `writeError` (cleared by the
+next successful TOGGLE, not by a load - the failure path's own
+resync load would flash the message away otherwise), and resyncs.
+A tap on a row whose write is still pending is ignored (the
+pending guard also covers the drawer's un-plan toggle, whose rows
+would otherwise race a panel write on the same product).
+
 Local UI writes call `loadGroceries` directly (via the component's
 `mutate` wrapper). Server-originated writes - the invalidation
 trigger's stale-product delete, a Cookbook checkbox click reaching
@@ -362,6 +392,26 @@ realtime echo that follows is an idempotent no-op. The Cookbook
 checkbox handler also emits the event directly after its write so a
 same-client Groceries tab updates without waiting on the realtime
 echo (the echo is a harmless idempotent refetch).
+
+`loadGroceries` itself is GENERATION-GUARDED: each call takes a
+monotonic token at the START (wrapping the seed branch), and a
+call whose token is superseded discards its results, its error,
+and its `loading`/`loaded` writes. Start order wins over resolve
+order - the pre-fix contract was "a later result overwrites,"
+which let a load that started before a write committed (a stale
+snapshot) overwrite newer truth when it resolved late, visibly
+un-doing a check-off. The guard makes the reload storm safe: the
+relay has no self-write suppression, so a burst of N check-offs
+fires N echo reloads plus the settle-reload, all racing. Every
+query in a load runs under one shared abort signal with a ~15s
+timeout (`REQUEST_TIMEOUT_MS`; toggle writes get their own), so a
+request that black-holes on flaky wifi cannot pin `loading`
+forever (the sidebar's mount gate reads it) or leave a row's
+pending spinner stuck. After a successful load,
+`reconcilePendingToggles` re-asserts the optimistic rows for
+writes still in flight - a raced load briefly un-does them; the
+reconcile puts them back until the write's own settle-reload
+replaces them with truth.
 
 ## GC
 
@@ -433,11 +483,22 @@ Deployed via its own line in `deploy.yml`.
   against `parseCooklang`. Changing INGREDIENT_RE in
   `supabase/functions/_shared/cooklang-parse.ts` (or the SQL) without updating the other
   side fails that suite - that is the alarm working, not noise.
-- **Seeding is client-side and racy by a round trip.** Two tabs
-  racing the first load can in principle double-seed the canned
-  sections; the count re-check narrows the window and a double
-  seed is cosmetic (duplicate names, user-deletable). Not worth a
-  server-side lock.
+- **Seeding is client-side and non-reentrant.** Two tabs racing the
+  first load could historically double-seed the canned sections
+  (cosmetic, user-deletable). The dangerous case is bigger: an
+  external wipe of the sections table (QA cleanup, a manual DB
+  delete) makes every realtime echo trigger a reload, and each
+  reload that observes zero sections re-seeded - 10 insert echoes
+  per seed, each fanning out to more loads, a self-sustaining
+  reload storm (observed live in QA: 201 seed batches, 2010 rows,
+  until the browser's connection pool gave out). The `seedInFlight`
+  guard in `loadGroceries` collapses concurrent seeds to one, which
+  converges the storm; the seed branch remains client-side because
+  per-user rows need an auth context the sync script doesn't have.
+  Once requests start FAILING, note that the sidebar's mount gate
+  (`!grocery.loaded && !grocery.loading`) retries on every re-mount
+  - a pre-existing failure-mode amplifier worth knowing about if
+  you ever see a wedged tab.
 - **Item rows wrap; they never ellipsize.** Both surfaces render the
   name on a line of its own and `itemDetailLine` on a block under
   it, each with `overflow-wrap: anywhere` and no
@@ -450,3 +511,34 @@ Deployed via its own line in `deploy.yml`.
 - **The grocery function reuses the recipe GC driver.** The drain
   loop in `_shared/recipe-image-gc.ts` is table-agnostic; changing
   its semantics changes BOTH sweeps.
+- **Optimistic rows carry `entry_id: null`, and the pencil knows.**
+  A moved row's real entry does not exist yet; keeping the OLD id
+  would let a fast quantity edit write to the closed entry. Null
+  degrades the editor's quantity save to a no-op, and the pencil is
+  disabled for the whole null-entry window (pending, and the
+  post-success pre-reload moment) so the no-op is unreachable.
+- **A lift gesture must never toggle.** The touch drag's touchend
+  `preventDefault()`s (killing the synthesized click) AND the row's
+  click handler consumes a one-shot `suppressClick` flag that the
+  long-press timer arms. The flag is also disarmed by every fresh
+  touchstart - the preventDefault can swallow the click entirely,
+  leaving the flag unconsumed, and without the disarm the NEXT real
+  tap would be silently dropped.
+- **Only a single stationary finger lifts.** A second touch on the
+  screen cancels a pending press (a palm sharing the phone
+  one-handed), and a touchstart during an active drag is ignored
+  (one component-level drag slot).
+- **`touch-action` is deliberately NOT restricted on item rows.**
+  `pan-y` would let the browser claim vertical pans and break the
+  `preventDefault`-during-lift path; selection and callout are
+  suppressed with `user-select: none` / `-webkit-touch-callout:
+  none` instead.
+- **`loadMoreAcquired` blocks while a toggle is pending.** Its
+  offset cursor is `grocery.acquired.length`, which optimistic rows
+  inflate (the next page skips a real history row) or deflate (it
+  re-appends a loaded row - duplicate keys in the keyed each). The
+  pending window is sub-second, so blocking beats a truth-cursor.
+- **The drag-to-file drop path resolves BOTH arrays.** The whole
+  row is the drag surface and the In-cart / history cards render
+  rows too; an `onList`-only lookup would silently no-op every
+  lift from an acquired row.

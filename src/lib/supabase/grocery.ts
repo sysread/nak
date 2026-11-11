@@ -71,14 +71,21 @@ export const DEFAULT_GROCERY_SECTIONS: readonly string[] = [
 
 // Sections -------------------------------------------------------------------
 
-/** All of the user's sections in display order. */
+/**
+ * All of the user's sections in display order. The optional signal
+ * lets a caller bound the request (loadGroceries aborts its queries
+ * on a timeout so a hung load cannot pin the store's loading flag).
+ */
 export async function listGrocerySections(
-  client: SupabaseClient
+  client: SupabaseClient,
+  opts?: { signal?: AbortSignal }
 ): Promise<GrocerySection[]> {
-  const { data, error } = await client
+  let q = client
     .from('grocery_sections')
     .select('id, name, position, created_at')
     .order('position', { ascending: true });
+  if (opts?.signal) q = q.abortSignal(opts.signal);
+  const { data, error } = await q;
   if (error) throw new SupabaseError(error.message);
   return (data ?? []) as GrocerySection[];
 }
@@ -237,13 +244,16 @@ async function toProductViews(
  * below).
  */
 export async function listOnListGroceryProducts(
-  client: SupabaseClient
+  client: SupabaseClient,
+  opts?: { signal?: AbortSignal }
 ): Promise<GroceryProductView[]> {
-  const { data, error } = await client
+  let q = client
     .from('grocery_products_view')
     .select(VIEW_SELECT)
     .eq('on_list', true)
     .order('updated_at', { ascending: false });
+  if (opts?.signal) q = q.abortSignal(opts.signal);
+  const { data, error } = await q;
   if (error) throw new SupabaseError(error.message);
   return toProductViews(client, (data ?? []) as unknown as ViewRow[]);
 }
@@ -258,9 +268,9 @@ export async function listOnListGroceryProducts(
  */
 export async function listAcquiredGroceryProductsPage(
   client: SupabaseClient,
-  opts: { offset: number; pageSize: number }
+  opts: { offset: number; pageSize: number; signal?: AbortSignal }
 ): Promise<{ rows: GroceryProductView[]; hasMore: boolean }> {
-  const { data, error } = await client
+  let q = client
     .from('grocery_products_view')
     .select(VIEW_SELECT)
     .eq('on_list', false)
@@ -268,6 +278,8 @@ export async function listAcquiredGroceryProductsPage(
     .order('acquired_at', { ascending: false })
     .order('id', { ascending: false })
     .range(opts.offset, opts.offset + opts.pageSize);
+  if (opts.signal) q = q.abortSignal(opts.signal);
+  const { data, error } = await q;
   if (error) throw new SupabaseError(error.message);
   const rows = (data ?? []) as unknown as ViewRow[];
   const hasMore = rows.length > opts.pageSize;
@@ -429,14 +441,17 @@ async function openEntry(
   client: SupabaseClient,
   userId: string,
   productId: string,
-  qty: { count: string | null; unit: string | null }
+  qty: { count: string | null; unit: string | null },
+  signal?: AbortSignal
 ): Promise<void> {
-  const { error } = await client.from('grocery_list_entries').insert({
+  let q = client.from('grocery_list_entries').insert({
     user_id: userId,
     product_id: productId,
     count: qty.count,
     unit: qty.unit,
   });
+  if (signal) q = q.abortSignal(signal);
+  const { error } = await q;
   // 23505 = unique_violation on the one-open-entry-per-product index:
   // the product is already on the list (a concurrent add from another
   // surface), which is the state the caller wanted - not an error.
@@ -452,27 +467,39 @@ async function openEntry(
  *   on = false   stamp the open entry's acquired_at - a PURCHASE.
  *                For un-planning without recording a purchase, use
  *                removeProductFromList instead.
+ *
+ * The signal bounds the write (the optimistic toggle flow aborts on
+ * a timeout so a hung POST cannot spin a row forever).
  */
 export async function setProductOnList(
   client: SupabaseClient,
   productId: string,
   on: boolean,
-  qty?: { count?: string | null; unit?: string | null }
+  qty?: { count?: string | null; unit?: string | null },
+  signal?: AbortSignal
 ): Promise<void> {
   if (on) {
     const session = await getSession(client);
     if (!session) throw new SupabaseError('Not authenticated.');
-    await openEntry(client, session.user.id, productId, {
-      count: qty?.count ?? null,
-      unit: qty?.unit ?? null,
-    });
+    await openEntry(
+      client,
+      session.user.id,
+      productId,
+      {
+        count: qty?.count ?? null,
+        unit: qty?.unit ?? null,
+      },
+      signal
+    );
     return;
   }
-  const { error } = await client
+  let q = client
     .from('grocery_list_entries')
     .update({ acquired_at: new Date().toISOString() })
     .eq('product_id', productId)
     .is('acquired_at', null);
+  if (signal) q = q.abortSignal(signal);
+  const { error } = await q;
   if (error) throw new SupabaseError(error.message);
 }
 

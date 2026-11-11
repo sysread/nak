@@ -158,6 +158,11 @@
   function toggleOnList(item: GroceryProductView): void {
     const supabase = app.supabase;
     if (!supabase) return;
+    // A purchase/revival write from the panel may still be in flight
+    // for this row; stacking a second write here would race it (the
+    // same cross-surface reason the classifying set lives in the
+    // store). The browse row re-reads truth on its next page load.
+    if (grocery.pendingToggles.has(item.id)) return;
     void (async () => {
       try {
         if (item.on_list) await supabase.removeProductFromList(item.id);

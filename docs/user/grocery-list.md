@@ -97,12 +97,21 @@ until you file them), then your sections in your order. The section
 name is the card's title and items stack one per row inside it,
 alphabetically by name. Sections with nothing on the list stay
 hidden until you tick **Show empty sections** at the top - handy
-when you're filing items and want the full store layout. Every
-item on the list shows a **checked** box - as you
-put things in your cart, uncheck them. Unchecked items drop into the
-greyed-out **Acquired** section at the bottom, which stays collapsed
-until you open it (it keeps your whole purchase history). Re-check
-an acquired item to put it back on the list.
+when you're filing items and want the full store layout. Every item
+on the list carries a check mark - as you put things in your cart,
+tap the row to mark it off. Marked-off items drop into the greyed-
+out **Acquired** section at the bottom (into **In cart** during a
+shopping trip), which stays collapsed until you open it (it keeps
+your whole purchase history). Tap an acquired item again to put it
+back on the list.
+
+The response to a tap is immediate: the row leaves its card the
+moment you tap, and a small spinner turns where its check mark was
+until the save finishes on the server - on a slow connection you
+can keep checking off other items without waiting. Tapping a row
+that's still saving does nothing (the app won't stack a second
+buy on top of the first); if a save fails, the row snaps back and
+a one-line error appears at the top of the panel.
 
 Each row reads top to bottom: the item **name** on its own line,
 then a smaller grey line under it with the count and unit, your
@@ -111,17 +120,24 @@ Both lines wrap onto as many lines as they need, so a long name or
 a wordy note is never cut off mid-word - the name in particular is
 always shown in full.
 
-Tapping anywhere on an item's row toggles its checkbox - the whole
-row is the tap target, not just the little box. To edit instead,
-tap the pencil at the row's right edge: name, count, unit, a
-free-form note, its section, and an optional photo (handy for "this
-exact brand" label shots). Delete lives in the same editor. You can also drag an
-item by its handle onto another section's card to re-file it - the
-target card highlights as you hover, and the item keeps that
-section from then on. On a phone, press and hold the handle
-for a second (a small vibration confirms where supported), then
-slide to the target card and release; the same hold-and-slide works
-for reordering sections in the Sections manager.
+Tapping anywhere on an item's row marks it off - the whole row is
+the tap target, not just the check mark, so a thumb in a store
+aisle can't miss. To edit instead, tap the pencil at the row's
+right edge: name, count, unit, a free-form note, its section, and
+an optional photo (handy for "this exact brand" label shots).
+Delete lives in the same editor.
+
+To move an item to a different aisle card, **press and hold the
+row for about a second** (a small vibration confirms where
+supported): the row lifts - outlined, shadowed, visually raised
+off the list - and while you hold, slide your finger onto another
+section's card (the target card highlights) and release. The item
+is filed there and keeps that section from then on. This works
+from the In-cart section too, mid-shop. Letting go anywhere else
+puts the row back unchanged - a lift never toggles or files
+anything unless you drop it on a card. With a mouse, drag the row
+onto the card directly; the same hold-and-slide gesture reorders
+sections in the Sections manager.
 
 To rearrange whole sections right in the list - say, to match the
 order you walk the aisles - tick **Show empty sections** first: each

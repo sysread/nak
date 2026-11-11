@@ -833,8 +833,8 @@ export class SupabaseService {
   // the grocery_products_view read paths, and the product-photo
   // upload/upsert pair).
 
-  async listGrocerySections(): Promise<GrocerySection[]> {
-    return groceryApi.listGrocerySections(this.client);
+  async listGrocerySections(opts?: { signal?: AbortSignal }): Promise<GrocerySection[]> {
+    return groceryApi.listGrocerySections(this.client, opts);
   }
 
   async seedGrocerySectionsIfEmpty(): Promise<void> {
@@ -857,13 +857,16 @@ export class SupabaseService {
     return groceryApi.reorderGrocerySections(this.client, sectionIds);
   }
 
-  async listOnListGroceryProducts(): Promise<GroceryProductView[]> {
-    return groceryApi.listOnListGroceryProducts(this.client);
+  async listOnListGroceryProducts(opts?: {
+    signal?: AbortSignal;
+  }): Promise<GroceryProductView[]> {
+    return groceryApi.listOnListGroceryProducts(this.client, opts);
   }
 
   async listAcquiredGroceryProductsPage(opts: {
     offset: number;
     pageSize: number;
+    signal?: AbortSignal;
   }): Promise<{ rows: GroceryProductView[]; hasMore: boolean }> {
     return groceryApi.listAcquiredGroceryProductsPage(this.client, opts);
   }
@@ -921,9 +924,10 @@ export class SupabaseService {
   async setProductOnList(
     productId: string,
     on: boolean,
-    qty?: { count?: string | null; unit?: string | null }
+    qty?: { count?: string | null; unit?: string | null },
+    signal?: AbortSignal
   ): Promise<void> {
-    return groceryApi.setProductOnList(this.client, productId, on, qty);
+    return groceryApi.setProductOnList(this.client, productId, on, qty, signal);
   }
 
   async autoFileGroceryProduct(id: string, sectionId: string): Promise<void> {

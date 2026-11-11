@@ -18,9 +18,15 @@
    *    name as the card title, items one per row. Empty cards are
    *    hidden by default; a "Show empty sections" toggle opts into
    *    the full store layout (useful when filing items).
-   *    Checkboxes render CHECKED (inverted from the recipe view):
-   *    the shopper unchecks items as they land in the cart (a
-   *    purchase - it stamps the entry's acquired_at), which moves
+   *    Each ROW renders the check mark (inverted from the recipe
+   *    view): tapping anywhere on the row marks it acquired (a
+   *    purchase - it stamps the entry's acquired_at and moves the
+   *    item to In cart mid-trip), and tapping it again revives it.
+   *    The move is OPTIMISTIC - instant, with a spinner in the
+   *    check slot until the server confirms - and check-offs run
+   *    concurrently, one write per row, settled by a single reload.
+   *    A long-press on the row lifts it into drag-to-file mode,
+   *    which files the item onto another aisle card, which moves
    *    them down to...
    *  - the acquired history: greyed-out, collapsed by default (it
    *    grows every trip, forever), windowed with a "show more" tail.
@@ -39,6 +45,7 @@
     loadGroceries,
     loadMoreAcquired,
     autoFileProductsTracked,
+    toggleGroceryProductOnList,
   } from '$lib/grocery-store.svelte';
   import { onGroceryChange } from '$lib/grocery-events';
   import type { GroceryProductView } from '$lib/supabase';
@@ -55,6 +62,7 @@
     acquiredHeaderLabel,
     canCreateGroceryItem,
     isShoppingTripActive,
+    rowCheckState,
     sectionNameFor,
     shoppingToggleLabel,
     splitAcquiredForTrip,
@@ -162,28 +170,40 @@
     })();
   }
 
-  // Item drag-to-file: dragging a needed row's handle onto a section
-  // card saves the item into that section (which also records the
-  // name's sticky section preference server-side). Native HTML5 DnD
-  // for pointers plus the long-press touch path below, same pair as
-  // the section manager and Settings' custom-prompts reorder.
+  // Item drag-to-file: dragging a needed row onto a section card
+  // saves the item into that section (which also records the name's
+  // sticky section preference server-side). Native HTML5 DnD for
+  // pointers plus the long-press touch path below, same pair as the
+  // section manager and Settings' custom-prompts reorder.
   let dragItemId = $state<string | null>(null);
   let dragOverSection = $state<string | null | undefined>(undefined);
 
   // --- Touch long-press drag (mobile) ---
   // Native HTML5 DnD never fires on touch, so phones get the same
-  // parallel path the Settings custom-prompts reorder uses: press and
-  // hold the grip for LONG_PRESS_MS and the row "lifts" (haptic tick
-  // where supported), then sliding the finger marks the drop target
-  // and lifting drops there. A finger that travels more than
-  // TOUCH_SLOP before the timer fires is a scroll attempt and cancels
-  // the press. Touch events all dispatch to the touchstart target
-  // (the grip), so the element under the finger is resolved via
-  // elementFromPoint against data attributes on the targets.
+  // parallel path the Settings custom-prompts reorder uses - but on
+  // the WHOLE ROW, not a grip: press and hold anywhere for
+  // LONG_PRESS_MS and the row "lifts" (haptic tick where supported),
+  // then sliding the finger marks the drop target and lifting drops
+  // there. A finger that travels more than TOUCH_SLOP before the
+  // timer fires is a scroll attempt and cancels the press. A second
+  // finger on the screen (a palm sharing the phone one-handed) also
+  // cancels: only a single stationary finger is a deliberate lift.
+  // Touch events all dispatch to the touchstart target (the row), so
+  // the element under the finger is resolved via elementFromPoint
+  // against data attributes on the targets.
   const LONG_PRESS_MS = 1000;
   const TOUCH_SLOP = 10; // px of travel that still counts as "held still"
   let longPressTimer: ReturnType<typeof setTimeout> | null = null;
   let touchStartY = 0;
+
+  // Set when the long-press timer fires so the row's click handler
+  // can ignore the tap that gesture would otherwise produce. The
+  // gesture's touchend also preventDefaults (killing the synthesized
+  // click entirely), so a flag that is never consumed must not
+  // outlive its gesture: every fresh touchstart disarms it. Without
+  // that clearing rule, one lift would silently swallow the
+  // shopper's NEXT tap.
+  let suppressClick = $state(false);
 
   function clearLongPress(): void {
     if (longPressTimer !== null) {
@@ -193,6 +213,12 @@
   }
 
   function onItemTouchStart(id: string, e: TouchEvent): void {
+    suppressClick = false;
+    if (dragItemId !== null) return; // one drag slot; a second finger cannot steal it
+    if (e.touches.length > 1) {
+      clearLongPress(); // palm or second finger: not a deliberate press
+      return;
+    }
     const t = e.touches[0];
     if (!t) return;
     touchStartY = t.clientY;
@@ -200,6 +226,7 @@
     longPressTimer = setTimeout(() => {
       longPressTimer = null;
       dragItemId = id;
+      suppressClick = true;
       navigator.vibrate?.(15);
     }, LONG_PRESS_MS);
   }
@@ -220,14 +247,43 @@
     }
   }
 
-  function onItemTouchEnd(): void {
+  function onItemTouchEnd(e: TouchEvent): void {
     clearLongPress();
     if (dragItemId === null) return;
+    // Canceling touchend suppresses the synthesized click, so a lift
+    // that drops (or cancels in place) never also toggles the row.
+    e.preventDefault();
     if (dragOverSection !== undefined) dropItemOnSection(dragOverSection);
     else {
       dragItemId = null;
       dragOverSection = undefined;
     }
+  }
+
+  /**
+   * Non-passive touch listeners for the row's lift gesture, attached
+   * via an action because the gesture NEEDS preventDefault and Svelte
+   * 5 delegates its event attributes to the document - where Chromium
+   * registers touch listeners as passive by default and silently
+   * ignores the call ("Unable to preventDefault inside passive event
+   * listener"). The touchend preventDefault suppresses the post-lift
+   * click; the touchmove one freezes page scroll while a row is
+   * lifted. The action's param is stable by construction: rows are
+   * keyed by product id, so a given node never re-renders for a
+   * different item.
+   */
+  function rowTouchAction(node: HTMLElement, id: string) {
+    const start = (e: TouchEvent) => onItemTouchStart(id, e);
+    node.addEventListener('touchstart', start, { passive: false });
+    node.addEventListener('touchmove', onItemTouchMove, { passive: false });
+    node.addEventListener('touchend', onItemTouchEnd, { passive: false });
+    return {
+      destroy() {
+        node.removeEventListener('touchstart', start);
+        node.removeEventListener('touchmove', onItemTouchMove);
+        node.removeEventListener('touchend', onItemTouchEnd);
+      },
+    };
   }
 
   function dropItemOnSection(sectionId: string | null): void {
@@ -236,7 +292,13 @@
     dragItemId = null;
     dragOverSection = undefined;
     if (!supabase || !itemId) return;
-    const current = grocery.onList.find((i) => i.id === itemId);
+    // The drag surface is the whole row, and the In-cart and history
+    // cards render rows too (re-filing a just-bought item is a
+    // natural mid-shop correction), so resolve the row in either
+    // array - an onList-only lookup would silently no-op those drops.
+    const current =
+      grocery.onList.find((i) => i.id === itemId) ??
+      grocery.acquired.find((i) => i.id === itemId);
     if (!current || current.section_id === sectionId) return;
     void mutate(() =>
       supabase.updateGroceryProduct(itemId, { section_id: sectionId })
@@ -375,14 +437,21 @@
     });
   }
 
-  // The row checkbox verb: off the list = a PURCHASE (stamps the open
+  // The row toggle verb: off the list = a PURCHASE (stamps the open
   // entry's acquired_at), back on = a fresh open entry (revival). The
   // un-plan verb (delete the entry without recording a buy) belongs
-  // to the recipe view's checkboxes, not this panel.
-  function setOnList(item: GroceryProductView, on: boolean): void {
+  // to the recipe view's checkboxes, not this panel. The optimistic
+  // store function moves the row instantly, guards a mid-save
+  // double-tap, and settles with one reload; the suppressClick
+  // consume keeps a just-finished lift gesture from toggling.
+  function onRowActivate(item: GroceryProductView, onList: boolean): void {
     const supabase = app.supabase;
     if (!supabase) return;
-    void mutate(() => supabase.setProductOnList(item.id, on));
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    void toggleGroceryProductOnList(supabase, item, !onList);
   }
 
   // The entry whose quantity the editor edits - the current entry of
@@ -706,8 +775,8 @@
     Show empty sections
   </label>
 
-  {#if actionError}
-    <p class="error grocery-error">{actionError}</p>
+  {#if actionError ?? grocery.writeError}
+    <p class="error grocery-error">{actionError ?? grocery.writeError}</p>
   {/if}
 
   {#if manageSections}
@@ -815,61 +884,63 @@
   {/if}
 
   {#snippet itemRow(item: GroceryProductView, onList: boolean)}
+    <!-- The ROW is the toggle target: at the store the tap is a thumb
+         on a phone, and anything smaller than the whole block is a
+         miss magnet (photo, padding, name - all of it toggles; only
+         the pencil is exempt). The check glyph is a pure visual: the
+         row carries the button semantics, and a real input would be
+         a second toggle path fighting the optimistic store state.
+         The row is also the drag surface - pointer DnD starts
+         anywhere on it, touch lifts via the long-press timer.
+         (Svelte 5's compiler does not warn about the nested pencil
+         button here, so no svelte-ignore is needed.) -->
     <div
       class="grocery-item-row"
       class:acquired={!onList}
       class:lifted={dragItemId === item.id}
+      role="button"
+      tabindex="0"
+      aria-label={onList ? `Mark ${item.name} as acquired` : `Put ${item.name} back on the list`}
+      draggable="true"
+      onclick={() => onRowActivate(item, onList)}
+      onkeydown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        onRowActivate(item, onList);
+      }}
+      ondragstart={(e) => {
+        dragItemId = item.id;
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+      }}
+      ondragend={() => {
+        dragItemId = null;
+        dragOverSection = undefined;
+      }}
+      use:rowTouchAction={item.id}
     >
-      {#if onList}
-        <!-- Drag-to-file handle. Only the handle is draggable so the
-             row's tap targets (checkbox, edit) keep their gestures. -->
-        <span
-          class="grocery-drag-handle"
-          draggable="true"
-          role="button"
-          tabindex="-1"
-          aria-label={`Drag ${item.name} to a section`}
-          ondragstart={(e) => {
-            dragItemId = item.id;
-            if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-          }}
-          ondragend={() => {
-            dragItemId = null;
-            dragOverSection = undefined;
-          }}
-          ontouchstart={(e) => onItemTouchStart(item.id, e)}
-          ontouchmove={onItemTouchMove}
-          ontouchend={onItemTouchEnd}
-        >&#8942;&#8942;</span>
-      {/if}
-      <label class="grocery-check-label">
-        <!-- Inverted from the recipe view on purpose: on-list items
-             render CHECKED and the shopper unchecks as they buy. -->
-        <input
-          type="checkbox"
-          class="grocery-check"
-          checked={onList}
-          aria-label={onList ? `Mark ${item.name} as acquired` : `Put ${item.name} back on the list`}
-          onchange={() => setOnList(item, !onList)}
-        />
-      </label>
-      <!-- The whole row body is a second checkbox target - at the
-           store the tap is a thumb on a phone, and the tiny box
-           alone is a miss magnet. Editing moved to the pencil button
-           at the row's right edge. -->
-      <button
-        type="button"
-        class="grocery-item-body"
-        title={onList ? 'Mark as acquired' : 'Put back on the list'}
-        onclick={() => setOnList(item, !onList)}
-      >
-        <!-- The name owns its own line and wraps in full. Nothing
-             shares the line with it: the shopper scans an aisle card
-             by item name, and a name clipped by a quantity or a note
-             beside it is a name they have to tap to read. The
-             classifying ring is the one exception - it marks "the
-             app is choosing a section for this" while the (Auto)
-             call runs, and disappears when the row hops. -->
+      <span class="grocery-check-slot" aria-hidden="true">
+        {#if rowCheckState(onList, grocery.pendingToggles.has(item.id)) === 'busy'}
+          <span class="grocery-check-busy"></span>
+        {:else if onList}
+          <!-- Inverted from the recipe view on purpose: on-list items
+               render the check and the shopper taps it off as they
+               buy. Stroked SVG rather than a native checkbox: same
+               feather idiom as the pencil, crisp at slot size. -->
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="3" stroke-linecap="round"
+               stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        {/if}
+      </span>
+      <!-- The name owns its own line and wraps in full. Nothing
+           shares the line with it: the shopper scans an aisle card
+           by item name, and a name clipped by a quantity or a note
+           beside it is a name they have to tap to read. The
+           classifying ring is the one exception - it marks "the
+           app is choosing a section for this" while the (Auto)
+           call runs, and disappears when the row hops. -->
+      <span class="grocery-item-body">
         <span class="grocery-item-name">
           {item.name}
           {#if grocery.classifying.has(item.id)}
@@ -884,7 +955,7 @@
         {#if itemDetailLine(item)}
           <span class="grocery-item-meta">{itemDetailLine(item)}</span>
         {/if}
-      </button>
+      </span>
       {#if item.image_url}
         <img class="grocery-item-thumb" src={item.image_url} alt={item.name} loading="lazy" />
       {/if}
@@ -895,7 +966,12 @@
         title="Edit item"
         aria-label={`Edit ${item.name}`}
         aria-expanded={editingId === item.id}
-        onclick={() => (editingId === item.id ? cancelEdit() : startEdit(item))}
+        disabled={grocery.pendingToggles.has(item.id) || item.entry_id === null}
+        onclick={(e) => {
+          // The row is the toggle target; the pencil must not toggle.
+          e.stopPropagation();
+          editingId === item.id ? cancelEdit() : startEdit(item);
+        }}
       >
         <!-- Stroked SVG rather than a text glyph: the U+270E pencil
              entity rendered as an unreadable blob at row size, while
@@ -1332,14 +1408,19 @@
     background: var(--surface);
     margin: 0 0.6rem 0.6rem;
     padding: 0 0 0.45rem;
-    overflow: hidden;
+    /* Visible (not hidden) so a lifted row's raised shadow can
+       escape the card bounds; the title bar clips ITSELF instead
+       (its own top-corner radii match the card's). */
+    overflow: visible;
   }
   /* Left-aligned title with the reorder handle inline before it.
      The handle only renders in full-layout mode, so the title's left
      edge shifts slightly when it appears - preferred over centering,
      which read as disconnected from the items below. --muted (not a
      hardcoded grey) so the header clears WCAG contrast on every
-     theme's --bg-2, including light terminal's beige. */
+     theme's --bg-2, including light terminal's beige. The top-corner
+     radii are what keep the two-tone fill inside the card's rounded
+     corners now that the card no longer clips. */
   .grocery-section-card-title {
     display: flex;
     align-items: center;
@@ -1352,6 +1433,7 @@
     color: var(--muted);
     background: var(--bg-2);
     border-bottom: 1px solid var(--border);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
   }
   .grocery-card-handle {
     /* Generous hit box for a store-aisle thumb; the glyph stays
@@ -1371,6 +1453,20 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.3rem 0.75rem;
+    /* The row is the long-press lift surface, so text selection and
+       the iOS callout magnifier must not fight the gesture. touch-
+       action is deliberately NOT restricted: pan-y would let the
+       browser claim vertical pans and break the preventDefault-
+       during-lift path the touch drag relies on. */
+    cursor: grab;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .grocery-item-row:focus-visible {
+    /* The row is a role=button tap/keyboard target; give the keyboard
+       path a visible focus ring. */
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
   }
   /* Card reorder feedback: the lifted card dims, and the insertion
      line rides the hovered card's landing edge (same box-shadow
@@ -1385,11 +1481,19 @@
     box-shadow: 0 3px 0 0 var(--accent);
   }
 
-  /* Touch-drag "lift": the long-pressed row dims while the finger
-     picks a destination card (mouse DnD shows the browser's drag
-     ghost instead, so this only reads on touch). */
+  /* Touch-drag "lift": the held row pops - accent ring, elevated
+     background, raised shadow - an unmistakable "drag me to an
+     aisle" mode (the old dimming read as "disabled"). The ring and
+     shadow ride box-shadow so the row does not shift a pixel, and
+     the row is promoted above its siblings so the shadow escapes
+     them. The mouse path shows the same styling while a pointer
+     drag is active, alongside the browser's drag ghost. */
   .grocery-item-row.lifted {
-    opacity: 0.5;
+    position: relative;
+    z-index: 5;
+    background: var(--bg-2);
+    border-radius: var(--radius-md);
+    box-shadow: 0 0 0 1px var(--accent), 0 6px 16px rgba(0, 0, 0, 0.35);
   }
 
   /* Drop highlight while an item drag hovers a card: accent outline
@@ -1408,18 +1512,29 @@
   .grocery-item-row.acquired .grocery-item-name {
     text-decoration: line-through;
   }
-  .grocery-check-label {
+  /* The check glyph's slot: same footprint as the old native
+     checkbox so rows align, accent-colored when the check shows.
+     Purely visual - the row owns the button semantics. */
+  .grocery-check-slot {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     flex-shrink: 0;
-  }
-  /* Big tap target: this checkbox is hit with a thumb, one-handed, in
-     a store aisle. */
-  .grocery-check {
     width: 1.15rem;
     height: 1.15rem;
-    accent-color: var(--accent);
-    cursor: pointer;
+    color: var(--accent);
+  }
+  /* In-flight check-off: the slot spins while the purchase/revival
+     write is pending - same ring idiom as the classifying indicator
+     and the Cookbook's busy checkbox, sized to the slot. */
+  .grocery-check-busy {
+    display: inline-block;
+    width: 0.9rem;
+    height: 0.9rem;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: grocery-classify-spin 700ms linear infinite;
   }
   .grocery-item-body {
     flex: 1;
@@ -1428,13 +1543,6 @@
     flex-direction: column;
     align-items: stretch;
     gap: 0.1rem;
-    border: none;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    text-align: left;
-    padding: 0;
-    cursor: pointer;
   }
   /* Shared with the suggestion dropdown's rows. Wraps rather than
      ellipsizes: the name is the one part of a row that must always be
@@ -1510,6 +1618,14 @@
   }
   .grocery-edit-btn.active {
     color: var(--accent);
+  }
+  /* Disabled while the row's toggle write is pending or its entry is
+     still the optimistic fiction (entry_id null) - a quantity save
+     against a null entry silently no-ops, so the affordance hides
+     for that sub-second window instead. */
+  .grocery-edit-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .grocery-item-thumb {

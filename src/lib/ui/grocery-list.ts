@@ -2,9 +2,12 @@
  * Pure UI-behavior primitives for the grocery list: the drawer tab's
  * section grouping, quantity labels, add-input suggestion decisions,
  * the acquired-history disclosure copy, the drag-reorder next-state
- * computation, and the recipe-bridge helpers the Cookbook detail
- * pane's ingredient checkboxes share with the list (name
- * normalization, checkbox-state mapping, checkbox-to-item payload).
+ * computation, the optimistic purchase/revival moves the panel's
+ * check-off flow applies to the shared store (plus the post-load
+ * reconcile that re-asserts writes still in flight), and the
+ * recipe-bridge helpers the Cookbook detail pane's ingredient
+ * checkboxes share with the list (name normalization,
+ * checkbox-state mapping, checkbox-to-item payload).
  *
  * No Svelte imports on purpose - everything here is framework-
  * agnostic and unit-tested at tests/grocery-list.test.ts. The
@@ -294,6 +297,113 @@ export function splitAcquiredForTrip(
 /** Label for the trip toggle button. */
 export function shoppingToggleLabel(active: boolean): string {
   return active ? 'Finish shopping' : 'Start shopping';
+}
+
+// Optimistic list toggles --------------------------------------------------
+
+/**
+ * The check slot's render state for a row: the glyph when idle, the
+ * spinner while the row's purchase/revival write is in flight. The
+ * direction does not matter visually - "saving" reads the same either
+ * way, so a single pending boolean decides it.
+ */
+export type RowCheckState = 'checked' | 'unchecked' | 'busy';
+
+export function rowCheckState(onList: boolean, pending: boolean): RowCheckState {
+  if (pending) return 'busy';
+  return onList ? 'checked' : 'unchecked';
+}
+
+/**
+ * Optimistically move a row from the needed list into the acquired
+ * window (a purchase). The copy stamps `acquired_at` with `nowIso`,
+ * which is what routes it into the In-cart split mid-trip
+ * (splitAcquiredForTrip keys on that stamp), and nulls `entry_id`:
+ * the real entry is still open, and a stale id would let the inline
+ * editor save a quantity against the wrong (soon-purchased) entry.
+ *
+ * No-op unless the id is in `onList` AND not already in `acquired` -
+ * a reload that raced the write can already carry the write's truth
+ * (real entry_id, real acquired_at), and re-applying the fiction on
+ * top would stack a duplicate row under the same keyed-each id.
+ */
+export function applyOptimisticPurchase(
+  onList: readonly GroceryProductView[],
+  acquired: readonly GroceryProductView[],
+  id: string,
+  nowIso: string
+): { onList: GroceryProductView[]; acquired: GroceryProductView[] } {
+  const inOnList = onList.some((i) => i.id === id);
+  const inAcquired = acquired.some((i) => i.id === id);
+  if (!inOnList || inAcquired) {
+    return { onList: [...onList], acquired: [...acquired] };
+  }
+  const row = onList.find((i) => i.id === id);
+  if (!row) return { onList: [...onList], acquired: [...acquired] };
+  return {
+    onList: onList.filter((i) => i.id !== id),
+    acquired: [
+      { ...row, on_list: false, acquired_at: nowIso, entry_id: null },
+      ...acquired,
+    ],
+  };
+}
+
+/**
+ * Optimistically move a row from the acquired window back onto the
+ * needed list (a revival - a fresh open entry the server has not
+ * created yet, hence `entry_id: null`). Mirror of
+ * applyOptimisticPurchase including its no-op guard: the id must be
+ * in `acquired` AND not already in `onList`.
+ */
+export function applyOptimisticRevival(
+  onList: readonly GroceryProductView[],
+  acquired: readonly GroceryProductView[],
+  id: string
+): { onList: GroceryProductView[]; acquired: GroceryProductView[] } {
+  const inOnList = onList.some((i) => i.id === id);
+  const inAcquired = acquired.some((i) => i.id === id);
+  if (inOnList || !inAcquired) {
+    return { onList: [...onList], acquired: [...acquired] };
+  }
+  const row = acquired.find((i) => i.id === id);
+  if (!row) return { onList: [...onList], acquired: [...acquired] };
+  return {
+    onList: [...onList, { ...row, on_list: true, acquired_at: null, entry_id: null }],
+    acquired: acquired.filter((i) => i.id !== id),
+  };
+}
+
+/**
+ * Re-assert the optimistic rows for writes still in flight after a
+ * reload landed. A load that raced a pending write briefly un-does
+ * the optimistic move (its snapshot predates the write); this puts
+ * the fiction back until the write's own settle-reload replaces it
+ * with truth. Only re-applies on DISAGREEMENT - if the fresh arrays
+ * already carry the write's effect (the write committed and the load
+ * read after it), re-applying would duplicate the row. Never touches
+ * the pending map itself; only write resolution does that.
+ */
+export function reconcilePendingToggles(
+  onList: readonly GroceryProductView[],
+  acquired: readonly GroceryProductView[],
+  pending: ReadonlyMap<string, boolean>,
+  nowIso: string
+): { onList: GroceryProductView[]; acquired: GroceryProductView[] } {
+  let nextOnList = [...onList];
+  let nextAcquired = [...acquired];
+  for (const [id, on] of pending) {
+    if (on && !nextOnList.some((i) => i.id === id)) {
+      const moved = applyOptimisticRevival(nextOnList, nextAcquired, id);
+      nextOnList = moved.onList;
+      nextAcquired = moved.acquired;
+    } else if (!on && !nextAcquired.some((i) => i.id === id)) {
+      const moved = applyOptimisticPurchase(nextOnList, nextAcquired, id, nowIso);
+      nextOnList = moved.onList;
+      nextAcquired = moved.acquired;
+    }
+  }
+  return { onList: nextOnList, acquired: nextAcquired };
 }
 
 // All-items browse (the sidebar) -----------------------------------------

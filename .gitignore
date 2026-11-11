@@ -109,3 +109,6 @@ recipe-edit-before.png
 # Tar.gz archives with DB dumps + storage objects; never commit.
 backups/
 scripts/seed-backup-test.mjs
+
+# Scratch-staged QA config (public/ is served by Vite; staged before browser QA runs)
+public/nak-qa-config.json

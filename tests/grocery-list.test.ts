@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   OTHER_SECTION_LABEL,
   acquiredHeaderLabel,
+  applyOptimisticPurchase,
+  applyOptimisticRevival,
   canCreateGroceryItem,
   groceryProductFromIngredient,
   groupItemsBySection,
@@ -9,6 +11,8 @@ import {
   itemQuantityLabel,
   normalizeGroceryName,
   recipeCheckboxItemIds,
+  reconcilePendingToggles,
+  rowCheckState,
   sectionOrderAfterDrag,
 } from '../src/lib/ui/grocery-list';
 import type { GroceryProductView, GrocerySection } from '../src/lib/supabase';
@@ -521,4 +525,138 @@ describe('SQL invalidation regex mirrors parseCooklang', () => {
       expect(sqlMirrorIngredientNames(src)).toEqual(parserIngredientNames(src));
     });
   }
+});
+
+describe('rowCheckState', () => {
+  it('checked for on-list idle rows, unchecked for acquired idle rows', () => {
+    expect(rowCheckState(true, false)).toBe('checked');
+    expect(rowCheckState(false, false)).toBe('unchecked');
+  });
+
+  it('busy wins over the list state - the direction does not matter visually', () => {
+    expect(rowCheckState(true, true)).toBe('busy');
+    expect(rowCheckState(false, true)).toBe('busy');
+  });
+});
+
+describe('applyOptimisticPurchase', () => {
+  const NOW = '2026-11-11T18:00:00Z';
+
+  it('moves the row from onList into acquired with stamped fields and a null entry id', () => {
+    const eggs = item({ name: 'eggs', entry_id: 'e-eggs', count: '3' });
+    const milk = item({ name: 'milk' });
+    const out = applyOptimisticPurchase([eggs, milk], [], 'eggs', NOW);
+    expect(out.onList.map((i) => i.name)).toEqual(['milk']);
+    expect(out.acquired).toHaveLength(1);
+    expect(out.acquired[0]).toMatchObject({
+      name: 'eggs',
+      on_list: false,
+      acquired_at: NOW,
+      entry_id: null,
+      count: '3',
+    });
+  });
+
+  it('no-ops when the id is not on the list (already moved, or a raced load)', () => {
+    const out = applyOptimisticPurchase([item({ name: 'milk' })], [], 'eggs', NOW);
+    expect(out.onList).toHaveLength(1);
+    expect(out.acquired).toHaveLength(0);
+  });
+
+  it('no-ops when the id is already in acquired - the load carries the truth', () => {
+    // The realtime echo of the browser's own write can land truth (a
+    // real entry_id and acquired_at) while the write's HTTP response
+    // is still pending; stacking the fiction row on top would
+    // duplicate the keyed-each id.
+    const eggsOnList = item({ name: 'eggs', id: 'p1' });
+    const eggsAcquired = item({ name: 'eggs', id: 'p1', on_list: false, acquired_at: NOW, entry_id: 'real-entry' });
+    const out = applyOptimisticPurchase([eggsOnList], [eggsAcquired], 'p1', NOW);
+    expect(out.acquired).toHaveLength(1);
+    expect(out.acquired[0].entry_id).toBe('real-entry');
+  });
+});
+
+describe('applyOptimisticRevival', () => {
+  it('moves the row from acquired back onto the list with a null entry id', () => {
+    const eggs = item({ name: 'eggs', on_list: false, acquired_at: '2026-11-10T00:00:00Z', entry_id: 'old-entry' });
+    const out = applyOptimisticRevival([], [eggs], 'eggs');
+    expect(out.acquired).toHaveLength(0);
+    expect(out.onList).toHaveLength(1);
+    expect(out.onList[0]).toMatchObject({
+      name: 'eggs',
+      on_list: true,
+      acquired_at: null,
+      entry_id: null,
+    });
+  });
+
+  it('no-ops when the id is not in the acquired window', () => {
+    const out = applyOptimisticRevival([item({ name: 'milk' })], [], 'eggs');
+    expect(out.onList).toHaveLength(1);
+    expect(out.acquired).toHaveLength(0);
+  });
+
+  it('no-ops when the id is already back on the list', () => {
+    const eggsOnList = item({ name: 'eggs', id: 'p1' });
+    const eggsAcquired = item({ name: 'eggs', id: 'p1', on_list: false, acquired_at: '2026-11-10T00:00:00Z' });
+    const out = applyOptimisticRevival([eggsOnList], [eggsAcquired], 'p1');
+    expect(out.onList).toHaveLength(1);
+    expect(out.acquired).toHaveLength(1);
+  });
+});
+
+describe('reconcilePendingToggles', () => {
+  const NOW = '2026-11-11T18:00:00Z';
+
+  it('re-applies a pending purchase when the fresh load still shows the row on the list', () => {
+    const eggs = item({ name: 'eggs' });
+    const out = reconcilePendingToggles([eggs], [], new Map([['eggs', false]]), NOW);
+    expect(out.onList).toHaveLength(0);
+    expect(out.acquired).toHaveLength(1);
+    expect(out.acquired[0].acquired_at).toBe(NOW);
+  });
+
+  it('leaves agreement alone: a load that already carries the purchase is not duplicated', () => {
+    const eggsAcquired = item({ name: 'eggs', on_list: false, acquired_at: NOW, entry_id: 'real' });
+    const out = reconcilePendingToggles([], [eggsAcquired], new Map([['eggs', false]]), NOW);
+    expect(out.acquired).toHaveLength(1);
+    expect(out.acquired[0].entry_id).toBe('real');
+  });
+
+  it('re-applies a pending revival when the fresh load still shows the row acquired', () => {
+    const eggs = item({ name: 'eggs', on_list: false, acquired_at: NOW });
+    const out = reconcilePendingToggles([], [eggs], new Map([['eggs', true]]), NOW);
+    expect(out.acquired).toHaveLength(0);
+    expect(out.onList).toHaveLength(1);
+  });
+
+  it('leaves revival agreement alone', () => {
+    const eggsOnList = item({ name: 'eggs' });
+    const out = reconcilePendingToggles([eggsOnList], [], new Map([['eggs', true]]), NOW);
+    expect(out.onList).toHaveLength(1);
+    expect(out.onList[0].entry_id).toBe('e-eggs');
+  });
+
+  it('reconciles multiple pending rows independently', () => {
+    const eggs = item({ name: 'eggs' });
+    const flour = item({ name: 'flour', on_list: false, acquired_at: NOW });
+    const milk = item({ name: 'milk' });
+    const out = reconcilePendingToggles(
+      [eggs, milk],
+      [flour],
+      new Map([
+        ['eggs', false],
+        ['flour', true],
+      ]),
+      NOW
+    );
+    expect(out.onList.map((i) => i.name).sort()).toEqual(['flour', 'milk']);
+    expect(out.acquired.map((i) => i.name)).toEqual(['eggs']);
+  });
+
+  it('empty pending map returns the arrays unchanged', () => {
+    const eggs = item({ name: 'eggs' });
+    const out = reconcilePendingToggles([eggs], [], new Map(), NOW);
+    expect(out.onList).toEqual([eggs]);
+  });
 });
