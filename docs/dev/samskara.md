@@ -1761,7 +1761,12 @@ to fold in.
   behavioural predictions against a one-question transcript produces
   noise, not evidence. Their fires stay `verdict is null` forever -
   a permanent, bounded pending population (~19% of threads in the
-  2026-07 prod audit), not a backlog to drain.
+  2026-07 prod audit), not a backlog to drain. Substrate stubs carry
+  the same gate on the capture side: the health snapshot's
+  `pending_assimilate` counts only gate-passing stubs, and the audit
+  view (the samskara-audit skill) splits the rest into an `aged_out`
+  bucket - junk-gated stubs older than 14 days, parked permanently,
+  shown separately so they cannot read as queue depth.
 - **The judge is batched, and a zero-verdict run must not advance the
   cursor.** Both halves are load-bearing, learned from the same prod
   failure: the judge originally sent every fired prediction in one

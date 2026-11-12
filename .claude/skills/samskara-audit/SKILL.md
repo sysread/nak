@@ -51,14 +51,31 @@ Contract: chat activity produces substrate stubs, and the assimilator
 drains them (junk gate: 1-round threads wait forever BY DESIGN).
 
 ```sql
-select count(*) filter (where situation is null) as raw,
+select count(*) filter (
+         where situation is null
+           and (select count(*) from messages m
+                 where m.thread_id = s.thread_id
+                   and m.role = 'user') >= 2
+       ) as pending,
+       count(*) filter (
+         where situation is null
+           and (select count(*) from messages m
+                 where m.thread_id = s.thread_id
+                   and m.role = 'user') < 2
+           and created_at < now() - interval '14 days'
+       ) as aged_out,
        count(*) filter (where situation is not null) as assimilated,
        max(created_at) as newest, max(updated_at) as last_advance
-from samskara_substrate where user_id = :u;
+from samskara_substrate s where user_id = :u;
 ```
 
-Healthy: raw stays near zero across sweeps (minus the junk-gated
-tail); last_advance is recent when the user has been active.
+Healthy: pending (stubs the claim RPCs can actually pick up) stays
+near zero across sweeps; last_advance is recent when the user has
+been active. aged_out is the parked junk tail - single-round threads
+older than 14 days that will never earn a second message, counted
+separately so they cannot read as worker backlog (they are unclaimable
+by design, not stuck). Recent junk-gated stubs (under 14 days) are in
+neither bucket: the thread may still get its second message.
 
 ### 2. Assimilation -> embedding
 
