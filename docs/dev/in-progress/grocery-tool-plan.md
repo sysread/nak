@@ -1,8 +1,8 @@
 # Grocery Combination Tool Plan
 
-Status: DRAFT (rev 2 - deltas-from-template ledger added pre-round-1).
-Branch `grocery-tool` off main 75e43e7c. This doc is the
-reviewable artifact; refinement edits this file, not code.
+Status: DRAFT rev 3 (round-1 findings folded in). Branch
+`grocery-tool` off main 75e43e7c. This doc is the reviewable
+artifact; refinement edits this file, not code.
 
 Read [`../tools.md`](../tools.md) first - this plan assumes its
 vocabulary (ToolDef, serverSideTool, TOOLBOXES, the no-gating
@@ -32,7 +32,7 @@ The grocery domain was built tool-ready and explicitly left
 tool-less ("LLM tools - none, deliberately" - the list is
 user-driven UI; the schema and service layer are tool-ready if a
 groceries toolbox ever earns its keep,
-`docs/dev/grocery-list.md:453-455`). The user has now asked for
+`docs/dev/grocery-list.md:454-456`). The user has now asked for
 the tool, so the toolbox earns its keep.
 
 ## BACKGROUND
@@ -85,7 +85,7 @@ the template source.
 |---|---|---|---|
 | 1 | Ops | list / get / save / delete | list / add / remove / update (no get; list+query covers it) |
 | 2 | Write target | single recipe per save | add is a BATCH (items[]) with per-item outcomes |
-| 3 | Write path | SECURITY DEFINER RPCs (`recipe_create_with_version` / `recipe_update_with_version`) with `p_user_id` | direct table writes - no SECURITY DEFINER RPCs exist for grocery; the invoker RPCs cannot run service-role |
+| 3 | Write path | RPCs (`recipe_create_with_version` / `recipe_update_with_version`) - security INVOKER (`schema.sql:3469`, `:3620`) but they take an explicit `p_user_id`, so they scope correctly under the service-role client (which bypasses RLS) | direct table writes - no user-facing grocery CRUD RPC takes a `p_user_id`; the invoker RPCs read `auth.uid()`, null under the service key (the definer GC RPCs are service-role-only sweep infra, not CRUD) |
 | 4 | `x-per-op-required` | absent - all requireds conditional | present, partial map: `{ add: ['items'] }` - the one unconditional required |
 | 5 | Dup guard | upsert heuristics: exact-title match routes create to update; near-match refused with candidates (`_upsert_heuristics.ts`) | normalized-name probe with THREE outcomes: revive / already_on_list / create; never routes to update |
 | 6 | Delete semantics | hard delete, honest miss | remove = un-plan (deletes the open entry only); product row survives |
@@ -162,11 +162,13 @@ to `src/lib/supabase/grocery.ts:196-199`), filtered
 - `on_list`: `on_list = true`, ordered `updated_at desc` (the
   browser's on-list ordering).
 - `acquired`: `on_list = false and acquired_at not null`, ordered
-  `acquired_at desc` - a recency window bounded by `limit`, never
+  `acquired_at desc, id desc` (the browser's tiebreak,
+  `grocery.ts:279`) - a recency window bounded by `limit`, never
   whole.
 - `all`: ordered `name asc, id asc` (the browse pager's ordering),
-  `query` via the ILIKE pattern (mirror `ilikeFilterPattern`,
-  cited to `recipes.ts:56-60` / `src/lib/supabase/query-utils.ts`).
+  `query` via the ILIKE pattern (use the ESCAPED edge mirror in
+  `recipes.ts:56-62` - the browser's `query-utils.ts` variant is
+  unescaped; the edge copy is the one this tool ports).
 
 Result: `{ sections: [{id, name}] (the user's rows ordered by
 position; 'Other' is the null bucket, not a row), items:
@@ -180,19 +182,46 @@ op. No `get` op: `list` with a name substring is the lookup.
 Params: `items` (required - array of `{ name (required), count?,
 unit?, note?, section? }`), `recipe_id` (optional).
 
-Per item, the browser add-all semantics: probe the catalog by
-normalized name; a match that is off-list REVIVES it (open entry;
-update count/unit on the entry when provided), a match that is
-already on-list is reported as such (idempotent no-op), no match
+Per item, revive-before-create with a TIERED name probe. No
+browser surface probes the whole catalog by name - the checkbox
+bridge is recipe-scoped (`listGroceryProductsForRecipe`,
+`src/lib/supabase/grocery.ts:377-387`) and the add-input
+suggestions exclude recipe products (`.is('recipe_id', null)`,
+`:361`). The tool's tiers, chosen so each context matches the
+surface it parallels:
+
+- `recipe_id` given: probe that recipe's products first
+  (checkbox-bridge parity), then standalone products (avoids
+  duplicating a staple the user already tracks). Never revive
+  ANOTHER recipe's product - that silently crosses the
+  invalidation trigger's cleanup boundary (recipe products live
+  and die with their recipe's cooklang).
+- `recipe_id` absent: probe standalone products first, then any
+  remaining product catalog-wide (sidebar checkbox parity - the
+  browse list revives whatever row it shows). Creates standalone.
+
+A probe match that is off-list REVIVES it (open entry; update
+count/unit on the entry when provided); a match already on-list
+is reported as such (idempotent no-op); no match at any tier
 CREATES the product then opens its entry.
 
+- **Multi-match within a tier:** the most-recently-updated match
+  wins, and the outcome reports the `product_id` and matched name
+  so the model can see which variant revived. (remove/update keep
+  refuse-with-candidates - they edit; add just needs an item on
+  the list.)
+- **Probe implementation:** one query up front - the user's
+  product catalog on lightweight columns (id, name, recipe_id,
+  section_id, updated_at), matched in JS by normalized name.
+  Personal-scale catalogs; no per-item round trips.
 - `section` per item: case-insensitive name match against the
-  user's `grocery_sections`; an unknown name is an ArgError
-  listing the valid section names. Applies to CREATE only - a
-  revive keeps its learned section (browser parity). A section
-  provided on create stamps `section_source: 'auto'` (machine
-  chose it; the classifier may not touch non-null, user refiling
-  still wins - see DECISIONS).
+  user's `grocery_sections`; `'Other'` means "leave unfiled"
+  (intake - same as omitting the param, but explicit); any other
+  unknown name is an ArgError listing the valid section names.
+  Applies to CREATE only - a revive keeps its learned section
+  (browser parity). A section provided on create stamps
+  `section_source: 'auto'` (machine chose it; the classifier may
+  not touch non-null, user refiling still wins - see DECISIONS).
 - `recipe_id`: validated to exist and be owned (select
   `recipes` `.eq(id).eq(user_id)`), else ArgError. When given,
   created products carry it, and an item with no `note` defaults
@@ -201,8 +230,8 @@ CREATES the product then opens its entry.
   611-628`). This is what makes the invalidation trigger clean
   them up on recipe edits.
 - Result: per-item outcomes `{ name, status: 'created' |
-  'revived' | 'already_on_list', product_id }` - the model can
-  report what it did honestly.
+  'revived' | 'already_on_list', product_id, matched_name? }` -
+  the model can report what it did honestly.
 - Caps (ArgErrors, mirrored in the browser schema as maxLength/
   maxItems): max 30 items/call; name 200 chars; count 100; unit
   100; note 500. The DB stores free text; these are tool-side
@@ -218,8 +247,10 @@ purchase verb, deliberately absent (see DECISIONS).
 
 Honest reporting per the repo-wide delete contract
 (`docs/dev/tools.md:468-477`): `{removed: true}` / `{removed:
-false, reason}` where reason names the possibilities without
-distinguishing them ("no product matched", "not on the list").
+false, reason}` with ONE combined reason that does not
+distinguish "no such product" from "exists but not on the list"
+("nothing matched an on-list item with that id or name") - the
+contract names possibilities without distinguishing them.
 
 A `name` matching multiple products refuses with the candidates
 listed (the name index is non-unique).
@@ -230,18 +261,26 @@ Params: exactly one of `id` or `name` (locator; multiple name
 matches refuse with candidates), then any subset of:
 
 - `rename` (string) - new product name (kept distinct from the
-  `name` locator).
+  `name` locator). REFUSED when the product is recipe-linked:
+  renaming breaks the recipe checkbox match and the invalidation
+  trigger deletes the product on the next cooklang edit (the
+  documented trade, `docs/dev/grocery-list.md:464-469`). The
+  browser editor allows it because the user sees the trade; the
+  model does not, so it gets a refusal naming it.
 - `note` (string | null - null clears) - product note.
 - `section` (string | null) - a section name files the product
-  there (`section_source: 'auto'`); null UNFILES it (section_id
-  null + section_source null - back to intake, where the
-  classifier may file it later). `'Other'` is not filable (it is
-  not a row); the description says so.
+  there (`section_source: 'auto'`); null or `'Other'` UNFILES it
+  (section_id null + section_source null - back to intake, where
+  the classifier may file it later).
 - `count`, `unit` (string | null - null clears) - apply to the
-  OPEN entry (the view's `entry_id`); honest refusal when the
-  product has no open entry ("not on the list"). Product fields
-  and entry fields can mix in one call; entry fields hard-fail
-  the call only when there is no open entry.
+  OPEN entry only. Gate on `on_list = true` from the view row -
+  the view's `entry_id` for an off-list product points at the
+  LATEST PURCHASE (the view's LATERAL resolves open first, else
+  newest purchase, `schema.sql:4676-4684`), so writing through
+  `entry_id` blindly would stamp a purchase-history row. Honest
+  refusal ("not on the list") when there is no open entry.
+  Product fields and entry fields can mix in one call; entry
+  fields refuse only when there is no open entry.
 
 Result: the updated view row (same shape as list items).
 
@@ -313,8 +352,11 @@ fresh-context reviewers until consensus (2-round cap).
   source-of-truth.
 - `supabase/functions/venice/tools/index.ts` - one barrel import.
 - Tests: Deno `supabase/functions/tests/grocery_tools.test.ts`
-  (fakeCtx harness, per-op suites); vitest pins updated in
-  `tests/tools.test.ts` + `tests/system-prompt.test.ts`.
+  (fakeCtx harness, per-op suites); join
+  `supabase/functions/tests/per_op_required_pins.test.ts` (the
+  partial-map pin's charter - followups' partial map is already
+  in its scope); vitest pins updated in `tests/tools.test.ts` +
+  `tests/system-prompt.test.ts`.
 - `mise run check` green (functions-check covers the new edge
   module's full import graph; knip covers dead exports).
 
@@ -340,14 +382,19 @@ fresh-context reviewers until consensus (2-round cap).
 
 - **Deno** (`supabase/functions/tests/grocery_tools.test.ts`,
   ported from `recipe_tools.test.ts:25-87`): list (default
-  on_list, query, acquired window + ordering, section filter incl
-  'Other', limit clamp, sections payload); add (create, revive
-  keeps section, already-on-list idempotent, section resolution +
-  unknown-section ArgError, recipe_id validation + default note,
-  batch outcomes, caps); remove (by id, by name, ambiguous name
-  refuses with candidates, not-found honest, not-on-list honest);
-  update (product fields, entry fields, entry fields with no open
-  entry refuse, unfile via null section, rename).
+  on_list, query, acquired window + ordering + id tiebreak,
+  section filter incl 'Other', limit clamp, sections payload);
+  add (tiered probe: recipe-scoped then standalone, standalone
+  then catalog-wide, never another recipe's product; revive
+  keeps section, already-on-list idempotent, multi-match picks
+  most-recently-updated and reports it, section resolution +
+  'Other' = unfiled + unknown-section ArgError, recipe_id
+  validation + default note, batch outcomes, caps, single
+  catalog fetch for the probe); remove (by id, by name, ambiguous
+  name refuses with candidates, combined honest reason);
+  update (product fields, entry fields gated on on_list, entry
+  fields with no open entry refuse, unfile via null / 'Other',
+  rename refusal on recipe-linked products).
 - **Vitest pins**: `tests/tools.test.ts` (groceryToolbox
   membership + TOOLS/TOOLBOXES order) and
   `tests/system-prompt.test.ts` (new catalog section, always-on
@@ -403,6 +450,23 @@ fresh-context reviewers until consensus (2-round cap).
 7. **Entry-level count/unit edits require an open entry** and
    refuse honestly otherwise; product-level fields (rename, note,
    section) work on any product.
-8. **Direct table writes, no RPCs.** The grocery RPCs are
-   security-invoker and cannot run service-role; every op here is
-   expressible as direct writes + the view read.
+8. **Direct table writes, no RPCs.** The recipe template's RPCs
+   work under the service-role client because they take an
+   explicit `p_user_id` despite being security invoker; no
+   user-facing grocery CRUD RPC takes one - the grocery RPCs
+   resolve the caller from `auth.uid()`, which is null under the
+   service key. Every op here is expressible as direct writes +
+   the view read.
+9. **`add` probes tiered by context** (recipe-scoped ->
+   standalone; standalone -> catalog-wide), never crossing a
+   recipe boundary silently, and **the most-recently-updated
+   match wins** on multi-match, reported in the outcome. remove/
+   update refuse-with-candidates instead - they edit.
+10. **`rename` refuses on recipe-linked products.** The
+    checkbox-match + invalidation-trigger trade is visible in
+    the UI editor and invisible to the model; a refusal that
+    names the trade beats a description warning the model may
+    not weigh.
+11. **`section: 'Other'` = leave unfiled** (add) / unfile
+    (update) - accepted rather than ArgErrored, matching list's
+    vocabulary and saving a round trip.
