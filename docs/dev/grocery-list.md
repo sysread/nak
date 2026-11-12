@@ -121,6 +121,10 @@ owns current reality.
   (`tests/grocery-section-agent.test.ts`), the `complete()` call on
   the `grocerySection` model slot, and the `autoFileProducts`
   fire-and-forget entry every add path shares.
+- `src/lib/tools/grocery.schema.ts` + edge
+  `supabase/functions/venice/tools/grocery.ts` - the grocery chat
+  tool (see "The grocery chat tool" below). Deno op tests at
+  `supabase/functions/tests/grocery_tools.test.ts`.
 - `src/components/GroceryList.svelte` - the sidebar all-items
   browse: debounced search, status + section filters (mapped to the
   service pager via `browseOnListArg` / `browseSectionArg`), a
@@ -330,6 +334,51 @@ thinking pass disabled - pure classification, rationale on the slot's docblock i
 Prompt assembly and answer parsing are pure functions tested at
 `tests/grocery-section-agent.test.ts`.
 
+## The grocery chat tool
+
+The `grocery` combination tool gives the chat model the list
+surface: one tool, one `op` enum - list (read + search, with a
+sections payload), add (batch, idempotent), remove (un-plan),
+update (rename / note / section / planned quantity). Browser half
+`src/lib/tools/grocery.schema.ts` (schema-only, a `serverSideTool`
+in the `groceryToolbox`), edge half
+`supabase/functions/venice/tools/grocery.ts` (b-strict
+service-role writes, direct table writes - no grocery CRUD RPC
+takes a `p_user_id`, so the recipe combo's RPC path has no
+equivalent here).
+
+Two contracts carry the design:
+
+- **The un-plan boundary.** `remove` deletes the open entry and
+  never stamps `acquired_at`. Purchase history records only real
+  buys, and every existing stamp is the user's own panel tap; the
+  purchase op is deliberately absent from the tool (deferral in
+  `./planned-changes.md`). The toolbox description teaches the
+  model this boundary.
+- **The tiered name probe on add.** A recipe-context add probes
+  that recipe's products, then standalone staples - never another
+  recipe's product, which would silently cross the invalidation
+  trigger's cleanup boundary. A standalone add probes standalone
+  products, then anything (sidebar checkbox parity). Within the
+  winning tier, multiple matches resolve to the most recently
+  updated row and the outcome reports it; remove/update, which
+  edit, refuse ambiguity with candidates instead. Revive beats
+  create everywhere - the learned section and purchase history
+  stay with the product.
+
+Machine-chosen sections (the model filing an item via the
+`section` param) stamp `section_source: 'auto'` - the same
+provenance the auto-sectioning agent gets, and equally
+overridable by a user refiling. Items added without a section
+land in the intake bucket exactly like unclassified browser adds.
+`rename` is refused on recipe-linked products: the checkbox match
+and the invalidation trigger key on the name, a trade the UI
+editor shows the user but the model cannot see.
+
+Edge writes refresh open tabs through the standard realtime relay
+(no side channel) - the tool stamps `user_id`, so the
+postgres-change filter matches and `nak:grocery:changed` fires.
+
 ## Shopping trips
 
 The "Start shopping" / "Finish shopping" button on the panel toggles
@@ -451,12 +500,29 @@ Deployed via its own line in `deploy.yml`.
   non-streaming `complete()` seam of the venice proxy
   (`src/lib/supabase/venice-proxy.ts`), including its 429 retry
   loop.
-- **LLM tools** - none, deliberately. The list is user-driven UI;
-  the schema and service layer are tool-ready if a `groceries`
-  toolbox ever earns its keep.
+- **LLM tools** (`./tools.md`) - the `grocery` combination tool
+  (list / add / remove / update), added 2026-11-12 after shipping
+  tool-less deliberately. Its writes are covered by the realtime
+  relay like any other writer; its recipe-context adds link
+  `recipe_id` so the invalidation trigger cleans them up; its
+  un-plan boundary (never stamp a purchase) is pinned in the tool
+  contract and the toolbox description.
 
 ## Gotchas
 
+- **The chat tool never stamps a purchase.** `grocery op=remove`
+  deletes the open entry only, and no op writes `acquired_at` -
+  purchase history records only real buys, and stamping it is the
+  panel row tap. The remove/update writes also carry the open-entry
+  predicate (`acquired_at is null`) so a purchase racing the write
+  costs the tool its row, not the history its record.
+- **A chat-tool section choice stamps `section_source: 'auto'`.**
+  The model files items as a machine, same provenance as the
+  auto-sectioning agent; the classifier only touches null-source
+  rows, so user refiling still wins. Unfiling via the tool (section
+  null) is back to intake - the UI-only "deliberately in Other"
+  state (`section_id null + source 'user'`) is not reachable from
+  the tool.
 - **`count` is text, not numeric.** Recipe quantities arrive
   verbatim from cooklang; a numeric column would mangle "1/2" and
   "2-3". Don't add arithmetic (quantity merging) without changing

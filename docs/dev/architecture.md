@@ -438,6 +438,7 @@ turn:
 | `skills` (panel create/edit/delete) | Browser | Skills panel edits (stamp `last_author 'user'`) |
 | `skills` (model CRUD incl. delete) | Function | `skills` combination tool dispatch (stamps `last_author 'assistant'`) |
 | `topics` / `summary` derivations | Function | Curation tail after a completed turn + hourly sweep |
+| `grocery_products` / `grocery_list_entries` (chat-driven list edits) | Function | `grocery` tool dispatch in the venice function |
 | Embedding rows | Function | `pg_cron` + venice `/backfill` |
 | `samskaras` / substrate enrichment | Function | Samskara tail + hourly sweep |
 

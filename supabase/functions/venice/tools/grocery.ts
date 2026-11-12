@@ -4,8 +4,8 @@
 // update over the user's grocery list. Mirrors the recipes combo
 // envelope (see the browser schema's header,
 // src/lib/tools/grocery.schema.ts). The design contract and its
-// rationale live in docs/dev/in-progress/grocery-tool-plan.md until
-// the plan graduates.
+// rationale live in docs/dev/grocery-list.md, "The grocery chat
+// tool".
 //
 // Auth: b-strict throughout. Every read filters
 // .eq('user_id', userId) and every write stamps user_id - the

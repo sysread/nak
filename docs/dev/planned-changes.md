@@ -17,6 +17,25 @@ finds any removed entry by its heading.
 
 ## Open items
 
+### Purchase op for the grocery chat tool (scoped out)
+
+**Status:** scoped out of the grocery tool's v1 (2026-11-12); the
+tool ships list / add / remove / update only. Revisit only with an
+explicit scoped design.
+
+`acquired_at` is a purchase log, and every existing stamp of it is
+the user's own panel row tap. A model-callable purchase op would
+let the model fabricate purchase history ("I checked that off for
+you") and pollute the shopping-trip In-cart split mid-trip. If it
+ever earns its keep, the defensible shape is narrow: allowed only
+inside an ACTIVE trip (mirroring `splitAcquiredForTrip`'s
+stamp rule, `src/lib/ui/grocery-list.ts`), phrased as "the user
+told me they put X in the cart," and it must carry the same
+open-entry predicate the remove/update writes do so a raced tap
+cannot double-stamp. The un-plan boundary itself is pinned in the
+toolbox description and `docs/dev/grocery-list.md` Gotchas - a
+v1 purchase op would need both updated in the same change.
+
 ### Toast treatment for action errors (scoped out)
 
 **Status:** scoped out during the completion-status unification
