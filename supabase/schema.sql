@@ -10774,6 +10774,56 @@ begin
   return v_changed > 0;
 end $$;
 
+-- Stale-summary catch-up source for the sweep's compound-regen lane.
+-- The sweep's per-user rotation only visits users with recent SAMSKARA
+-- activity (samskara_sweep_users), so a user who keeps chatting but
+-- mints nothing new is never probed and their compound summary goes
+-- stale - past the read side's STALE_CEILING_HOURS ceiling
+-- (venice/priming/samskara-format.ts), where getCompoundSummary
+-- returns null and the always-on prompt block silently disappears.
+-- Selection: summary older than that ceiling AND conversation
+-- activity since it was generated. A quiet account is not selected -
+-- its summary stays as-is because there is nothing new to fold in.
+drop function if exists public.samskara_stale_compound_regen_users(int);
+create or replace function public.samskara_stale_compound_regen_users(
+  p_limit int default 5
+) returns table (user_id uuid)
+language sql security definer
+set search_path = public as $$
+  select c.user_id
+    from public.samskara_compound_summary c
+   where c.last_regen_at < now() - interval '24 hours'
+     -- Activity gate: at least one substantive message (user or
+     -- assistant role, non-empty content - the column is not null)
+     -- created after the summary was generated. Ownership rides the
+     -- threads join; messages carries no user_id column.
+     and exists (
+           select 1
+             from public.messages m
+             join public.threads t on t.id = m.thread_id
+            where t.user_id = c.user_id
+              and m.role in ('user', 'assistant')
+              and m.content <> ''
+              and m.created_at > c.last_regen_at
+         )
+     -- Live-corpus gate: the summary samples only activated rows, so
+     -- a user with no activated samskaras has nothing to summarize.
+     -- Without this guard the lane would re-select such users every
+     -- tick - the probe saves nothing, so their last_regen_at never
+     -- advances.
+     and exists (
+           select 1
+             from public.samskaras s
+            where s.user_id = c.user_id
+              and s.activated_at is not null
+         )
+   order by c.last_regen_at asc
+   limit p_limit;
+$$;
+
+revoke all on function public.samskara_stale_compound_regen_users(int) from public, anon, authenticated;
+grant execute on function public.samskara_stale_compound_regen_users(int) to service_role;
+
 -- Mint-time dedup support -------------------------------------------------
 --
 -- `samskara_nearest_by_prediction` and `samskara_reinforce_existing`

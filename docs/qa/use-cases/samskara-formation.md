@@ -124,6 +124,15 @@ observable contract - claims, writes, toasts - is the same.
           length(summary) from samskara_compound_summary;
    ```
 
+   The catch-up lane has its own trigger: with no new samskara
+   activity, backdate past the read side's 24h ceiling instead
+   (`set last_regen_at = now() - interval '25 hours'`) and make
+   sure at least one message exists after that timestamp (a
+   chat message from the last day qualifies); the next hourly
+   sweep's stale-summary lane picks the user up even though the
+   rotation itself skips them. Confirm via the same
+   `compound-regen:` log lines and the query above.
+
 7. Mint toast relay, deterministically: with the app open on a
    thread, publish a `samskara-mint` Broadcast event on the user's
    private topic - the same event `insertMint` sends on a real mint.

@@ -72,6 +72,14 @@ const ASSIMILATE_CLAIM_TTL_SECONDS = 600;
 const REGEN_CLAIM_TTL_SECONDS = 180;
 
 /**
+ * Per-tick cap for the sweep's stale-summary catch-up lane. Each
+ * selected user costs one fast-model call (the compound-regen probe),
+ * so the cap is the lane's spend ceiling; the hourly sweep cadence
+ * drains any backlog at up to this many regens per hour.
+ */
+const STALE_REGEN_SWEEP_CAP = 5;
+
+/**
  * Assimilate drain caps. The tail keeps its cap small so the chain
  * never delays reflection behind it; the sweep cap matches the other
  * fleets' per-tick queue caps. Cap hits are logged - no silent
@@ -1818,20 +1826,22 @@ async function dedupProbe(
 /**
  * Compound-regen probe: cheap should-regen predicate, claim, read the
  * log10-capped top sample, synthesize, save under the claim guard.
+ * Resolves true only when a new summary landed; false covers every
+ * decided-not-to, claim-not-won, and saved-nothing exit.
  */
 async function compoundRegenProbe(
   admin: SupabaseClient,
   userId: string,
   log: EdgeLogger,
   apiKey: string,
-): Promise<void> {
+): Promise<boolean> {
   const { data: decisionData, error: decErr } = await admin.rpc(
     'samskara_should_regen_compound',
     { p_user_id: userId },
   );
   if (decErr) throw new Error(`compound-regen: shouldRegen RPC failed: ${decErr.message}`);
   const decision = Array.isArray(decisionData) ? decisionData[0] : decisionData;
-  if (!decision || decision.should_regen !== true) return;
+  if (!decision || decision.should_regen !== true) return false;
   const samskaraCount =
     typeof decision.samskara_count === 'number' ? decision.samskara_count : 0;
 
@@ -1842,7 +1852,7 @@ async function compoundRegenProbe(
     p_user_id: userId,
   });
   if (claimErr) throw new Error(`compound-regen: claim RPC failed: ${claimErr.message}`);
-  if (claimed !== true) return;
+  if (claimed !== true) return false;
 
   // Read up to a log10-capped count for the summary input, floored at
   // 8 so even a tiny corpus produces a coherent paragraph. (JS
@@ -1870,13 +1880,13 @@ async function compoundRegenProbe(
     confidence: number;
     health: number;
   }[];
-  if (rows.length === 0) return;
+  if (rows.length === 0) return false;
   log.info(`compound-regen: synthesizing summary from ${rows.length} sample row(s) (cap ${cap})`);
 
   const summary = await agentSummarizeCompound(apiKey, rows, log);
   if (!summary) {
     log.debug('compound-regen: agent returned null');
-    return;
+    return false;
   }
 
   const { data: saved, error: saveErr } = await admin.rpc(
@@ -1891,9 +1901,66 @@ async function compoundRegenProbe(
   if (saveErr) throw new Error(`compound-regen: save failed: ${saveErr.message}`);
   if (saved === true) {
     log.info('compound-regen: saved summary', { samskaraCount, chars: summary.length });
-  } else {
-    log.debug('compound-regen: save rejected (claim expired?)');
+    return true;
   }
+  log.debug('compound-regen: save rejected (claim expired?)');
+  return false;
+}
+
+// --- Stale-summary catch-up lane -------------------------------------------
+
+interface StaleCompoundRegenDeps {
+  /**
+   * Select users whose compound summary is stale (older than the read
+   * side's ceiling) with conversation activity since it was generated,
+   * oldest summary first. Backs samskara_stale_compound_regen_users.
+   */
+  selectStaleUsers: (limit: number) => Promise<string[]>;
+  /**
+   * Run the compound-regen probe for one user. Resolves false when it
+   * decided not to regen or saved nothing; a rate-limit throw stops the
+   * lane (the Venice budget is spent) while any other throw skips just
+   * that user.
+   */
+  regen: (userId: string) => Promise<boolean>;
+}
+
+/**
+ * Compound-regen ONLY, for users the rotation never reaches. The
+ * sweep's rotation visits users with recent samskara activity; a user
+ * who keeps chatting but mints nothing new gets no probe, and once
+ * their summary crosses the read side's STALE_CEILING_HOURS (24h) the
+ * always-on prompt block disappears - getCompoundSummary returns null
+ * past that ceiling. The lane closes the gap: stale summary plus new
+ * conversation activity plus a live corpus, oldest first, capped per
+ * tick. Mutual exclusion rides the probe's existing claim
+ * (samskara_claim_compound_regen, 180s TTL) - an overlapping tick
+ * probing the same user loses the claim and skips.
+ */
+async function runStaleCompoundRegenLane(
+  deps: StaleCompoundRegenDeps,
+  opts: { cap: number; skipUserIds: ReadonlySet<string> },
+): Promise<{ probed: number; regenerated: number }> {
+  const selected = await deps.selectStaleUsers(opts.cap);
+  let probed = 0;
+  let regenerated = 0;
+  // The selector enforces the cap too (its p_limit), but the
+  // driver-side slice keeps the tick's spend bounded even if a future
+  // caller feeds the lane a bigger selection.
+  for (const userId of selected.slice(0, opts.cap)) {
+    if (opts.skipUserIds.has(userId)) continue;
+    probed++;
+    try {
+      if (await deps.regen(userId)) regenerated++;
+    } catch (err) {
+      if (err instanceof VeniceError && err.kind === 'rate_limit') break;
+      console.warn(
+        '[samskara-sweep] stale-summary lane: regen failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+  return { probed, regenerated };
 }
 
 // --- Drivers ---------------------------------------------------------------
@@ -1966,6 +2033,7 @@ export async function samskaraOnTurnTail(
 export interface SamskaraSweepSummary {
   assimilated: number;
   usersSwept: number;
+  staleRegens: number;
 }
 
 /**
@@ -1981,7 +2049,7 @@ export interface SamskaraSweepSummary {
 export async function runSamskaraSweepTick(
   adminClient: SupabaseClient,
 ): Promise<SamskaraSweepSummary> {
-  const summary: SamskaraSweepSummary = { assimilated: 0, usersSwept: 0 };
+  const summary: SamskaraSweepSummary = { assimilated: 0, usersSwept: 0, staleRegens: 0 };
   const apiKey = await readVeniceKey(adminClient);
   if (!apiKey) {
     console.warn('[samskara-sweep] no Venice key configured; skipping tick');
@@ -2068,6 +2136,8 @@ export async function runSamskaraSweepTick(
   }
   for (const u of touched) if (!users.includes(u)) users.push(u);
 
+  let rateAbandoned = false;
+
   for (const userId of users) {
     const log = createEdgeLogger(userId, 'samskara');
     try {
@@ -2092,7 +2162,10 @@ export async function runSamskaraSweepTick(
       summary.usersSwept++;
     } catch (err) {
       // Rate-limit: stop sweeping users entirely; the next tick
-      // picks the remainder up.
+      // picks the remainder up. (Other errors break the loop too,
+      // but only rate-limit also cancels the stale-summary lane
+      // below - the Venice budget for the tick is spent.)
+      rateAbandoned = err instanceof VeniceError && err.kind === 'rate_limit';
       log.warn('sweep: rotation abandoned', {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -2102,8 +2175,51 @@ export async function runSamskaraSweepTick(
     await log.flush();
   }
 
+  // Phase 3: stale-summary catch-up lane. The rotation above only
+  // reaches users with recent samskara activity; a user who keeps
+  // chatting but mints nothing new never gets a compound-regen probe,
+  // and once their summary crosses the read side's 24h ceiling the
+  // always-on prompt block disappears. Regens exactly those users -
+  // no mint, no pair-relate, no embeds - oldest first, capped.
+  if (!rateAbandoned) {
+    try {
+      const lane = await runStaleCompoundRegenLane(
+        {
+          selectStaleUsers: async (limit) => {
+            const { data, error } = await adminClient.rpc(
+              'samskara_stale_compound_regen_users',
+              { p_limit: limit },
+            );
+            if (error) throw new Error(error.message);
+            return (Array.isArray(data) ? data : [])
+              .map((r: { user_id?: unknown }) => r.user_id)
+              .filter((u): u is string => typeof u === 'string');
+          },
+          regen: async (userId) => {
+            const log = createEdgeLogger(userId, 'samskara');
+            try {
+              return await compoundRegenProbe(adminClient, userId, log, apiKey);
+            } finally {
+              await log.flush();
+            }
+          },
+        },
+        // Skip everyone the rotation already probed this tick: their
+        // regen either landed (no longer stale) or is claim-parked
+        // behind the 180s TTL - re-probing buys nothing.
+        { cap: STALE_REGEN_SWEEP_CAP, skipUserIds: new Set(users) },
+      );
+      summary.staleRegens = lane.regenerated;
+    } catch (err) {
+      console.error(
+        '[samskara-sweep] stale-summary lane failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
   console.log(
-    `[samskara-sweep] tick done: assimilated=${summary.assimilated} usersSwept=${summary.usersSwept}`,
+    `[samskara-sweep] tick done: assimilated=${summary.assimilated} usersSwept=${summary.usersSwept} staleRegens=${summary.staleRegens}`,
   );
   return summary;
 }
@@ -2119,6 +2235,8 @@ export const __test = {
   SAMSKARA_MODEL,
   TAIL_ASSIMILATE_CAP,
   SWEEP_ASSIMILATE_CAP,
+  STALE_REGEN_SWEEP_CAP,
+  runStaleCompoundRegenLane,
   MINT_DEDUP_COSINE,
   MINT_CLUSTER_COSINE_FLOOR,
   PAIR_RELATE_COSINE_FLOOR,

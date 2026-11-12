@@ -8,6 +8,7 @@
 import { assert, assertEquals } from 'jsr:@std/assert';
 import probeSet from './fixtures/samskara-probe-set.json' with { type: 'json' };
 import { __test } from '../venice/agents/samskara.ts';
+import { VeniceError } from '../_shared/venice.ts';
 import { EMBEDDING_MODEL } from '../_shared/backfill.ts';
 
 const {
@@ -18,6 +19,8 @@ const {
   SAMSKARA_MODEL,
   TAIL_ASSIMILATE_CAP,
   SWEEP_ASSIMILATE_CAP,
+  STALE_REGEN_SWEEP_CAP,
+  runStaleCompoundRegenLane,
   MINT_DEDUP_COSINE,
   MINT_CLUSTER_COSINE_FLOOR,
   PAIR_RELATE_COSINE_FLOOR,
@@ -445,4 +448,86 @@ Deno.test('stripJsonFence unwraps fenced and bare payloads alike', () => {
   assertEquals(stripJsonFence('```json\n{"a":1}\n```'), '{"a":1}');
   assertEquals(stripJsonFence('```\n{"a":1}\n```'), '{"a":1}');
   assertEquals(stripJsonFence('  {"a":1}  '), '{"a":1}');
+});
+
+// --- Stale-summary catch-up lane ------------------------------------------
+//
+// The lane's driver logic, pinned with injected deps: who gets probed
+// (selection order is SQL-side - oldest first - so these pin the
+// driver's cap, skip, and failure policy, not the ordering).
+
+Deno.test('stale-summary lane: probes selected users, skipping this tick\'s rotation users', async () => {
+  const probed: string[] = [];
+  const result = await runStaleCompoundRegenLane(
+    {
+      selectStaleUsers: async (limit) => ['u-old', 'u-current', 'u-old2'].slice(0, limit),
+      regen: async (u) => {
+        probed.push(u);
+        return true;
+      },
+    },
+    { cap: 5, skipUserIds: new Set(['u-current']) },
+  );
+  // u-current was probed by the rotation this tick; re-probing buys
+  // nothing (its regen landed or is claim-parked behind the TTL).
+  assertEquals(probed, ['u-old', 'u-old2']);
+  assertEquals(result, { probed: 2, regenerated: 2 });
+});
+
+Deno.test('stale-summary lane: the per-tick cap bounds probes even when the selector over-returns', async () => {
+  const probed: string[] = [];
+  const result = await runStaleCompoundRegenLane(
+    {
+      selectStaleUsers: async () => ['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7'],
+      regen: async (u) => {
+        probed.push(u);
+        return true;
+      },
+    },
+    { cap: 5, skipUserIds: new Set() },
+  );
+  assertEquals(probed.length, 5);
+  assertEquals(result.regenerated, 5);
+});
+
+Deno.test('stale-summary lane: a rate-limited regen stops the lane for the tick', async () => {
+  const probed: string[] = [];
+  const result = await runStaleCompoundRegenLane(
+    {
+      selectStaleUsers: async () => ['u1', 'u2', 'u3'],
+      regen: async (u) => {
+        probed.push(u);
+        if (u === 'u1') throw new VeniceError('Venice 429', 'rate_limit');
+        return true;
+      },
+    },
+    { cap: 5, skipUserIds: new Set() },
+  );
+  assertEquals(probed, ['u1']);
+  assertEquals(result, { probed: 1, regenerated: 0 });
+});
+
+Deno.test('stale-summary lane: a non-rate-limit regen failure skips the user, not the lane', async () => {
+  const probed: string[] = [];
+  const result = await runStaleCompoundRegenLane(
+    {
+      selectStaleUsers: async () => ['u-broken', 'u-fine'],
+      regen: async (u) => {
+        probed.push(u);
+        if (u === 'u-broken') throw new Error('rpc boom');
+        return true;
+      },
+    },
+    { cap: 5, skipUserIds: new Set() },
+  );
+  assertEquals(probed, ['u-broken', 'u-fine']);
+  assertEquals(result, { probed: 2, regenerated: 1 });
+});
+
+Deno.test('stale-summary lane cap stays small: one full regen per selected user per hour', () => {
+  // The lane's spend ceiling. A lane user costs a whole regen (one
+  // fast-model call plus reads), so it sits at half the queue-drain
+  // cap the sweep's assimilate phase uses.
+  assertEquals(STALE_REGEN_SWEEP_CAP, 5);
+  assert(STALE_REGEN_SWEEP_CAP <= SWEEP_ASSIMILATE_CAP);
 });

@@ -247,8 +247,9 @@ toast is just a glance cue that the bias model is forming.
   claim/save, the cron-driven reaper, co-firing-based
   dedup collapse,
   `samskara_nearest_by_prediction(embed,
-  k)` for the mint dedup guard, the three compound-regen
-  coordinators, and the diagnostics-only
+  k)` for the mint dedup guard, the four compound-regen
+  coordinators (the should-regen / claim / save trio plus the
+  stale-summary catch-up selector), and the diagnostics-only
   `samskara_cluster_thread_fires(thread, threshold)` that
   greedy-clusters a thread's fires by CENTERED cosine similarity on
   their samskaras' prediction embeddings (per-cohort, in score
@@ -325,9 +326,12 @@ toast is just a glance cue that the bias model is forming.
   `/venice/samskara-sweep` (a `sweepHandler` route, service-role
   gated). Drains the cross-user assimilate queue, then runs the
   per-user maintenance probes (pair-relate, mint, dedup,
-  compound-regen) for every user with recent
-  samskara activity. The catch-up driver, and the only driver
-  for the heavy timing-insensitive phases.
+  compound-regen) for every user with recent samskara activity,
+  then the stale-summary catch-up lane: compound-regen only, for
+  users whose summary is past the read side's 24h ceiling with
+  conversation activity since it was generated. The catch-up
+  driver, and the only driver for the heavy timing-insensitive
+  phases.
 - **Embeddings backfill** - the server-side backfill's round-robin
   picks up the `samskara-substrate` source automatically. No
   samskara-specific entry point on that side; the `EMBED_SOURCES`
@@ -648,7 +652,12 @@ drivers run the phases, split by timing sensitivity:
   then for every user with recent activity
   (`samskara_sweep_users`, a 2h window of substrate or fires)
   the pair-relate, mint, dedup, and
-  compound-regen probes.
+  compound-regen probes, then the stale-summary catch-up lane:
+  compound-regen only for users the rotation skips (stale
+  summary past the read side's 24h ceiling + conversation
+  activity since it was generated), selected by
+  `samskara_stale_compound_regen_users`, oldest first, capped
+  at `STALE_REGEN_SWEEP_CAP` (5) per tick.
 
 Dedup and compound-regen are cron-only: dedup
 is population maintenance, and the compound summary tolerates a
@@ -865,6 +874,13 @@ logs and yields to the next phase.
   `samskara_save_compound_summary_if_claimed`. The 180s claim
   TTL means a failed regen unblocks the slot within 3 minutes
   rather than parking the next tick for 20.
+  Two drivers reach the probe: the sweep rotation (users with
+  recent samskara activity) and the stale-summary catch-up lane
+  (`samskara_stale_compound_regen_users`), which regens users
+  whose summary is past the read side's 24h ceiling AND who
+  have chatted since it was generated - without the lane, a
+  user who keeps chatting but mints nothing new keeps a stale
+  summary until the prompt block disappears.
 
 ### Fire ranking formula
 
@@ -1512,6 +1528,20 @@ Hybrid time + event with log10 dampening on the event-count
 side so a chatty user doesn't thrash regeneration as the corpus
 grows. The log10 shows up again on the input-cap side when the
 summarizer reads samskaras to feed the agent.
+
+That formula governs WHEN the probe regens. WHO the probe
+reaches has two drivers: the sweep rotation (users with recent
+samskara activity) and the stale-summary catch-up lane, whose
+selector (`samskara_stale_compound_regen_users`) picks users
+whose `last_regen_at` is past the read side's 24h ceiling
+(`STALE_CEILING_HOURS` - the age at which `getCompoundSummary`
+starts returning null) AND who have at least one substantive
+message (user or assistant role, non-empty content) created
+after `last_regen_at`, plus at least one activated samskara to
+summarize. Oldest summary first, capped at
+`STALE_REGEN_SWEEP_CAP` per tick; a quiet account is never
+selected - its summary stays as-is because there is nothing new
+to fold in.
 
 ## Interactions with other features
 
