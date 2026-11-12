@@ -1,6 +1,8 @@
 # Grocery Combination Tool Plan
 
-Status: DRAFT rev 3 (round-1 findings folded in). Branch
+Status: REFINED (rev 4, final - round-2 should-fixes folded in
+after the last review round; that revision is unaudited by a
+fresh reviewer by design, personal-project 2-round cap). Branch
 `grocery-tool` off main 75e43e7c. This doc is the reviewable
 artifact; refinement edits this file, not code.
 
@@ -234,9 +236,11 @@ CREATES the product then opens its entry.
   the model can report what it did honestly.
 - Caps (ArgErrors, mirrored in the browser schema as maxLength/
   maxItems): max 30 items/call; name 200 chars; count 100; unit
-  100; note 500. The DB stores free text; these are tool-side
-  runaway guards, not DB constraints (unlike the recipes caps,
-  which mirror `src/lib/recipe-limits.ts`).
+  100; note 500. `items[].name` is required per item - a nested
+  required the flat schema cannot express, enforced edge-side in
+  the same ArgErrors pass. The DB stores free text; these are
+  tool-side runaway guards, not DB constraints (unlike the
+  recipes caps, which mirror `src/lib/recipe-limits.ts`).
 
 #### op=remove - un-plan one item
 
@@ -244,6 +248,13 @@ Params: exactly one of `id` (product id) or `name` (normalized
 match). Deletes the OPEN entry only; the product and its purchase
 history survive. Never stamps `acquired_at` - that is the
 purchase verb, deliberately absent (see DECISIONS).
+
+The DELETE itself carries the open-entry predicate
+(`where id = <entry> and acquired_at is null`) - a purchase
+racing between the read and the write makes the delete match zero
+rows instead of destroying a purchase-history row (the same
+TOCTOU the browser's optimistic toggle guards against). A
+zero-row result reads as the honest refusal below.
 
 Honest reporting per the repo-wide delete contract
 (`docs/dev/tools.md:468-477`): `{removed: true}` / `{removed:
@@ -273,14 +284,17 @@ matches refuse with candidates), then any subset of:
   (section_id null + section_source null - back to intake, where
   the classifier may file it later).
 - `count`, `unit` (string | null - null clears) - apply to the
-  OPEN entry only. Gate on `on_list = true` from the view row -
-  the view's `entry_id` for an off-list product points at the
-  LATEST PURCHASE (the view's LATERAL resolves open first, else
-  newest purchase, `schema.sql:4676-4684`), so writing through
-  `entry_id` blindly would stamp a purchase-history row. Honest
-  refusal ("not on the list") when there is no open entry.
-  Product fields and entry fields can mix in one call; entry
-  fields refuse only when there is no open entry.
+  OPEN entry only, and the UPDATE itself carries the open-entry
+  predicate (`where id = <entry> and acquired_at is null`) for
+  the same raced-purchase reason as remove. Gate on
+  `on_list = true` from the view row - the view's `entry_id` for
+  an off-list product points at the LATEST PURCHASE (the view's
+  LATERAL resolves open first, else newest purchase,
+  `schema.sql:4676-4684`), so writing through `entry_id` blindly
+  would stamp a purchase-history row. Honest refusal ("not on the
+  list") when there is no open entry. Product fields and entry
+  fields can mix in one call; entry fields refuse only when there
+  is no open entry.
 
 Result: the updated view row (same shape as list items).
 
@@ -344,19 +358,27 @@ fresh-context reviewers until consensus (2-round cap).
   (op enum, flat params, `x-per-op-required` for add, formatArgs,
   maxLength/maxItems caps).
 - `src/lib/tools/index.ts` - import, `serverSideTool`,
-  `groceryToolbox`, TOOLBOXES entry.
+  `groceryToolbox`, TOOLBOXES entry, and a grocery clause in
+  `alwaysOnToolbox`'s hand-written description (it enumerates
+  every combo whose read ops ride inside a write toolbox; the
+  grocery combo joins that list, `index.ts:258-261`).
 - `supabase/functions/venice/tools/grocery.ts` - ToolDef + op
   switch + `registerTool`; b-strict `// RLS OFF: filter by
   userId` on every query; mirrors (VIEW_SELECT, normalize,
   ilike pattern, 23505 tolerance) each citing its browser
-  source-of-truth.
+  source-of-truth; a comment on the add probe naming WHY the
+  tiers differ (recipe-context probes never cross a recipe
+  boundary; standalone probes may revive a recipe product -
+  sidebar checkbox parity) so the asymmetry reads as designed.
 - `supabase/functions/venice/tools/index.ts` - one barrel import.
 - Tests: Deno `supabase/functions/tests/grocery_tools.test.ts`
   (fakeCtx harness, per-op suites); join
   `supabase/functions/tests/per_op_required_pins.test.ts` (the
   partial-map pin's charter - followups' partial map is already
-  in its scope); vitest pins updated in `tests/tools.test.ts` +
-  `tests/system-prompt.test.ts`.
+  in its scope); vitest pins updated in `tests/tools.test.ts`
+  (toolbox membership, order, and the always-on no-writes
+  tripwire at `:121`) + `tests/system-prompt.test.ts` (new
+  catalog section pin).
 - `mise run check` green (functions-check covers the new edge
   module's full import graph; knip covers dead exports).
 
@@ -394,11 +416,12 @@ fresh-context reviewers until consensus (2-round cap).
   name refuses with candidates, combined honest reason);
   update (product fields, entry fields gated on on_list, entry
   fields with no open entry refuse, unfile via null / 'Other',
-  rename refusal on recipe-linked products).
+  rename refusal on recipe-linked products, open-entry write
+  predicates on remove + entry updates).
 - **Vitest pins**: `tests/tools.test.ts` (groceryToolbox
-  membership + TOOLS/TOOLBOXES order) and
-  `tests/system-prompt.test.ts` (new catalog section, always-on
-  no-writes tripwire untouched).
+  membership, TOOLS/TOOLBOXES order, always-on no-writes
+  tripwire untouched) and `tests/system-prompt.test.ts` (new
+  catalog section).
 - **Live QA** (M3): local stack, real thread - model reads the
   list, adds with and without sections, removes, updates; verify
   the open tab refreshes via realtime without manual reload.
