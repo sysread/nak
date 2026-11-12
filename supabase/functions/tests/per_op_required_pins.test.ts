@@ -21,6 +21,7 @@ import { recordsSchema } from '../../../src/lib/tools/records.schema.ts';
 import { recipeRecordsSchema } from '../../../src/lib/tools/recipe_records.schema.ts';
 import { imageSchema } from '../../../src/lib/tools/image.schema.ts';
 import { followupsSchema } from '../../../src/lib/tools/followups.schema.ts';
+import { grocerySchema } from '../../../src/lib/tools/grocery.schema.ts';
 import { __test as extraction } from '../venice/agents/wiki_records.ts';
 import { __test as article } from '../venice/agents/wiki.ts';
 import { __test as librarian } from '../venice/agents/wiki_librarian.ts';
@@ -68,6 +69,7 @@ const recordsProperties = (recordsSchema.parameters.properties ?? {}) as Record<
 const recipeRecordsProperties = (recipeRecordsSchema.parameters.properties ?? {}) as Record<string, unknown>;
 const imageProperties = (imageSchema.parameters.properties ?? {}) as Record<string, unknown>;
 const followupsProperties = (followupsSchema.parameters.properties ?? {}) as Record<string, unknown>;
+const groceryProperties = (grocerySchema.parameters.properties ?? {}) as Record<string, unknown>;
 
 Deno.test('records schema carries the full per-op map (browser surface)', () => {
   const params = parametersOf(recordsSchema);
@@ -115,6 +117,17 @@ Deno.test('followups schema carries the PARTIAL per-op map (browser surface)', (
   assertEquals(params.map, {
     close: ['id', 'resolution'],
     dismiss: ['id'],
+  });
+});
+
+Deno.test('grocery schema carries the PARTIAL per-op map (browser surface)', () => {
+  const params = parametersOf(grocerySchema);
+  assertMapWellFormed('grocery', params, groceryProperties);
+  // add's items is the one unconditional required; remove/update's
+  // id-XOR-name rules and list's nothing are conditional or empty -
+  // they stay handler-side in ArgErrors, the followups convention.
+  assertEquals(params.map, {
+    add: ['items'],
   });
 });
 
