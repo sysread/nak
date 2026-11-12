@@ -1,7 +1,8 @@
 # Grocery Combination Tool Plan
 
-Status: DRAFT. Branch `grocery-tool` off main 75e43e7c. This doc
-is the reviewable artifact; refinement edits this file, not code.
+Status: DRAFT (rev 2 - deltas-from-template ledger added pre-round-1).
+Branch `grocery-tool` off main 75e43e7c. This doc is the
+reviewable artifact; refinement edits this file, not code.
 
 Read [`../tools.md`](../tools.md) first - this plan assumes its
 vocabulary (ToolDef, serverSideTool, TOOLBOXES, the no-gating
@@ -71,6 +72,27 @@ novel machinery.
   per-op suites driving a `run(op, args, ctx)` seam over a
   stubbed `fakeCtx` adminClient
   (`supabase/functions/tests/recipe_tools.test.ts:25-87`).
+
+### Deltas from the recipes template
+
+This plan clones the recipes combo; the ledger records every
+divergence, verified against `recipes.schema.ts` /
+`venice/tools/recipes.ts` as of main 75e43e7c. Reviewers check
+template-behavior claims against this ledger, not re-derived from
+the template source.
+
+| # | Point | recipes (template) | grocery (this plan) |
+|---|---|---|---|
+| 1 | Ops | list / get / save / delete | list / add / remove / update (no get; list+query covers it) |
+| 2 | Write target | single recipe per save | add is a BATCH (items[]) with per-item outcomes |
+| 3 | Write path | SECURITY DEFINER RPCs (`recipe_create_with_version` / `recipe_update_with_version`) with `p_user_id` | direct table writes - no SECURITY DEFINER RPCs exist for grocery; the invoker RPCs cannot run service-role |
+| 4 | `x-per-op-required` | absent - all requireds conditional | present, partial map: `{ add: ['items'] }` - the one unconditional required |
+| 5 | Dup guard | upsert heuristics: exact-title match routes create to update; near-match refused with candidates (`_upsert_heuristics.ts`) | normalized-name probe with THREE outcomes: revive / already_on_list / create; never routes to update |
+| 6 | Delete semantics | hard delete, honest miss | remove = un-plan (deletes the open entry only); product row survives |
+| 7 | Grammar gate | Cooklang validated, save refused with problem list | no equivalent - count/unit are free text by design (gotcha) |
+| 8 | Caps | mirrored from `src/lib/recipe-limits.ts` (documented mirroring discipline) | new tool-side guards (DB stores free text); mirrored between islands with citations |
+| 9 | Toolbox | `cookingToolbox` | new `groceryToolbox` after cooking |
+| 10 | formatArgs tail | cooklang rendered in a fenced code block | items rendered as a bulleted list |
 
 ### The grocery domain (what the tool must respect)
 
