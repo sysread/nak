@@ -402,6 +402,7 @@ describe('every tool available every turn', () => {
     expect(prompt).toContain('all available every turn');
     for (const name of [
       'cooking',
+      'grocery',
       'memories',
       'wiki',
       'followups',
@@ -412,6 +413,7 @@ describe('every tool available every turn', () => {
       expect(prompt).toMatch(new RegExp(`^  ${name} : `, 'm'));
     }
     expect(prompt).toMatch(/^      - recipes : /m);
+    expect(prompt).toMatch(/^      - grocery : /m);
     expect(prompt).toMatch(/^  - memory_search : /m);
   });
 

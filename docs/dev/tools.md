@@ -176,6 +176,11 @@ surface lives in the always-on set above.
   user cooked a recipe; the capture trigger rides this toolbox's
   description, which is the catalog-visible surface). See
   `./cookbook.md`.
+- **`grocery`** - the `grocery` combination tool (list / add /
+  remove / update): the grocery list and product catalog. remove is
+  un-planning only - the purchase verb stays the user's panel tap,
+  a boundary the toolbox description teaches the model (the
+  catalog-visible surface). See `./grocery-list.md`.
 - **`memories`** - memory writes: `memory_save` (create, or edit by
   id) / `memory_delete` plus the volitional levers (`memory_reaffirm`
   / `memory_doubt` for graded confidence, `memory_relate` /
@@ -281,9 +286,9 @@ surface lives in the always-on set above.
 Browser catalog (`src/lib/tools/`):
 
 - `index.ts` - the toolbox definitions (`alwaysOnToolbox`,
-  `cookingToolbox`, `memoriesToolbox`, `wikiToolbox`,
-  `followupsToolbox`, `libraryToolbox`, `skillsToolbox`,
-  `imagesToolbox`), the ordered `TOOLBOXES` list,
+  `cookingToolbox`, `groceryToolbox`, `memoriesToolbox`,
+  `wikiToolbox`, `followupsToolbox`, `libraryToolbox`,
+  `skillsToolbox`, `imagesToolbox`), the ordered `TOOLBOXES` list,
   the flat `TOOLS` view used by tests, the wire builder
   (`buildToolList`), and `getToolFormatters` for the tool-call
   detail panel. Every `ToolDef` here is a `serverSideTool(schema)`.
@@ -601,6 +606,14 @@ Edge dispatch (`supabase/functions/venice/`):
   `src/lib/cookbook-events.ts`. Open Cookbook surfaces refetch on
   that event rather than depending on per-tool browser publishers.
   See `./cookbook.md`.
+- **Grocery list** - same realtime-relay pattern: the `grocery`
+  combo's edge writes stamp `user_id`, so the grocery-table relay
+  (`subscribeToGroceryChanges`) refreshes open surfaces with no
+  side channel. The tool's add probe is tiered by context (a
+  recipe-context add never revives another recipe's product - that
+  would cross the cooklang invalidation trigger's cleanup
+  boundary); remove is un-plan only, never a purchase. See
+  `./grocery-list.md`.
 - **Help / user docs** - the edge `research_docs` cannot read the
   repo at request time, so `scripts/bundle-research-docs.mjs`
   embeds both doc trees as static strings in

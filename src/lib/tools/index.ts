@@ -78,6 +78,7 @@ import { conversationGetSchema } from './conversation_get.schema';
 import { recipesSchema } from './recipes.schema';
 import { recipePhotosSchema } from './recipe_photos.schema';
 import { recipeRecordsSchema } from './recipe_records.schema';
+import { grocerySchema } from './grocery.schema';
 import { researchDocsSchema } from './research_docs.schema';
 import { wikiSchema } from './wiki.schema';
 import { wikiLibrarianSchema } from './wiki_librarian.schema';
@@ -127,6 +128,7 @@ const conversationGet = serverSideTool(conversationGetSchema);
 const recipes = serverSideTool(recipesSchema);
 const recipePhotos = serverSideTool(recipePhotosSchema);
 const recipeRecords = serverSideTool(recipeRecordsSchema);
+const grocery = serverSideTool(grocerySchema);
 const researchDocs = serverSideTool(researchDocsSchema);
 const wiki = serverSideTool(wikiSchema);
 const wikiLibrarian = serverSideTool(wikiLibrarianSchema);
@@ -230,8 +232,9 @@ export const alwaysOnToolbox: Toolbox = {
     'update_title, analyze_image, analyze_pdf_page, and ask_user. ' +
     'Recipe browsing lives in the recipes combination tool and the ' +
     'cooking log in the recipe_records combination tool (both cooking ' +
-    'toolbox); Library reading lives in the docs combination tool ' +
-    '(library toolbox); the wiki article log lives in the records ' +
+    'toolbox); the grocery list lives in the grocery combination tool ' +
+    '(grocery toolbox); Library reading lives in the docs combination ' +
+    'tool (library toolbox); the wiki article log lives in the records ' +
     'combination tool (wiki toolbox) - their list/get/search ops are ' +
     'read-only.',
   tools: [
@@ -279,6 +282,33 @@ export const cookingToolbox: Toolbox = {
     'recipe and how it went, log it with recipe_records op=create ' +
     'and say so in the reply.',
   tools: [recipes, recipePhotos, recipeRecords],
+};
+
+/**
+ * Grocery list tools. The `grocery` combination tool carries the
+ * whole list surface (list / add / remove / update) - reads ride
+ * inside the combo rather than always-on, the skills/recipes
+ * precedent (one tool cannot split across toolboxes).
+ *
+ * The toolbox description is catalog-visible (the catalog renders
+ * toolbox descriptions and per-tool short descriptions, never full
+ * tool descriptions), so it carries the reach-for-it trigger: the
+ * model reaches for this tool whenever the user talks about their
+ * grocery/shopping list. It also names the un-plan contract - the
+ * one boundary the model must not cross (purchase history belongs
+ * to the user's own check-offs) - because the short description
+ * alone would not teach it.
+ */
+export const groceryToolbox: Toolbox = {
+  name: 'grocery',
+  description:
+    'Read and edit the grocery list (one combination tool: ' +
+    'grocery = list / add / remove / update). When the user ' +
+    'mentions their grocery or shopping list, asks what is on it, ' +
+    'or asks to add or remove items, use the grocery tool and say ' +
+    'what changed in the reply. Removing is un-planning only - ' +
+    'never record a purchase on the user\'s behalf.',
+  tools: [grocery],
 };
 
 /**
@@ -468,6 +498,7 @@ export const skillsToolbox: Toolbox = {
 export const TOOLBOXES: readonly Toolbox[] = [
   alwaysOnToolbox,
   cookingToolbox,
+  groceryToolbox,
   memoriesToolbox,
   wikiToolbox,
   followupsToolbox,

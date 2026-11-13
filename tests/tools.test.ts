@@ -14,6 +14,7 @@ import {
   TOOLBOXES,
   alwaysOnToolbox,
   cookingToolbox,
+  groceryToolbox,
   memoriesToolbox,
   wikiToolbox,
   skillsToolbox,
@@ -75,6 +76,7 @@ describe('tool registry', () => {
     expect(TOOLBOXES.map((tb) => tb.name)).toEqual([
       'always_on',
       'cooking',
+      'grocery',
       'memories',
       'wiki',
       'followups',
@@ -138,7 +140,7 @@ describe('tool registry', () => {
     }
     // And no writes leak into always-on. (The record writes ride the
     // recipes/recipe_records combos in the cooking toolbox; the wiki
-    // record writes the wiki box.)
+    // record writes the wiki box; the grocery writes the grocery box.)
     for (const write of [
       'memory_save',
       'memory_delete',
@@ -148,6 +150,7 @@ describe('tool registry', () => {
       'recipe_record_update',
       'recipe_record_delete',
       'wiki_librarian',
+      'grocery',
     ]) {
       expect(names).not.toContain(write);
     }
@@ -163,6 +166,17 @@ describe('tool registry', () => {
     // the create-description invariants.
     expect(cookingToolbox.description).toContain('reports having cooked a recipe');
     expect(cookingToolbox.description).toContain('say so in the reply');
+  });
+
+  it('groceryToolbox carries the combo and the un-plan boundary in its description', () => {
+    // Same catalog-visibility rationale as the cooking trigger: the
+    // toolbox description is the only grocery prose the catalog
+    // renders, so the reach-for-it trigger (user mentions their
+    // list) and the one boundary the model must not cross (never
+    // record a purchase on the user's behalf) both ride it.
+    expect(groceryToolbox.tools.map((t: ToolDef) => t.name)).toEqual(['grocery']);
+    expect(groceryToolbox.description).toContain('grocery or shopping list');
+    expect(groceryToolbox.description).toContain('never record a purchase');
   });
 
   it('skillsToolbox description carries the capture trigger', () => {

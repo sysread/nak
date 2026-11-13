@@ -23,6 +23,7 @@ import './conversation_get.ts';
 import './conversation_search.ts';
 import './docs.ts';
 import './followups.ts';
+import './grocery.ts';
 import './image.ts';
 import '../agents/context.ts';
 import '../agents/conversation_recall.ts';

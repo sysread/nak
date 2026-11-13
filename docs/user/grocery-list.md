@@ -166,3 +166,25 @@ move to Other), and drag rows to match the order you walk the store.
 A fresh account starts with a canned set (Produce, Bread, Deli,
 Meats, Dairy, Frozen, Snacks, Pantry, Beverages, Household); change
 them freely.
+
+## Asking the assistant
+
+You can drive the list by talking. In any conversation, ask things
+like *"what's on my grocery list?"*, *"add flour and butter to the
+list"*, *"take the eggs off"*, or *"move the flour to Baking and
+make it 2 kg"*. The assistant reads, searches, adds, removes, and
+edits list items - including filing them into sections when you
+name one ("add cilantro to Produce").
+
+Two behaviors worth knowing:
+
+- **Adding reuses what you have.** If the item already exists in
+  your list history, the assistant puts THAT one back on the list -
+  its section and past purchases stay attached - instead of
+  creating a duplicate. Saying it twice is harmless; already-listed
+  items just get reported as such.
+- **The assistant never checks things off.** Tapping a row to mark
+  it bought is yours alone - your purchase history records only
+  what you actually put in the cart. The assistant can remove an
+  item (no purchase recorded), but marking it purchased is a tap
+  you make yourself.

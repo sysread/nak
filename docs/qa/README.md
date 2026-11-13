@@ -319,6 +319,12 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   the recipe-edit invalidation wipe, the needed / acquired shopping
   flow, add-input history suggestions, section management, and item
   photos.
+- [grocery-tool](./use-cases/grocery-tool.md) - the `grocery` chat
+  tool: model-driven list reads (op=list with the sections
+  payload), idempotent batch adds with revive-before-create and
+  model-chosen section filing, un-plan removals that never stamp a
+  purchase, entry-quantity edits, the recipe-linked rename refusal,
+  and the realtime refresh of an open Groceries tab.
 - [cookbook-cooking-mode](./use-cases/cookbook-cooking-mode.md) -
   the recipe detail pane's cooking mode (Make this now): used-mark
   checkboxes, the N-of-M counter, per-recipe sessions in the shared
