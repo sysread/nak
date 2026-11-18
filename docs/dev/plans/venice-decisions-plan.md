@@ -156,22 +156,30 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
   unused constant is an orphan (dead-code hygiene).
 - **D2 - The reorg is a mechanical split, not a redesign.**
   `_shared/venice.ts` becomes a re-export barrel over
-  `_shared/venice/<concern>.ts` submodules. All 34 import sites keep
-  their `_shared/venice.ts` specifier (verified:
-  `venice/index.ts:50`, `venice/feature-rejections.ts:38`,
-  `venice/getStreamingCompletion.ts:68`, `venice/tools/_venice_complete.ts:17`,
-  `venice/tools/_image_ops.ts:20`, `venice/tools/web_search.ts:39`,
-  `venice/tools/image.ts:57`, `venice/tools/_vision.ts:20`,
-  `venice/priming/intuition.ts:39`, `venice/agents/_curation_helpers.ts:13`,
-  `venice/agents/samskara.ts:49`, `venice/mcp/dispatch.ts:28`,
-  `venice/mcp/handlers.ts:35`, `venice/mcp/oauth.ts:38`,
-  `venice/getStreamingResponse.ts:86`, and 10 test files under
-  `tests/`). Code moves verbatim: no signature changes, no behavior
-  edits, no comment rewrites beyond the moves' own headers.
+  `_shared/venice/<concern>.ts` submodules. Every import site keeps
+  its `_shared/venice.ts` specifier. Inventory (30 sites, review
+  round 1): 15 non-test sites import `'../_shared/venice.ts'` or
+  `'../../_shared/venice.ts'` (`venice/index.ts:50`,
+  `venice/feature-rejections.ts:38`, `venice/getStreamingCompletion.ts:68`,
+  `venice/tools/_venice_complete.ts:17`, `venice/tools/_image_ops.ts:20`,
+  `venice/tools/web_search.ts:39`, `venice/tools/image.ts:57`,
+  `venice/tools/_vision.ts:20`, `venice/priming/intuition.ts:39`,
+  `venice/agents/_curation_helpers.ts:13`, `venice/agents/samskara.ts:49`,
+  `venice/mcp/dispatch.ts:28`, `venice/mcp/handlers.ts:35`,
+  `venice/mcp/oauth.ts:38`, `venice/getStreamingResponse.ts:86`);
+  2 sibling sites inside `_shared/` import `'./venice.ts'`
+  (`price-cap.ts:31`, `image-model-constraints.ts:25`); 13 test
+  files import from `'../_shared/venice.ts'`. Code moves verbatim:
+  no signature changes, no behavior edits, no comment rewrites
+  beyond the moves' own headers. The file-plus-directory layout is
+  safe under Deno: every site uses an explicit `.ts` specifier and
+  `supabase/functions/deno.json` has no bare-specifier mapping that
+  could collide.
 - **D3 - Infra only; no feature callers in this change.** The route
   and helper ship with tests but no production caller. B1-B7 stay
-  unbuilt here; each gets its own plan when picked up. The route is
-  exercised by its tests, so knip stays green.
+  unbuilt here; each gets its own plan when picked up. The route and
+  helper are exercised by their Deno tests, so the dead-code gates
+  that scan them (functions-check, functions-test) stay green.
 - **D4 - The helper is a thin verbatim relay, single attempt.**
   Same contract as `veniceComplete`
   (`supabase/functions/_shared/venice.ts:390-404`): forward the body
@@ -191,10 +199,12 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
   the handler is a pure relay and keeps no per-user state.
 - **D6 - Error bodies get the 600-char slice, not 200.** Beta
   validation failures come back as `DetailedError` bodies with a
-  details map that can run long; the completions helper already
-  widened to 600 for exactly this shape
-  (`_shared/venice.ts:487-492`). Decisions errors are debug-facing
-  (logged on the 502 path), so the extra body is worth carrying.
+  details map that can run long, and decisions errors are
+  debug-facing: the 502 path logs the message for `supabase logs`,
+  where a truncated body would hide the field Venice rejected. The
+  completions helper made the same 600 choice for a different
+  reason (user-facing surfaces, `_shared/venice.ts:487-492`); here
+  the rationale is beta debugging legibility, nothing more.
 
 ## PLAN
 
@@ -210,9 +220,13 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
   `billing.ts` (usage analytics + key usage), `models.ts` (fetch +
   the raw-catalog TTL cache), and `decisions.ts` (M2). `venice.ts`
   becomes a barrel: the island-stance header comment plus one
-  `export * from` per submodule. Private helpers that cross the new
-  file lines (`parseVeniceRetryAfterMs`) get exported with a
-  comment; nothing else changes.
+  `export * from` per submodule. Two private helpers cross the new
+  file lines and become exported with a comment naming why:
+  `parseVeniceRetryAfterMs` (complete + decisions) and
+  `DEFAULT_BASE_URL` (currently an unexported `const` used at 10
+  sites across six future submodules). Every other private helper
+  stays within its single submodule (verified by usage grep, review
+  round 1). Nothing else changes.
 - **M2 - `venice/decisions.ts` helper.** `veniceDecision(opts)`
   with `{ apiKey, body, baseUrl?, fetchImpl?, signal? }`, POST to
   `/decisions`, per D4. Header comment states the beta stance: wire
@@ -232,15 +246,29 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
 - **M5 - Docs.** `docs/dev/architecture.md:298` route list gains
   `/decisions`. `supabase/functions/README.md` mentions
   `_shared/venice.ts` (`README.md:71-72`) - update the pointer to
-  the barrel + submodule layout. This plan doc is the brainstorm
-  record.
+  the barrel + submodule layout. Six living dev docs name
+  `_shared/venice.ts` as the file holding symbols that will live in
+  submodules; repoint each at the owning submodule:
+  `docs/dev/chat.md:265`, `:275`, `:353`, `:914`;
+  `docs/dev/image-editing.md:20`; `docs/dev/auto-title.md:186`;
+  `docs/dev/tools.md:118`. Plus the one code comment that names the
+  file in prose, `src/lib/venice.ts:685`. Historical plan docs
+  (`docs/dev/plans/image-editing-plan.md` and siblings) are
+  point-in-time records and stay as written. This plan doc is the
+  brainstorm record.
 
 ## VERIFICATION
 
 - `mise run check` before each commit, exit code read directly (no
-  pipes) - the gate includes `functions-check` (Deno type-check over
-  the full import graph, which is what proves the barrel keeps every
-  export) and knip (proves no orphaned exports from the split).
+  pipes). Two of its tasks prove the barrel: `functions-check` runs
+  `deno check` over the five entrypoint import graphs (every
+  entrypoint-reachable export must resolve through the barrel), and
+  `functions-test` type-checks the test import graph, which covers
+  barrel-only symbols tests import directly (`buildAnalyticsQuery`,
+  `selectKeyUsage` - `tests/usage.test.ts:11`,
+  `tests/key-usage.test.ts:12`). Knip is NOT part of this proof: its
+  globs (`knip.json` project: `src/**`, `scripts/**`) never scan
+  `supabase/functions`, so it is silent about this entire surface.
 - `deno test` over the new test file runs offline (injected fetch).
 - No browser surface exists; nothing in `docs/user/` changes.
 
