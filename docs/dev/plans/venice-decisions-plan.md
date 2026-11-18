@@ -1,8 +1,10 @@
 # Venice Decision Models Plan
 
-Status: PLANNED 2026-11-18 (branch venice-decisions, worktree off
-3293f55b). Research + live calibration done; infra milestones below
-not started.
+Status: IMPLEMENTED 2026-11-18 (branch venice-decisions, head
+a7f65104; base origin/main 3d861aa1). Infra shipped: the
+_shared/venice/ split, veniceDecision, the /decisions route, tests,
+and the doc repoints. Brainstorm B1-B7 remain unbuilt candidates;
+each needs its own plan when picked up.
 
 ## SYNOPSIS
 
