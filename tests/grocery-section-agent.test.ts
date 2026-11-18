@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   SECTION_EXAMPLES_PER_SECTION,
-  buildClassifierMessages,
+  buildDecisionBody,
   buildSectionPromptGroups,
-  parseClassifierAnswer,
+  parseDecisionAnswers,
 } from '../src/lib/grocery-section-agent';
 import type { GrocerySection } from '../src/lib/supabase';
 
@@ -18,16 +18,16 @@ const SECTIONS = [
 ];
 
 describe('buildSectionPromptGroups', () => {
-  it('numbers sections in order and attaches their examples', () => {
+  it('lists sections in order and attaches their examples', () => {
     const groups = buildSectionPromptGroups(SECTIONS, [
       { name: 'apples', section_id: 's-produce' },
       { name: 'peas', section_id: 's-frozen' },
       { name: 'kale', section_id: 's-produce' },
     ]);
     expect(groups).toEqual([
-      { number: 1, name: 'Produce', examples: ['apples', 'kale'] },
-      { number: 2, name: 'Frozen', examples: ['peas'] },
-      { number: 3, name: 'Pantry', examples: [] },
+      { name: 'Produce', examples: ['apples', 'kale'] },
+      { name: 'Frozen', examples: ['peas'] },
+      { name: 'Pantry', examples: [] },
     ]);
   });
 
@@ -48,67 +48,141 @@ describe('buildSectionPromptGroups', () => {
   });
 });
 
-describe('buildClassifierMessages', () => {
-  it('is a single user turn naming sections, examples, and items', () => {
-    const messages = buildClassifierMessages({
+describe('buildDecisionBody', () => {
+  it('pins the private-tier decision model and carries the state shape', () => {
+    const body = buildDecisionBody({
       sections: SECTIONS,
       examples: [{ name: 'apples', section_id: 's-produce' }],
       names: ['corn', 'flour'],
     });
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.role).toBe('user');
-    const body = messages[0]!.content as string;
-    expect(body).toContain('1. Produce (examples: apples)');
-    expect(body).toContain('3. Pantry');
-    expect(body).toContain('- corn');
-    expect(body).toContain('- flour');
-    expect(body).not.toContain('Recipe:');
+    expect(body.model).toBe('clef-api');
+    const state = body.state as Record<string, unknown>;
+    expect(state.sections).toEqual([
+      { name: 'Produce', examples: ['apples'] },
+      { name: 'Frozen', examples: [] },
+      { name: 'Pantry', examples: [] },
+    ]);
+    expect(state.items).toEqual(['corn', 'flour']);
+    expect(state.recipe).toBeUndefined();
   });
 
-  it('includes the recipe context when provided', () => {
-    const messages = buildClassifierMessages({
+  it('writes one choice question per item, keyed by the item name', () => {
+    const body = buildDecisionBody({
+      sections: SECTIONS,
+      examples: [],
+      names: ['corn', 'flour'],
+    });
+    const questions = body.questions as Record<string, Record<string, unknown>>;
+    expect(Object.keys(questions).sort()).toEqual(['corn', 'flour']);
+    for (const key of ['corn', 'flour']) {
+      expect(questions[key]!.type).toBe('choice');
+      // The id is NOT sent to the model - the instruction must name the item.
+      expect(questions[key]!.instructions).toContain(`"${key}"`);
+    }
+  });
+
+  it('offers every section by name plus the none option in the criteria', () => {
+    const body = buildDecisionBody({
+      sections: SECTIONS,
+      examples: [{ name: 'apples', section_id: 's-produce' }],
+      names: ['corn'],
+    });
+    const questions = body.questions as Record<string, Record<string, unknown>>;
+    const criteria = questions['corn']!.criteria as Record<string, unknown>;
+    expect(Object.keys(criteria).sort()).toEqual([
+      'Frozen',
+      'Pantry',
+      'Produce',
+      'none',
+    ]);
+    expect(criteria['Produce']).toBe('Examples: apples');
+    expect(criteria['Frozen']).toBeNull();
+    expect(criteria['none']).toContain('unfiled');
+  });
+
+  it('carries the recipe context in the state, capped', () => {
+    const body = buildDecisionBody({
       sections: SECTIONS,
       examples: [],
       names: ['corn'],
-      recipe: { title: 'Corn Chowder', cooklang: 'Add @corn{1%can}.' },
+      recipe: { title: 'Corn Chowder', cooklang: `x`.repeat(9000) },
     });
-    const body = messages[0]!.content as string;
-    expect(body).toContain('Recipe: Corn Chowder');
-    expect(body).toContain('@corn{1%can}');
+    const state = body.state as { recipe: { title: string; ingredients: string } };
+    expect(state.recipe.title).toBe('Corn Chowder');
+    expect(state.recipe.ingredients).toHaveLength(6000);
   });
 });
 
-describe('parseClassifierAnswer', () => {
+describe('parseDecisionAnswers', () => {
   const names = ['Corn', 'flour'];
 
-  it('maps names to section ids by number', () => {
-    const out = parseClassifierAnswer('{"Corn": 2, "flour": 3}', names, SECTIONS);
-    expect(out.get('corn')).toBe('s-frozen');
-    expect(out.get('flour')).toBe('s-pantry');
+  function payload(answers: Record<string, unknown>): unknown {
+    return { answers };
+  }
+
+  it('maps names to section ids with confidence', () => {
+    const out = parseDecisionAnswers(
+      payload({
+        Corn: { type: 'choice', choice: 'Frozen', confidence: 0.93 },
+        flour: { type: 'choice', choice: 'Pantry', confidence: 0.81 },
+      }),
+      names,
+      SECTIONS
+    );
+    expect(out.get('corn')).toEqual({ sectionId: 's-frozen', confidence: 0.93 });
+    expect(out.get('flour')).toEqual({ sectionId: 's-pantry', confidence: 0.81 });
   });
 
-  it('matches keys by normalized name and accepts number-as-string', () => {
-    const out = parseClassifierAnswer('{" CORN ": "2"}', names, SECTIONS);
-    expect(out.get('corn')).toBe('s-frozen');
-  });
-
-  it('drops 0 (no fit), out-of-range, and non-integer values', () => {
-    const out = parseClassifierAnswer(
-      '{"Corn": 0, "flour": 9, "extra": 1.5}',
+  it('drops the none pick, unknown sections, and missing answers', () => {
+    const out = parseDecisionAnswers(
+      payload({
+        Corn: { type: 'choice', choice: 'none', confidence: 0.9 },
+        flour: { type: 'choice', choice: 'Nowhere', confidence: 0.9 },
+      }),
       names,
       SECTIONS
     );
     expect(out.size).toBe(0);
   });
 
-  it('ignores names the model invented', () => {
-    const out = parseClassifierAnswer('{"pumpkin": 1}', names, SECTIONS);
+  it('coerces a missing or non-finite confidence to 0', () => {
+    const out = parseDecisionAnswers(
+      payload({
+        Corn: { type: 'choice', choice: 'Produce' },
+        flour: { type: 'choice', choice: 'Pantry', confidence: 'high' },
+      }),
+      names,
+      SECTIONS
+    );
+    expect(out.get('corn')!.confidence).toBe(0);
+    expect(out.get('flour')!.confidence).toBe(0);
+  });
+
+  it('ignores names the model was not asked about', () => {
+    const out = parseDecisionAnswers(
+      payload({ pumpkin: { type: 'choice', choice: 'Produce', confidence: 1 } }),
+      names,
+      SECTIONS
+    );
     expect(out.size).toBe(0);
   });
 
-  it('fails closed on non-JSON and non-object answers', () => {
-    expect(parseClassifierAnswer('not json', names, SECTIONS).size).toBe(0);
-    expect(parseClassifierAnswer('[1,2]', names, SECTIONS).size).toBe(0);
-    expect(parseClassifierAnswer('null', names, SECTIONS).size).toBe(0);
+  it('fails closed on non-object payloads and malformed answers', () => {
+    expect(parseDecisionAnswers(null, names, SECTIONS).size).toBe(0);
+    expect(parseDecisionAnswers('nope', names, SECTIONS).size).toBe(0);
+    expect(parseDecisionAnswers({ answers: 'nope' }, names, SECTIONS).size).toBe(0);
+    expect(
+      parseDecisionAnswers(payload({ Corn: 'Frozen' }), names, SECTIONS).size
+    ).toBe(0);
+  });
+
+  it('resolves duplicate section names to the first match', () => {
+    const dupes = [...SECTIONS, section('s-frozen-2', 'Frozen', 3)];
+    const out = parseDecisionAnswers(
+      payload({ Corn: { type: 'choice', choice: 'Frozen', confidence: 0.5 } }),
+      ['Corn'],
+      dupes
+    );
+    expect(out.get('corn')!.sectionId).toBe('s-frozen');
   });
 });

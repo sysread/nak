@@ -517,8 +517,7 @@ export type AgentRole =
   | 'intuitionPerception'
   | 'recall'
   | 'conversationRecall'
-  | 'wikiRecall'
-  | 'grocerySection';
+  | 'wikiRecall';
 
 /**
  * Background-agent role -> Venice id. The right-hand side is checked
@@ -539,8 +538,8 @@ export type AgentRole =
  *     bodies (the user's own conversations and memories) never leave
  *     its infrastructure. This is an upgrade over an 'anonymized' id,
  *     where the prompt is proxied upstream with metadata stripped.
- *   - Cheap and fast - the latency-bound slots (webSearch,
- *     grocerySection) sit on or near the live turn's critical path.
+ *   - Cheap and fast - the latency-bound webSearch slot sits on the
+ *     live turn's critical path.
  *   - Reasoning-capable but SUPPRESSIBLE - and this is the standing
  *     obligation the single-id setup carries: the id's serving
  *     default effort is HIGH, so every call site must pin the
@@ -573,6 +572,10 @@ export type AgentRole =
  * big-window id for the one stage that needs it. If perception
  * regresses on deepseek, mistral-small is the fallback (accepting the
  * 256k ceiling on very long threads).
+ *
+ * The retired grocerySection slot rode a decision model, not a chat
+ * ModelSpec: the grocery classifier moved to the beta Decisions
+ * endpoint and owns its id in src/lib/grocery-section-agent.ts.
  *
  * Slot-shape notes that survive any future re-split:
  *
@@ -615,7 +618,6 @@ export const AGENT_MODELS = {
   recall:             'z-ai-glm-5-3-flash',
   conversationRecall: 'z-ai-glm-5-3-flash',
   wikiRecall:         'z-ai-glm-5-3-flash',
-  grocerySection:     'z-ai-glm-5-3-flash',
 } as const satisfies Record<AgentRole, ModelId>;
 
 /**

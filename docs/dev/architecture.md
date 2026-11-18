@@ -267,15 +267,18 @@ the function-side wire shape:
   subscribes to the `thread:<id>:stream` Broadcast channel, and
   yields the function-published event union. Used only by the
   main user-facing chat (`chat/loop.ts`).
-- `SupabaseService.complete(req)` - non-streaming one-shot,
-  routed through the venice/complete route. Used only by one
-  intentional browser-side completion path: the grocery section
-  classifier (`src/lib/grocery-section-agent.ts`), a text-only call.
+- `SupabaseService.decide(body)` - the beta decision-models relay
+  (`POST /decisions`): one `clef-api` call evaluates a JSON state
+  against typed questions and returns `{ model, answers, usage }`
+  verbatim. Used by the grocery section classifier
+  (`src/lib/grocery-section-agent.ts`), a text-only call.
   The server-side agent fleets (reflection, samskara, curation, bias,
   the recall agents, and both wiki agents - autonomous and the
   per-article manual update - plus intuition's models) run inside the
   venice function and call Venice directly rather than routing through
-  this browser method.
+  this browser method. The old non-streaming chat relay
+  (`SupabaseService.complete` / venice/complete) was retired with the
+  classifier's migration - no browser caller needed a chat completion.
 - `SupabaseService.embed(req)` - per-query vector. Routes through
   venice/embed.
 - `SupabaseService.extractText(file, filename)` - multipart upload
@@ -295,7 +298,7 @@ Venice base URL; the function does.
 - `/stream` - the streaming round chain. Owns tool dispatch, output
   guards, persistence, retry/control-channel fan-out. See
   [Streaming and tool dispatch in the venice edge function](./chat.md).
-- `/complete`, `/embed`, `/text-parser`, `/usage`, `/models`,
+- `/embed`, `/text-parser`, `/usage`, `/models`,
   `/image/generate`, `/decisions` - one-shot relays. `/embed` uses the
   built-in `Supabase.ai.Session('gte-small')` (local ONNX inference,
   no Venice key); the rest relay to Venice.

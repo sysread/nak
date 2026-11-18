@@ -116,11 +116,11 @@ owns current reality.
   `tests/grocery-list.test.ts`, which also carries the JS mirror of
   the invalidation trigger's SQL name-extraction regex.
 - `src/lib/grocery-section-agent.ts` - the auto-sectioning
-  sub-completion (see "Auto-sectioning" below): prompt assembly and
-  answer parsing as pure functions
-  (`tests/grocery-section-agent.test.ts`), the `complete()` call on
-  the `grocerySection` model slot, and the `autoFileProducts`
-  fire-and-forget entry every add path shares.
+  sub-completion (see "Auto-sectioning" below): decision-state
+  assembly and answer parsing as pure functions
+  (`tests/grocery-section-agent.test.ts`), the `decide()` call to
+  the beta decisions endpoint (model `clef-api`), and the
+  `autoFileProducts` fire-and-forget entry every add path shares.
 - `src/lib/tools/grocery.schema.ts` + edge
   `supabase/functions/venice/tools/grocery.ts` - the grocery chat
   tool (see "The grocery chat tool" below). Deno op tests at
@@ -299,27 +299,30 @@ grocery_products / grocery_list_entries":
 ## Auto-sectioning
 
 `src/lib/grocery-section-agent.ts` files just-created, unfiled
-products into the user's own sections via a `grocerySection`
-sub-completion (`AGENT_MODELS` -> `z-ai-glm-5-3-flash`;
-thinking pass disabled - pure classification, rationale on the slot's docblock in
-`src/lib/models/index.ts`). The contract, end to end:
+products into the user's own sections via a beta decision-model
+call: one `clef-api` request through the `venice/decisions` relay
+(`SupabaseService.decide`), the private-tier decision model per
+`docs/dev/plans/venice-decisions-plan.md` D1. The contract, end
+to end:
 
 - **Insert first, classify after.** Every add stays instant; the
   agent runs fire-and-forget and the item hops from Other into its
   section when the call returns. Latency shapes only the hop.
-- **Prompt**: the user's sections as a numbered list, each with up
-  to `SECTION_EXAMPLES_PER_SECTION` example items - standalone
-  filed products ONLY (`listSectionExampleProducts`), because
-  recipe ingredients are poor evidence without their recipe's
-  context - plus, for recipe-originated adds, the recipe title and
-  cooklang source (only the recipe disambiguates fresh vs. canned
-  vs. frozen "corn"). The model answers a JSON map of name ->
-  section number, 0 for "no fit". `response_format: json_object`,
-  `temperature 0`, explicit `maxTokens` with headroom, and a
-  `finish_reason === 'length'` check per CLAUDE.md "Venice
-  sub-completions".
-- **Fail closed.** Unparseable answer, truncation, out-of-range
-  number, transport error: the product simply stays in Other,
+- **Decision shape**: JSON state carrying the user's sections with
+  up to `SECTION_EXAMPLES_PER_SECTION` example items each -
+  standalone filed products ONLY (`listSectionExampleProducts`),
+  because recipe ingredients are poor evidence without their
+  recipe's context - plus, for recipe-originated adds, the recipe
+  title and cooklang source (only the recipe disambiguates fresh
+  vs. canned vs. frozen "corn"). One `choice` question per item
+  picks a section by name, or the `none` option ("no fit"); each
+  answer carries the full probability distribution plus a
+  confidence value, logged per filed item. No prose, no
+  `response_format`/`maxTokens`/`finish_reason` guards - the chat
+  path's JSON-repair failure modes collapse into typed-answer
+  coercion.
+- **Fail closed.** Missing answer, unknown section name, the
+  `none` pick, transport error: the product simply stays in Other,
   exactly where it would be without the agent. `autoFileProducts`
   never throws.
 - **The save is conditional**: `autoFileGroceryProduct` updates
@@ -329,7 +332,8 @@ thinking pass disabled - pure classification, rationale on the slot's docblock i
   `'user'`, which the agent never touches - each product is
   classified at most once, ever.
 - **Batch, never fan out.** "Add all to grocery list" classifies
-  every freshly-created ingredient in ONE call.
+  every freshly-created ingredient in ONE call (N questions over a
+  shared state - the state's tokens are counted once).
 - **Who triggers it**: the panel and sidebar `Add "X" (Auto)`
   actions (standalone, no recipe context); the recipe checkbox and
   Add-all paths automatically for first-time ingredients (with
@@ -510,12 +514,13 @@ Deployed via its own line in `deploy.yml`.
   `src/lib/ui/active-sessions.ts` together.
 - **Routing** - `drawer=groceries` joins the DrawerTab union in
   `routing.svelte.ts`.
-- **Models** (`src/lib/models/index.ts`) - the `grocerySection`
-  slot in `AGENT_MODELS`; retuning the auto-sectioning model means
-  editing that slot, not the agent module. The call rides the
-  non-streaming `complete()` seam of the venice proxy
+- **Models** - the auto-sectioning model is `clef-api`, the
+  private-tier beta decision model, owned by
+  `src/lib/grocery-section-agent.ts` (no `AGENT_MODELS` slot - a
+  decision model has no chat ModelSpec). The call rides the
+  `decide()` seam of the venice proxy
   (`src/lib/supabase/venice-proxy.ts`), including its 429 retry
-  loop.
+  loop. Retuning the model means editing the module constant.
 - **LLM tools** (`./tools.md`) - the `grocery` combination tool
   (list / add / remove / update), added 2026-11-12 after shipping
   tool-less deliberately. Its writes are covered by the realtime

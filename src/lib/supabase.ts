@@ -24,8 +24,6 @@ import type { ModelPriceCaps } from './models/price-caps';
 import type { SerializableLogEntry } from './logger.svelte';
 import type { OpenAIToolCall } from './tools/types';
 import type {
-  ChatCompletion,
-  ChatRequest,
   Citation,
   EmbeddingRequest,
   EmbeddingResponse,
@@ -184,7 +182,7 @@ import type { FollowupInspectorRow } from './ui/followups-inspector';
  *                             client's auth surface.
  *   Settings & Venice API proxies
  *                             user settings blob     -> ./supabase/settings.ts
- *                             /complete, /embed, /usage, /models,
+ *                             /decisions, /embed, /usage, /models,
  *                             text extraction        -> ./supabase/venice-proxy.ts
  *   Threads                   list / search / CRUD / per-thread
  *                             setters                -> ./supabase/threads.ts
@@ -378,8 +376,8 @@ export class SupabaseService {
     return veniceProxyApi.extractText(this.client, file, filename);
   }
 
-  async complete(req: ChatRequest): Promise<ChatCompletion> {
-    return veniceProxyApi.complete(this.client, req);
+  async decide(body: Record<string, unknown>): Promise<unknown> {
+    return veniceProxyApi.decide(this.client, body);
   }
 
   async updateSettings(patch: Partial<UserSettings>): Promise<UserSettings> {

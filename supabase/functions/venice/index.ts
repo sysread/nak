@@ -24,14 +24,6 @@
 //                     it; the function pins variants=1/return_binary=false
 //                     so the response is a single base64 image ready for the
 //                     attachments path.
-//   /complete - browser-triggered, thin proxy for Venice's /chat/completions
-//               (non-streaming). The body-shaping helper buildChatBody lives
-//               in src/lib/venice.ts and runs browser-side; this route just
-//               attaches the shared key, forwards, and relays Venice's
-//               response - including a parsed retryAfterMs on 429 so the
-//               browser's retry loop can act on Venice's hint. The streaming
-//               sibling (streamChat) is the project's final attractor and
-//               does not move yet.
 //   /decisions - browser-triggered, thin proxy for Venice's POST /decisions
 //               (beta decision models): evaluates a state against typed
 //               questions and relays the structured answers verbatim. The
@@ -44,7 +36,6 @@
 // shared key, and error mapping.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
-  veniceComplete,
   veniceDecision,
   veniceExtractText,
   veniceFetchModels,
@@ -443,89 +434,10 @@ async function handleModels(req: Request): Promise<Response> {
 }
 
 /**
- * Browser-triggered thin proxy for POST /chat/completions. The browser
- * already builds Venice's wire-shape body via the exported buildChatBody
- * helper in src/lib/venice.ts; the function forwards it untouched with the
- * shared key attached and returns Venice's JSON verbatim. parseChatCompletion
- * on the browser side handles response shaping.
- *
- * Auth: verify_jwt on (the gateway has already validated the session JWT),
- * shared key from app_config via the service role - same model as /embed.
- * No service-role check, since this is user-triggered.
- *
- * Error relay: VeniceError carries kind + status; on rate_limit we also
- * include retryAfterMs in the JSON body so the browser's retry loop can
- * read Venice's Retry-After / x-ratelimit-reset-* hint rather than picking
- * a backoff blindly. Other VeniceErrors collapse to 502; non-VeniceError
- * exceptions to 500.
- */
-async function handleComplete(req: Request): Promise<Response> {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return json({ error: 'invalid JSON body' }, 400);
-  }
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    return json({ error: 'body must be a JSON object' }, 400);
-  }
-
-  // Blocked-model policy (../_shared/blocked-models.ts): a Grok id in
-  // the wire body is refused before the shared key is even sourced.
-  // The pickers cannot send one; this catches stale stored profiles
-  // and hand-crafted calls.
-  const completeModel = (body as Record<string, unknown>).model;
-  if (typeof completeModel === 'string' && isBlockedModelId(completeModel)) {
-    return json({ error: 'model is not allowed' }, 403);
-  }
-
-  const env = await requireVeniceEnv();
-  if (env instanceof Response) return env;
-  const { apiKey } = env;
-
-  try {
-    const result = await veniceComplete({
-      apiKey,
-      body: body as Record<string, unknown>,
-    });
-    return json(result);
-  } catch (err) {
-    if (err instanceof VeniceError) {
-      if (err.kind === 'rate_limit') {
-        // Surface Retry-After / x-ratelimit-reset-* through the JSON body
-        // so the browser's retry loop can act on Venice's hint - the
-        // headers themselves do not survive the functions.invoke round
-        // trip cleanly.
-        return json(
-          { error: err.message, kind: err.kind, retryAfterMs: err.retryAfterMs ?? null },
-          429
-        );
-      }
-      // Reaching here means veniceComplete exhausted its transient-retry
-      // schedule (or hit a non-retryable kind), so the 502 reflects a
-      // sustained upstream Venice failure, not a blip. Log the cause: the
-      // Supabase edge gateway records only the 502 status code, not this
-      // body, so without this line an upstream failure is opaque from
-      // `supabase logs` / the MCP get_logs view - you'd have to catch the
-      // response live in the browser. err.message already embeds Venice's
-      // status + a body snippet for kind='http'.
-      console.error(
-        `[venice/complete] upstream failure kind=${err.kind} status=${err.status ?? 'n/a'}: ${err.message}`,
-      );
-      return json({ error: err.message, kind: err.kind }, 502);
-    }
-    // Non-VeniceError here is an unexpected throw (a code bug, not an
-    // upstream relay); log the whole thing - stack included - so it is
-    // not a silent 500.
-    console.error('[venice/complete] unexpected error:', err);
-    return json({ error: (err as Error).message }, 500);
-  }
-}
-
-/**
  * Browser-triggered relay for POST /decisions, the beta decision-model
- * endpoint. Mirrors handleComplete: shape checks up front, shared-key
- * relay, and the same error mapping. The caller owns the body shape
+ * endpoint. Shape checks up front, shared-key relay, and the sibling
+ * error mapping (429 with retryAfterMs, 502 with the upstream cause
+ * logged, 500 unexpected). The caller owns the body shape
  * (model, state, questions) and the answer coercion - the helper and
  * this handler inspect nothing, so beta wire drift surfaces as an
  * upstream 400 instead of a coercion bug.
@@ -541,8 +453,10 @@ async function handleDecisions(req: Request): Promise<Response> {
     return json({ error: 'body must be a JSON object' }, 400);
   }
 
-  // Same blocked-model policy as /complete: a refused id in the wire
-  // body is rejected before the shared key is even sourced.
+  // Blocked-model policy (../_shared/blocked-models.ts): a Grok id in
+  // the wire body is refused before the shared key is even sourced.
+  // The pickers cannot send one; this catches stale stored profiles
+  // and hand-crafted calls.
   const decisionModel = (body as Record<string, unknown>).model;
   if (typeof decisionModel === 'string' && isBlockedModelId(decisionModel)) {
     return json({ error: 'model is not allowed' }, 403);
@@ -1349,7 +1263,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'deep-sleep-run' && req.method === 'POST') return handleDeepSleepRun(req);
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
   if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
-  if (route === 'complete' && req.method === 'POST') return handleComplete(req);
   if (route === 'decisions' && req.method === 'POST') return handleDecisions(req);
   if (route === 'stream' && req.method === 'POST') return handleStream(req);
   // MCP integration routes - dispatched via the handler module so

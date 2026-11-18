@@ -1,7 +1,7 @@
 /**
  * Venice edge-function proxy slice of the Supabase data layer: every
  * browser call that rides functions.invoke into the `venice` edge
- * function - /complete, /embed, /usage-analytics, /models, and
+ * function - /decisions, /embed, /usage-analytics, /models, and
  * /text-parser. The function holds the shared Venice key server-side;
  * the browser never sees it, and failures surface as VeniceError so
  * call sites render the same error shape a direct Venice call would
@@ -24,14 +24,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createLogger } from '../logger.svelte';
 import type {
-  ChatCompletion,
-  ChatRequest,
   EmbeddingRequest,
   EmbeddingResponse,
 } from '../venice';
 import {
-  buildChatBody,
-  parseChatCompletion,
   VeniceError,
 } from '../venice';
 import { coerceCatalog, type CatalogModel } from '../models/catalog';
@@ -70,7 +66,7 @@ export async function veniceFunctionError(error: unknown): Promise<VeniceError> 
     }
     const message = payload.error ?? `venice function request failed (HTTP ${ctx.status})`;
     const kind = ctx.status === 429 ? 'rate_limit' : 'http';
-    // The /complete route relays Venice's Retry-After / x-ratelimit-reset-*
+    // Decision-model relays route Venice's Retry-After / x-ratelimit-reset-*
     // hint through the JSON body since the headers themselves don't survive
     // the functions.invoke round trip. Carry the parsed window onto the
     // VeniceError so the browser's retry loop can act on it.
@@ -83,21 +79,8 @@ export async function veniceFunctionError(error: unknown): Promise<VeniceError> 
 }
 
 /**
- * Maximum attempts (initial + retries) before `SupabaseService.complete`
- * surfaces a 429 to the caller. Picked so a brief quota dip recovers
- * transparently while a stuck quota still surfaces within ~10s of total
- * wait. The streaming path in chat/loop.ts uses its own attempt count;
- * the non-streaming chat seam sits behind tool sub-calls and background
- * agents with no UI feedback, so a propagated 429 lands as a silent
- * `{error: "..."}` in a tool-result row or a swallowed agent failure -
- * being a bit more patient here trades a few seconds of latency for not
- * burning a turn.
- */
-const COMPLETE_RATE_LIMIT_MAX_ATTEMPTS = 5;
-
-/**
- * Fallback wait schedule for `complete` 429s, used only when the
- * function-side relayed no Retry-After or x-ratelimit-reset-* hint.
+ * Fallback wait schedule for `decide` 429s, used only when the
+ * function relayed no Retry-After or x-ratelimit-reset-* hint.
  * Log10-spaced from 1s to 5s across the four retry intervals:
  * 10^(i * log10(5) / 3) for i in 0..3. Smooths the request burst across
  * a quota reset window without piling up several seconds of wait on the
@@ -106,7 +89,7 @@ const COMPLETE_RATE_LIMIT_MAX_ATTEMPTS = 5;
 const COMPLETE_RATE_LIMIT_FALLBACK_WAIT_MS = [1_000, 1_710, 2_924, 5_000];
 
 /**
- * Hard cap on a single 429 wait inside `complete`. Mirrors
+ * Hard cap on a single 429 wait inside `decide`. Mirrors
  * RATE_LIMIT_WAIT_CAP_MS in chat/loop.ts: a Retry-After longer than a
  * minute almost certainly means a daily/monthly cap that won't clear
  * during the current call, so surface it as a hard error rather than
@@ -293,74 +276,53 @@ export async function extractText(
   return text;
 }
 
+/** Retry posture for decide(): the decision caller is fire-and-forget
+ * classification, so riding out two waits is plenty. */
+const DECIDE_MAX_ATTEMPTS = 3;
+
 /**
- * Non-streaming chat completion through the venice edge function's
- * /complete route. The browser builds Venice's wire-shape body via
- * buildChatBody and forwards it; the function holds the shared key
- * server-side and relays Venice's response (or error) verbatim. The
- * 429 retry loop stays browser-side: the non-streaming chat seam
- * sits behind tool sub-calls and background agents with no UI
- * feedback, so a propagated 429 lands silently in a tool-result row
- * or a swallowed agent failure - being a bit patient here trades a
- * few seconds of latency for not burning a turn.
+ * Relay one POST /decisions call (the beta decision models) through
+ * the venice edge function. `body` is the decision wire shape -
+ * `{ model, state, questions }` - built and coerced entirely by the
+ * caller: this proxy attaches nothing but the session JWT, and the
+ * function attaches nothing but the shared key. Returns Venice's
+ * parsed `{ model, answers, usage }` payload verbatim.
  *
- * Retry-After: Venice's hint travels through the function's 429
- * response body (retryAfterMs) since the underlying header does not
- * survive the functions.invoke round trip. Fallback when the hint is
- * absent: a log10-spaced 1s -> 5s schedule, hard-capped at 60s.
- * req.signal aborts both the in-flight invoke (when supabase-js
- * supports it) and the inter-attempt sleep.
- *
- * Streaming chat completion still talks to Venice directly from
- * src/lib/chat/loop.ts; the streaming attractor is the next driver-B
- * milestone.
+ * Retry posture: rate_limit and transient upstream failures are
+ * retried, honoring the relayed retryAfterMs hint with the fallback
+ * schedule - the same patience the retired /complete relay had.
  */
-export async function complete(
+export async function decide(
   client: SupabaseClient,
-  req: ChatRequest
-): Promise<ChatCompletion> {
-  const body = buildChatBody(req, false);
+  body: Record<string, unknown>
+): Promise<unknown> {
   let attempt = 0;
   while (true) {
-    let payload: unknown;
     try {
-      const { data, error } = await client.functions.invoke('venice/complete', {
+      const { data, error } = await client.functions.invoke('venice/decisions', {
         body,
       });
       if (error) throw await veniceFunctionError(error);
-      payload = data;
+      return data;
     } catch (err) {
       if (!(err instanceof VeniceError)) throw err;
-      const retriesExhausted = attempt >= COMPLETE_RATE_LIMIT_MAX_ATTEMPTS - 1;
-      if (
-        err.kind !== 'rate_limit' ||
-        retriesExhausted ||
-        req.signal?.aborted === true
-      ) {
-        throw err;
-      }
-      const hint = err.retryAfterMs;
+      const transient =
+        err.kind === 'rate_limit' ||
+        (err.kind === 'http' &&
+          typeof err.status === 'number' &&
+          err.status >= 500);
+      if (!transient || attempt >= DECIDE_MAX_ATTEMPTS - 1) throw err;
       const fallbackIdx = Math.min(
         attempt,
         COMPLETE_RATE_LIMIT_FALLBACK_WAIT_MS.length - 1
       );
-      const baseMs = hint ?? COMPLETE_RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
+      const baseMs = err.retryAfterMs ?? COMPLETE_RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
       const waitMs = Math.min(baseMs, COMPLETE_RATE_LIMIT_WAIT_CAP_MS);
       log.info(
-        `complete rate-limited (attempt ${attempt + 1}/${COMPLETE_RATE_LIMIT_MAX_ATTEMPTS}); waiting ${waitMs}ms before retry`
+        `decide rate-limited/transient (attempt ${attempt + 1}/${DECIDE_MAX_ATTEMPTS}); waiting ${waitMs}ms before retry`
       );
-      const interrupted = await sleepCancellable(waitMs, req.signal);
-      if (interrupted) {
-        // Aborted during the sleep. Throw a spec-shaped AbortError so
-        // callers' existing AbortError branches fire - same path a
-        // mid-fetch abort would have taken.
-        const abortErr = new Error('Aborted');
-        abortErr.name = 'AbortError';
-        throw abortErr;
-      }
+      await sleepCancellable(waitMs, undefined);
       attempt += 1;
-      continue;
     }
-    return parseChatCompletion(payload);
   }
 }

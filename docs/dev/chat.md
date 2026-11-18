@@ -331,36 +331,27 @@ A chat turn goes:
   round's assistant row was persisted - the round-boundary signal;
   see Gotchas), END (carries `terminalKind` and any conflict reason
   from `commit_assistant_message`), and control-channel events. Used
-  only by this main user-facing chat loop - background callers use
-  `SupabaseService.complete`.
-- `SupabaseService.complete(req): Promise<ChatCompletion>` -
-  non-streaming one-shot routed through venice/complete.
-  Returns the same fields the streaming path would produce
-  (`text`, `reasoning`, `toolCalls`, `usage`, `citations`,
-  `finishReason`) as a flat record. Lower latency for headless
-  callers (no SSE flush-per-token serialisation), and immune to
-  provider-specific stream-only failure modes (e.g. the silent
-  "stream completed with no text" condition the web_search tool
-  kept hitting on Venice). 429 responses are retried
-  transparently in this method (up to 5 attempts, honoring
-  Retry-After / x-ratelimit-reset-* when present, falling back
-  to a log10-spaced 1s -> 5s schedule otherwise, cancellable
-  via `req.signal`); a stuck quota still surfaces as a
-  `VeniceError(kind='rate_limit')` after retries exhaust. The
-  streaming path has its own retry surface server-side - the
-  function emits a `rate_limit_retry` event around the sleep so
-  the UI can pulse a banner. Distinct from the 429 loop:
-  `veniceComplete` (function-side, in `_shared/venice/complete.ts`) retries
-  *transient* upstream failures - an upstream 5xx or a connection
-  drop - on a fixed `[500, 1500, 4000]ms` backoff before giving up,
-  so a brief Venice hiccup no longer fails the whole non-streaming
-  call (auto-title, intuition, context recall, web_search, and the
-  summary/topics/bias agents all ride this path). 429 is excluded
-  there on purpose - this `SupabaseService.complete` loop already
-  owns it. A 502 from `/complete` therefore now means the retry
-  schedule was exhausted (sustained outage), and the handler logs
-  `kind`/`status`/message to the function logs since the edge
-  gateway records only the bare status code. The streaming wrapper
+  only by this main user-facing chat loop.
+- `SupabaseService.complete` was retired: the grocery classifier, its
+  only browser-side caller, moved to the beta decision models, and
+  the /complete route went with it. Browser callers needing one-shot
+  Venice work use `SupabaseService.decide` (the /decisions relay) or
+  the streaming path. Edge-side agents never rode this method - they
+  call Venice directly through the `veniceComplete` helper
+  (`_shared/venice/complete.ts`), which stays.
+- The `veniceComplete` helper retries *transient* upstream failures -
+  an upstream 5xx or a connection drop - on a fixed
+  `[500, 1500, 4000]ms` backoff before giving up, so a brief Venice
+  hiccup no longer fails the whole call (auto-title, intuition,
+  context recall, web_search, and the summary/topics/bias agents all
+  ride this path). 429 is retried only on the helper's `retryRateLimit`
+  opt-in, which the background agents set: they have no browser
+  rate-limit loop behind them, so a single "model overloaded" 429
+  would otherwise fail the whole sub-call. A 502 from a decisions
+  relay therefore means the retry schedule was exhausted (sustained
+  outage), and the handler logs `kind`/`status`/message to the
+  function logs since the edge gateway records only the bare status
+  code. The streaming wrapper
   (`withRateLimitRetry` in `getStreamingCompletion.ts`) carries its
   own retry classes: rate-limit (Retry-After-aware), mid-stream
   truncation, strict-validation strip-and-retry, and - since the
