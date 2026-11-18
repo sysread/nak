@@ -264,6 +264,13 @@ description = "Deno unit tests for the edge functions (offline - fake fetch, no 
 # --allow-env: publishSamskaraMint probes SUPABASE_URL/SERVICE_ROLE and
 # returns early without them (offline by construction), but the probe
 # itself needs env read permission.
+# bundle-docs first: deno type-checks the full graph it loads, and one of
+# the modules imports the gitignored research-docs corpus - on CI (fresh
+# clone) the corpus doesn't exist until the bundler runs, and the parallel
+# gate raced deno's graph resolution against it (observed 2026-11-18:
+# TS2307 on research_docs.ts while functions-check's own bundle-docs
+# dependency won the same race).
+depends = ["bundle-docs"]
 run = "deno test --allow-env --config supabase/functions/deno.json supabase/functions/tests/"
 
 [tasks.functions-check]
