@@ -68,6 +68,12 @@ Clef keeps the zero-retention posture nak already guarantees.
   full distribution + confidence; score with legend + distribution +
   confidence).
 
+Provenance: the API contract above (endpoint, question types,
+limits, model ids) rests on docs.venice.ai and the 2026-11-18 live
+probes. Nothing vendored in-repo documents it - the vendored
+`venice-*` skills predate the feature - so these facts are not
+repo-checkable; RISKS covers the beta-drift consequence.
+
 ## BRAINSTORM: candidate applications
 
 Ranked by fit. The dividing line in every case: decision models
@@ -171,7 +177,11 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
   (`price-cap.ts:31`, `image-model-constraints.ts:25`); 13 test
   files import from `'../_shared/venice.ts'`. Code moves verbatim:
   no signature changes, no behavior edits, no comment rewrites
-  beyond the moves' own headers. The file-plus-directory layout is
+  beyond the moves' own headers - except relative-import
+  specifiers, which rewrite when a move crosses the directory line
+  (the `./venice-stream.ts` type import becomes
+  `../venice-stream.ts` from inside `_shared/venice/`). The
+  file-plus-directory layout is
   safe under Deno: every site uses an explicit `.ts` specifier and
   `supabase/functions/deno.json` has no bare-specifier mapping that
   could collide.
@@ -233,10 +243,11 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
   shapes may move without notice, the relay stays thin on purpose.
 - **M3 - `/decisions` route.** `handleDecisions` in
   `supabase/functions/venice/index.ts` per D5, registered in the
-  serve block next to the `/complete` line
-  (`index.ts:1292`), with the same 429/502/500 error mapping and
-  the upstream-failure `console.error` that keeps the 502 legible
-  in `supabase logs` (`index.ts:500-515`).
+  serve block next to the `/complete` line (`index.ts:1292`) and
+  added to the file-header route inventory (`index.ts:4-35`,
+  `/complete` documented at `:29`), with the same 429/502/500 error
+  mapping and the upstream-failure `console.error` that keeps the
+  502 legible in `supabase logs` (`index.ts:500-515`).
 - **M4 - `tests/venice-decisions.test.ts`.** Mirrors
   `tests/venice-complete.test.ts:9-43`: injected-fetch verbatim
   forward + parsed-response passthrough, 429 -> `rate_limit` with
@@ -254,7 +265,14 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
   `docs/dev/tools.md:118`. Plus the one code comment that names the
   file in prose, `src/lib/venice.ts:685`. Historical plan docs
   (`docs/dev/plans/image-editing-plan.md` and siblings) are
-  point-in-time records and stay as written. This plan doc is the
+  point-in-time records and stay as written. Four function-tree
+  comments name `_shared/venice.ts` in prose
+  (`_shared/backfill.ts:20`, `venice/inline-images.ts:46`,
+  `venice/getStreamingCompletion.ts:95`, `venice/feature-rejections.ts:25`)
+  and deliberately keep pointing at the barrel: the barrel stays
+  the stable import surface and re-exports every symbol they name,
+  so their claims remain true after the split. Repointing is a
+  living-docs treatment only. This plan doc is the
   brainstorm record.
 
 ## VERIFICATION
