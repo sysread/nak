@@ -462,18 +462,41 @@ session and clears the marks; starting always begins fresh.
   survives a reload or a PWA eviction mid-cook - the realistic
   failure the sessionStorage alternative died in. Several recipes
   cook at once, one map entry each (main + side).
+- **Marks are OPTIMISTIC and serialized** (the at-store check-off
+  rebuild's medicine, ported): a tap flips the row the instant it is
+  tapped and the write persists through the session-map queue below;
+  settles apply LATEST-TAP-WINS, so an older write landing late
+  never flips a row back over a newer tap. A no-op write (the
+  session entry is gone: ended, expired, or a stop queued ahead) or
+  a failed write rolls the row back to fetched truth; a double
+  failure (write AND refetch) strands the flip until the next
+  successful write. Reads and writes ride the shared 15s request
+  bound (`src/lib/request-timeout.ts`) - a hung request must not
+  stall the queue or leave a row stuck.
 - **Expiry is read-side only**: midnight, or after 6 hours,
   whichever first - an abandoned entry just reads as inactive and
   the next session-map write prunes it (`pruneExpiredSessions`
   folded into every mutator). No cron, no cleanup write.
 - **The shared map**: the shopping trip shares the settings key, so
-  every write goes through `updateActiveSessions` (fresh read ->
-  mutate -> merge-RPC write). Writing a map read earlier would
-  clobber a session another surface added in between - the map is
-  one settings key and the merge RPC is shallow (top-level keys
-  only). Two devices marking ingredients concurrently can still
-  last-write-wins within the map; accepted (single user, rare,
-  recoverable by re-tapping).
+  every write goes through `updateActiveSessions` - which now
+  SERIALIZES a client's mutations through a per-client promise
+  chain (WeakMap on the client instance): the merge RPC is atomic
+  per top-level settings key, but `activeSessions` is one such key,
+  so overlapping read-modify-write cycles still converged
+  last-write-wins within the map - the rapid-mark stomp. The chain
+  makes each mutate closure see every earlier write; a failed
+  mutation rejects only its own caller. Every caller goes through
+  the helper; nobody composes the map from a stale read. Two
+  devices marking concurrently still last-write-wins; accepted
+  (single user, rare, recoverable by re-tapping) - and no realtime
+  relay covers `profiles.settings`, so a mark lost to another tab's
+  write shows optimistically checked in that tab until its next
+  settings read.
+- **Apply-time currency guards**: every session-map apply checks the
+  recipe id against the open pane, and the session-load fetch skips
+  its apply when a session-map write settled while it was in flight
+  (its read was pre-write). Switching recipes mid-write stamps
+  nothing across recipes.
 - **Renderer stays unaware**: cooking mode reuses the exact
   `ingredientCheckboxes` markup; the sync effect branches on
   `cookingActive` (checked state from the used set, `.cook-used`

@@ -223,7 +223,10 @@ below name which surface they mean.
 - (18) Add-all puts every ingredient on the list (checkboxes all
   checked; `bread flour` is a NEW product - the rename dropped old
   `flour`); tapping the `salt` TEXT unchecks it - the whole row is
-  the toggle target.
+  the toggle target. A tap that lands while the batch is still
+  writing is IGNORED (per-name pending guard - it would
+  double-create the product): wait for the list to settle, then
+  re-tap.
 - (19) The re-checked `eggs` lands directly under **Bakery** - the
   product row survived the uncheck, so its section came back with
   it.

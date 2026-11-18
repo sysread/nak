@@ -105,6 +105,14 @@
     withCookingSession,
     withUsedIngredient,
   } from '$lib/ui/active-sessions';
+  import {
+    createLoadGeneration,
+    createUsedMarkSync,
+    registerNames,
+    toggleUsedKey,
+    withoutNames,
+  } from '$lib/ui/cookbook-screen';
+  import { withRequestTimeout } from '$lib/request-timeout';
   import { cookingSessionKey } from '$lib/supabase';
   import {
     arrayBufferToBase64,
@@ -1075,6 +1083,16 @@
   // event, which also covers the invalidation trigger's delete after
   // a recipe edit.
   let recipeGroceryItems = $state<GroceryProductView[]>([]);
+  // Names with a bridge write in flight (spinner in the check slot,
+  // re-taps ignored) and the generation counter that makes start
+  // order - not resolve order - decide which reload snapshot wins.
+  let pendingNames = $state<ReadonlySet<string>>(new Set());
+  const recipeLoadGen = createLoadGeneration();
+  // Settle promises of in-flight bridge writes - Add-all awaits them
+  // (Promise.allSettled) before probing, so a single tap in flight
+  // when the batch starts lands its product and the batch revives it
+  // instead of duplicating.
+  const bridgeWriteSettles = new Set<Promise<unknown>>();
 
   async function loadRecipeGroceryItems(): Promise<void> {
     const id = activeId;
@@ -1082,18 +1100,35 @@
       recipeGroceryItems = [];
       return;
     }
+    const token = recipeLoadGen.next();
     try {
-      recipeGroceryItems = await app.supabase.listGroceryProductsForRecipe(id);
+      const items = await withRequestTimeout(
+        app.supabase.listGroceryProductsForRecipe(id)
+      );
+      // Start order wins: a superseded run assigns nothing, so a
+      // slow older fetch can never overwrite a newer snapshot.
+      if (!recipeLoadGen.isCurrent(token)) return;
+      recipeGroceryItems = items;
     } catch {
-      // Non-fatal for the recipe view - the checkboxes just render
-      // unchecked until the next successful refetch.
-      recipeGroceryItems = [];
+      // Keep the prior items: assigning [] here would uncheck every
+      // box from one transient error. The switch effect's synchronous
+      // clear is the recipe-change wipe, so keep-prior only ever
+      // keeps the CURRENT recipe's data.
     }
   }
 
   $effect(() => {
     // Reads activeId so a recipe switch refetches.
     void activeId;
+    // Recipe identity reset: the explicit clear replaces the failed
+    // fetch's old []-assignment as the cross-recipe guard - keep-prior
+    // on a failed fetch now only ever keeps this recipe's data. The
+    // pending/classifying sets clear with it: they are name-keyed,
+    // so recipe A's in-flight "garlic" must not spin or block
+    // recipe B's.
+    recipeGroceryItems = [];
+    pendingNames = new Set();
+    classifyingNames = new Set();
     void loadRecipeGroceryItems();
     return onGroceryChange(() => void loadRecipeGroceryItems());
   });
@@ -1147,6 +1182,7 @@
     void detailHtml;
     const items = recipeGroceryItems;
     const busy = classifyingNames;
+    const pending = pendingNames;
     const cooking = cookingActive;
     const used = usedRows;
     if (!el || !parsedDetail) return;
@@ -1166,16 +1202,17 @@
       }
       // Checked = the matched product is on the current list. One
       // that was bought or removed on the list side reads unchecked
-      // here; re-checking revives it (see onRenderChange).
-      input.checked = entries.get(key)?.onList === true;
+      // here; re-checking revives it (see onRenderChange). While a
+      // name is busy (section classifier or a pending write) the
+      // checked-state reconciliation is skipped - a reload landing
+      // mid-write would flicker the row - and the box renders as a
+      // spinner (CSS on .cook-buy-busy) and stops accepting clicks.
+      const busyNow = busy.has(key) || pending.has(key);
+      if (!busyNow) input.checked = entries.get(key)?.onList === true;
       input.ariaLabel = groceryCheckboxAriaLabel(rawName);
       li?.classList.remove('cook-used');
-      // While the section classifier runs for this ingredient, the
-      // box renders as a spinner (CSS on .cook-buy-busy) and stops
-      // accepting clicks - a toggle mid-classification would race
-      // the background save.
-      input.classList.toggle('cook-buy-busy', busy.has(key));
-      input.disabled = busy.has(key);
+      input.classList.toggle('cook-buy-busy', busyNow);
+      input.disabled = busyNow;
     }
   });
 
@@ -1192,32 +1229,57 @@
     if (!recipe || !parsed || !app.supabase || addAllBusy) return;
     const supabase = app.supabase;
     addAllBusy = true;
+    let batchNamesLocal: string[] = [];
     void (async () => {
       try {
+        // The batch races single taps in BOTH directions: its probe
+        // reading pre-write state can double-create a product a
+        // single tap is creating, and a single tap starting mid-batch
+        // can double-create one the batch is creating. Register the
+        // batch's names SYNCHRONOUSLY first (same tick as this click,
+        // before any await - a same-tick tap must already see them
+        // pending), then drain the in-flight single-tap writes so the
+        // probe below revives their products instead of duplicating.
+        batchNamesLocal = [
+          ...new Set(
+            parsed.ingredients
+              .map((i) => normalizeGroceryName(i.name))
+              .filter((n) => n)
+          ),
+        ];
+        pendingNames = registerNames(pendingNames, batchNamesLocal);
+        await Promise.allSettled([...bridgeWriteSettles]);
         const entries = recipeCheckboxItemIds(parsed.ingredients, recipeGroceryItems);
         const { reviveIds, create } = partitionIngredientsForAdd(
           parsed.ingredients,
           entries
         );
         for (const id of reviveIds) {
-          await supabase.setProductOnList(id, true);
+          await withRequestTimeout(supabase.setProductOnList(id, true));
         }
         const created: Array<{ id: string; name: string }> = [];
         for (const ingredient of create) {
-          const product = await supabase.createGroceryProduct(
-            groceryProductFromIngredient(ingredient, {
-              id: recipe.id,
-              title: recipe.title,
-            })
+          const product = await withRequestTimeout(
+            supabase.createGroceryProduct(
+              groceryProductFromIngredient(ingredient, {
+                id: recipe.id,
+                title: recipe.title,
+              })
+            )
           );
           created.push({ id: product.id, name: product.name });
         }
         // One classification call for the whole batch - revived
         // products keep their remembered sections and are not
-        // re-classified.
-        classifyRecipeProducts(created, recipe);
+        // re-classified. Currency-guarded like the single-tap path.
+        if (recipe.id === activeId) classifyRecipeProducts(created, recipe);
       } finally {
-        await loadRecipeGroceryItems();
+        await withRequestTimeout(loadRecipeGroceryItems());
+        // The batch's names leave the pending set only after the
+        // reload settles. The emit stays in finally - a partial batch
+        // failure HAS landed server changes, so the nudge is correct
+        // here; emit-on-success is a single-write rule.
+        pendingNames = withoutNames(pendingNames, batchNamesLocal);
         emitGroceryChange();
         addAllBusy = false;
       }
@@ -1248,7 +1310,18 @@
     if (!recipe || !parsed || !app.supabase) return;
     const supabase = app.supabase;
     const key = normalizeGroceryName(target.dataset.ing ?? '');
-    void (async () => {
+    // Mid-save re-taps are ignored: the row's write is already in
+    // flight, and a second probe reading pre-write state would
+    // double-create the product (uniqueness is a client-side probe,
+    // nothing in the DB enforces it). The guard reads the SAME
+    // reactive set Add-all registers its batch names into - one
+    // source of truth; a parallel controller's internal set was the
+    // bug: it never learned about batch registrations, so a
+    // same-tick tap sailed through and double-created.
+    if (pendingNames.has(key)) return;
+    pendingNames = registerNames(pendingNames, [key]);
+    const run = (async () => {
+      let wrote = false;
       try {
         const existing = recipeCheckboxItemIds(parsed.ingredients, recipeGroceryItems);
         const entry = existing.get(key);
@@ -1257,36 +1330,64 @@
             // A product already exists (bought on a past trip, or
             // un-planned earlier) - revive it, keeping its learned
             // section, instead of inserting a duplicate.
-            if (!entry.onList) await supabase.setProductOnList(entry.id, true);
+            if (!entry.onList) {
+              await withRequestTimeout(supabase.setProductOnList(entry.id, true));
+              wrote = true;
+            }
           } else {
             const ingredient = parsed.ingredients.find(
               (i) => normalizeGroceryName(i.name) === key
             );
             if (ingredient) {
-              const product = await supabase.createGroceryProduct(
-                groceryProductFromIngredient(ingredient, {
-                  id: recipe.id,
-                  title: recipe.title,
-                })
+              const product = await withRequestTimeout(
+                supabase.createGroceryProduct(
+                  groceryProductFromIngredient(ingredient, {
+                    id: recipe.id,
+                    title: recipe.title,
+                  })
+                )
               );
+              wrote = true;
               // First time this ingredient exists for the recipe -
-              // let the classifier file it (recipe as context).
-              classifyRecipeProducts(
-                [{ id: product.id, name: product.name }],
-                recipe
-              );
+              // let the classifier file it (recipe as context). The
+              // currency check keeps a write settling after a recipe
+              // switch from re-populating the NEW recipe's busy set.
+              if (recipe.id === activeId) {
+                classifyRecipeProducts(
+                  [{ id: product.id, name: product.name }],
+                  recipe
+                );
+              }
             }
           }
         } else if (entry) {
-          await supabase.removeProductFromList(entry.id);
+          await withRequestTimeout(supabase.removeProductFromList(entry.id));
+          wrote = true;
         }
       } finally {
-        await loadRecipeGroceryItems();
-        // Nudge an open Groceries tab in this same client immediately -
-        // the realtime echo also arrives, but round-trips noticeably.
-        emitGroceryChange();
+        // The reload runs on failure too: it is the mechanism that
+        // restores the natively-toggled checkbox to server truth.
+        await withRequestTimeout(loadRecipeGroceryItems());
+        // The name leaves the pending set only AFTER the reload
+        // settles - the sync effect never reconciles this row against
+        // the stale pre-write snapshot.
+        pendingNames = withoutNames(pendingNames, [key]);
+        // A failed write produced no server change, so there is
+        // nothing for the nudge to accelerate (the realtime echo
+        // covers correctness; the emit is a latency nudge).
+        if (wrote) emitGroceryChange();
       }
     })();
+    // The settle registry is what Add-all drains against: its write
+    // settle promises, independent of the reactive pending set. The
+    // run itself never rejects outward - failures surface through the
+    // keep-prior reload (the silent-by-design bridge failure path).
+    bridgeWriteSettles.add(run);
+    void run
+      .catch(() => {})
+      .finally(() => {
+        bridgeWriteSettles.delete(run);
+      });
   }
 
   // --- cooking mode ("Make this now") ---
@@ -1330,19 +1431,31 @@
     )
   );
 
-  // Adopt a session map into local state for the open recipe.
+  // Adopt a session map into local state for the open recipe. The
+  // currency check is load-bearing: a write or refetch resolving after
+  // the pane switched recipes must not stamp recipe A's marks onto
+  // recipe B's session state.
   function applyCookingSessions(
     sessions: Record<string, ActiveSession> | undefined,
     id: string | null
   ): void {
+    if (id !== activeId) return;
     const entry = id ? sessions?.[cookingSessionKey(id)] : undefined;
     cookingStartedAt = entry?.startedAt;
     usedRows = new Set(entry?.used ?? []);
   }
 
   // Load this recipe's session (if any) whenever the detail pane
-  // switches recipes. A failed read keeps the prior state - the next
-  // toggle or mark writes fresh state anyway.
+  // switches recipes. Two guards decide whether the fetched state may
+  // apply: the apply-time currency check inside applyCookingSessions
+  // (id must still be the open recipe), and the settled-write counter
+  // - a session-map write that settled while the fetch was in flight
+  // already applied its own post-write state, and this fetch read
+  // PRE-write settings, so applying it would revert that write (the
+  // switch-away-and-back case: the write's mark would visibly
+  // uncheck). A failed read keeps the prior state - the next toggle
+  // or mark writes fresh state anyway.
+  let sessionWritesSettled = 0;
   $effect(() => {
     const id = activeId;
     if (!id || !app.supabase) {
@@ -1350,9 +1463,11 @@
       usedRows = new Set();
       return;
     }
+    const settledAtStart = sessionWritesSettled;
     void (async () => {
       try {
         const settings = await app.supabase!.getSettings();
+        if (settledAtStart !== sessionWritesSettled) return;
         applyCookingSessions(settings.activeSessions, id);
       } catch {
         // Non-fatal - see comment above.
@@ -1362,8 +1477,11 @@
 
   // Toggle the session. Starting always begins fresh (empty used
   // list); ending clears the marks entirely - the session is over.
-  // Writes go through updateActiveSessions' fresh read so a session
-  // another surface wrote meanwhile survives the map replacement.
+  // Writes go through updateActiveSessions' per-client queue so a
+  // session another surface wrote meanwhile survives the map
+  // replacement, and the settled-write counter moves so an in-flight
+  // session-load fetch for this recipe cannot overwrite the result
+  // with its pre-write read.
   function toggleCooking(): void {
     const supabase = app.supabase;
     const id = activeId;
@@ -1380,10 +1498,12 @@
             new Date()
           )
         );
+        sessionWritesSettled++;
         applyCookingSessions(settings.activeSessions, id);
         cookingClockTick = Date.now();
         cookingError = null;
       } catch (err) {
+        sessionWritesSettled++;
         cookingError = errMsg(err);
       } finally {
         cookingBusy = false;
@@ -1392,34 +1512,51 @@
   }
 
   // One ingredient checkbox in cooking mode: toggle "used" for that
-  // row and persist. No grocery writes, no grocery events - the
-  // grocery bridge is fully bypassed while cooking. On failure the
-  // refetch re-derives state from what actually landed, rolling the
-  // checkbox back (same discipline as the grocery handler).
-  function onCookingIngredientToggle(input: HTMLInputElement): void {
-    const supabase = app.supabase;
-    const id = activeId;
-    if (!supabase || !id || cookingBusy) return;
-    const name = normalizeGroceryName(input.dataset.ing ?? '');
-    const row = Number(input.dataset.row);
-    if (!name || !Number.isInteger(row)) return;
-    const key = usedIngredientKey(row, name);
-    void (async () => {
+  // row. Optimistic - the strikethrough lands at tap time and the
+  // write persists through the session-map queue (createUsedMarkSync).
+  // No grocery writes, no grocery events - the grocery bridge is
+  // fully bypassed while cooking. The sync's settle gate applies
+  // latest-tap-wins; the double-failure case (write fails AND the
+  // truth refetch fails) strands the optimistic flip until the next
+  // successful write, which re-derives the whole row set from what
+  // actually landed.
+  const usedMarkSync = createUsedMarkSync({
+    flip: (key) => {
+      usedRows = toggleUsedKey(usedRows, key);
+    },
+    enqueue: async (key, id) => {
+      const supabase = app.supabase;
+      if (!supabase) return undefined;
       try {
         const settings = await supabase.updateActiveSessions((sessions) =>
           withUsedIngredient(sessions, id, key)
         );
-        applyCookingSessions(settings.activeSessions, id);
-        cookingError = null;
+        sessionWritesSettled++;
+        return settings.activeSessions;
       } catch (err) {
         cookingError = errMsg(err);
+        sessionWritesSettled++;
         try {
-          applyCookingSessions((await supabase.getSettings()).activeSessions, id);
+          return (await supabase.getSettings()).activeSessions;
         } catch {
-          // Refetch failed too - the next successful write reconciles.
+          // Refetch failed too - apply(undefined) strands the flip.
+          return undefined;
         }
       }
-    })();
+    },
+    apply: (sessions, id) => {
+      applyCookingSessions(sessions, id);
+      cookingClockTick = Date.now();
+    },
+  });
+
+  function onCookingIngredientToggle(input: HTMLInputElement): void {
+    const id = activeId;
+    if (!id || cookingBusy) return;
+    const name = normalizeGroceryName(input.dataset.ing ?? '');
+    const row = Number(input.dataset.row);
+    if (!name || !Number.isInteger(row)) return;
+    usedMarkSync.tap(usedIngredientKey(row, name), id);
   }
 
   // The version row currently being viewed read-only, or null when the

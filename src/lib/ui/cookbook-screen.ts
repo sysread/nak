@@ -22,6 +22,7 @@
 
 import { MAX_ATTACHMENT_BYTES } from '$lib/attachments';
 import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '$lib/recipe-limits';
+import type { ActiveSession } from '../supabase/types/settings';
 import type { Recipe, RecipePhoto, RecipePhotoInput } from '../supabase';
 import { findLoadedRecipe } from './recipe-list';
 
@@ -514,3 +515,129 @@ export function recipeDeleteConfirmMessage(recordCount: number | null): string {
   const noun = recordCount === 1 ? 'record' : 'records';
   return `This deletes the recipe and its ${recordCount} ${noun}. This cannot be undone.`;
 }
+
+// ---------------------------------------------------------------
+// Grocery-bridge pending guards + reload generation
+// ---------------------------------------------------------------
+
+/**
+ * Start-order generation counter for reloads that must never apply a
+ * stale snapshot: capture `next()` when the fetch starts, gate every
+ * state write on `isCurrent(token)`. Start order wins, not resolve
+ * order - the same discipline `loadGroceries` runs inline (the
+ * shopping-trip rebuild's fix for slow reloads silently un-doing
+ * check-offs). This is the first extracted instance; a bare counter
+ * cannot be shared as a plain function, hence the factory.
+ */
+export interface LoadGeneration {
+  next(): number;
+  isCurrent(token: number): boolean;
+}
+
+export function createLoadGeneration(): LoadGeneration {
+  let counter = 0;
+  return {
+     next: () => ++counter,
+    isCurrent: (token: number) => token === counter,
+  };
+}
+
+/**
+ * Register names into the bridge's reactive pending set - the ONE
+ * source of truth for the mid-save re-tap guard (the component's
+ * handler checks `pendingNames.has(key)` directly; a separate
+ * controller's internal set was the original bug: it never learned
+ * about batch registrations, so a same-tick tap sailed through and
+ * double-created). The caller MUST run this synchronously in the
+ * click's own tick - before any await - so a tap dispatched in that
+ * same tick already sees the names pending and is refused. Returns
+ * the snapshot to reassign the reactive pending set to.
+ */
+export function registerNames(
+  pending: ReadonlySet<string>,
+  names: ReadonlyArray<string>,
+): ReadonlySet<string> {
+  const next = new Set(pending);
+  for (const name of names) {
+    if (name) next.add(name);
+  }
+  return next;
+}
+
+/**
+ * Clear names (the single tap's own, or the whole Add-all batch)
+ * after their reload settles; returns the next snapshot.
+ */
+export function withoutNames(
+  set: ReadonlySet<string>,
+  names: ReadonlyArray<string>,
+): ReadonlySet<string> {
+  const next = new Set(set);
+  for (const name of names) next.delete(name);
+  return next;
+}
+
+// ---------------------------------------------------------------
+// Cooking-mode optimistic used-marks
+// ---------------------------------------------------------------
+
+/**
+ * Flip one used-key in the cooking session's rendered-row set.
+ * Reassigning (never mutating) is what makes the sync effect react.
+ */
+export function toggleUsedKey(
+  rows: ReadonlySet<string>,
+  key: string,
+): ReadonlySet<string> {
+  const next = new Set(rows);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
+
+/**
+ * Optimistic used-mark sync for cooking mode. A tap flips the row
+ * locally the instant it is tapped (instant strikethrough feedback)
+ * and the caller's `enqueue` persists it through the session-map
+ * write queue; settles apply LATEST-TAP-WINS - an older tap's settle
+ * never overwrites a newer tap's optimistic flip, which is what a
+ * naive re-derive-on-success would do under rapid mark/unmark taps.
+ *
+ * `enqueue` resolves with the session map to re-derive from: the
+ * post-write settings on success, a fresh read on failure (the
+ * rollback), or undefined when even the truth refetch failed - that
+ * double-failure strands the optimistic flip until the next
+ * successful write, and `apply(undefined)` keeps the local state.
+ * A no-op write (the session entry is gone: ended, expired, or a
+ * stop queued ahead) resolves with a map lacking the key, so the
+ * apply re-derives the row as unchecked - the rollback path.
+ */
+export interface UsedMarkSync {
+  /** Optimistically flip + enqueue the write for one used-key. */
+  tap(key: string, recipeId: string): void;
+}
+
+export function createUsedMarkSync(io: {
+  flip: (key: string) => void;
+  enqueue: (
+    key: string,
+    recipeId: string,
+  ) => Promise<Record<string, ActiveSession> | undefined>;
+  apply: (
+    sessions: Record<string, ActiveSession> | undefined,
+    recipeId: string,
+  ) => void;
+}): UsedMarkSync {
+  let issued = 0;
+  return {
+    tap(key: string, recipeId: string): void {
+      const tap = ++issued;
+      io.flip(key);
+      void io.enqueue(key, recipeId).then((sessions) => {
+        if (tap !== issued) return;
+        io.apply(sessions, recipeId);
+      });
+    },
+  };
+}
+

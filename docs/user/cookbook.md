@@ -225,6 +225,11 @@ the list. Click **Done cooking** (the same button) to end the
 session: the used marks clear and the checkboxes go back to
 grocery-list duty.
 
+- **Tap fast, nothing gets lost.** Marks land the moment you tap
+  and are saved in order, so checking off several ingredients in a
+  row - or toggling one on and off quickly - keeps every tap you
+  made. If a save can't finish (elevator, flaky wifi), the row
+  flips back and you can tap it again.
 - **Each row is its own mark.** If the same ingredient appears in
   two sections (black pepper in a spice mix and again in the soup),
   checking one leaves the other alone. Outside cooking mode those
@@ -314,7 +319,10 @@ history and the model does not toggle it on its own. It's a personal
 
 Every recipe's ingredient rows carry checkboxes that add items
 straight to the [grocery list](./grocery-list.md) - upcoming is
-just the "planning to cook this" marker, not a gate on that.
+just the "planning to cook this" marker, not a gate on that. A tap
+shows a small spinner until the item is saved, and quick double-taps
+can't create duplicates; **Add all** waits for any in-flight tap
+before it runs, so mixing the two still lands each ingredient once.
 
 ## Favorites
 

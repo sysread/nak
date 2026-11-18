@@ -149,7 +149,22 @@ owns current reality.
   `recipeToHtml(..., { ingredientCheckboxes })` on the live detail
   view, the delegated `onchange` handler on the render container,
   the checked-state sync effect, and the per-recipe grocery-row
-  fetch.
+  fetch. The fetch is GENERATION-GUARDED (factory in
+  `src/lib/ui/cookbook-screen.ts` - start order wins, not resolve
+  order, so a slow reload can never revert a checkbox) and
+  KEEPS PRIOR ITEMS on a failed fetch; the switch effect clears the
+  snapshot synchronously on recipe change, which is what makes
+  keep-prior safe. Bridge taps carry per-name pending guards
+  (re-taps ignored, spinner via the `.cook-buy-busy` union with the
+  classifier set, checked-state reconciliation skipped while busy,
+  name leaves only after the post-write reload settles) and emit on
+  success only - the reload staying in the handler's `finally` is
+  the failed-write un-flip mechanism. "Add all" registers its own
+  names synchronously in the click's tick (a same-tick tap must
+  already see them pending - behind a microtask it double-creates),
+  then drains the in-flight single-tap writes before probing.
+  Writes and reloads ride the shared 15s
+  request bound (`src/lib/request-timeout.ts`).
 - `src/lib/cooklang.ts` - `RecipeHtmlOptions.ingredientCheckboxes`:
   wraps each ingredient row in a `<label>` around an
   `<input class="cook-buy" data-ing="<raw name>">` so tapping the
@@ -438,8 +453,9 @@ the sidebar browse window, and the Cookbook detail pane's row fetch
 all subscribe. The sidebar's own toggle/add writes also emit the
 event directly - one nudge refreshes every grocery surface, and the
 realtime echo that follows is an idempotent no-op. The Cookbook
-checkbox handler also emits the event directly after its write so a
-same-client Groceries tab updates without waiting on the realtime
+checkbox handler also emits the event directly after a SUCCESSFUL
+write so a same-client Groceries tab updates without waiting on the
+realtime
 echo (the echo is a harmless idempotent refetch).
 
 `loadGroceries` itself is GENERATION-GUARDED: each call takes a
@@ -527,6 +543,14 @@ Deployed via its own line in `deploy.yml`.
   verbatim from cooklang; a numeric column would mangle "1/2" and
   "2-3". Don't add arithmetic (quantity merging) without changing
   the representation.
+- **Recipe-product uniqueness is a client-side probe, not a DB
+  constraint.** The per-name pending guard and Add-all's
+  synchronous batch registration close the same-tab races; two
+  racing writers
+  on DIFFERENT surfaces (checkbox + chat tool inside one round
+  trip) can still spawn duplicate `(recipe, name)` products.
+  Accepted until observed - the constraint fix needs a dedupe
+  migration and a conflict path in every create caller.
 - **Name normalization is the only ingredient identity.** Renaming
   a checkbox-added product in the list breaks its match with the
   recipe checkbox (the box shows unchecked again); the product still

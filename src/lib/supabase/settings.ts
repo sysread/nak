@@ -34,6 +34,7 @@ import {
 } from '../models/price-caps';
 import { isAccent, isColorMode, isUiStyle } from '../theme';
 import { isLogLevel } from '../logger.svelte';
+import { REQUEST_TIMEOUT_MS, withRequestTimeout } from '../request-timeout';
 
 /**
  * Mirror of the facade's getSession: unwrap client.auth.getSession(),
@@ -325,14 +326,50 @@ export async function updateSettings(
  * that pushed updateSettings onto the merge RPC. Every caller goes
  * through this helper; nobody composes the map from a stale read.
  *
+ * Mutations also SERIALIZE per client (the chain below). The merge
+ * RPC is atomic per top-level settings key, but `activeSessions` is
+ * one such key, so two overlapping cycles still converge
+ * last-write-wins within the map - both fresh reads precede both
+ * writes when taps land faster than the round trips. Chaining each
+ * client's mutations makes "the mutate closure sees every earlier
+ * write" hold under rapid taps; a rejected mutation rejects only its
+ * own caller while the chain advances for the next enqueued one.
+ * Read and write are each bounded by the shared request timeout
+ * (`opts.timeoutMs` to inject a shorter bound in tests) - a
+ * never-settling request would otherwise stall the chain and every
+ * future session-map write behind it.
+ *
  * Returns the post-write settings so the caller can re-derive its
  * local state from what actually landed (a failed write rolls the
  * caller's UI back by reading this).
  */
+const sessionWriteChains = new WeakMap<SupabaseClient, Promise<unknown>>();
+
 export async function updateActiveSessions(
   client: SupabaseClient,
-  mutate: (sessions: Record<string, ActiveSession>) => Record<string, ActiveSession>
+  mutate: (sessions: Record<string, ActiveSession>) => Record<string, ActiveSession>,
+  opts?: { timeoutMs?: number }
 ): Promise<UserSettings> {
-  const current = await getSettings(client);
-  return updateSettings(client, { activeSessions: mutate(current.activeSessions ?? {}) });
+  const bound = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const tail = sessionWriteChains.get(client) ?? Promise.resolve();
+  const run = tail
+    .catch(() => {
+      // The prior mutation's rejection is its own caller's to handle;
+      // the next enqueued mutation still reads fresh state and runs.
+    })
+    .then(() => runSessionMapMutation(client, mutate, bound));
+  sessionWriteChains.set(client, run);
+  return run;
+}
+
+async function runSessionMapMutation(
+  client: SupabaseClient,
+  mutate: (sessions: Record<string, ActiveSession>) => Record<string, ActiveSession>,
+  bound: number
+): Promise<UserSettings> {
+  const current = await withRequestTimeout(getSettings(client), bound);
+  return withRequestTimeout(
+    updateSettings(client, { activeSessions: mutate(current.activeSessions ?? {}) }),
+    bound
+  );
 }

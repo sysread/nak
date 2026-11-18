@@ -34,6 +34,7 @@ import type {
 } from './supabase';
 import { autoFileProducts } from './grocery-section-agent';
 import { emitGroceryChange } from './grocery-events';
+import { REQUEST_TIMEOUT_MS } from './request-timeout';
 import {
   ACQUIRED_PAGE_SIZE,
   applyOptimisticPurchase,
@@ -41,15 +42,9 @@ import {
   reconcilePendingToggles,
 } from './ui/grocery-list';
 
-/**
- * Bound for every loadGroceries query batch and every toggle write.
- * Without it, a request that black-holes on flaky wifi would pin
- * `loading` (the sidebar's mount gate reads it) or leave a row's
- * pending spinner running forever. Exported so the store tests can
- * drive the timeout without fake timers - `AbortSignal.timeout` is
- * not interceptable by vitest's clock.
- */
-export const REQUEST_TIMEOUT_MS = 15_000;
+// Bound for every loadGroceries query batch and every toggle write.
+// Lives in src/lib/request-timeout.ts so the data-layer slices share
+// the same constant without importing this Svelte module.
 
 interface GroceryState {
   /** User-ordered sections. The "Other" pseudo-section is not here. */

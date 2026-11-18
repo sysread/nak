@@ -7,7 +7,7 @@
  * wires these into Svelte reactivity; a port to another framework
  * would re-use this module untouched.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../src/lib/recipe-limits';
 import { SupabaseError } from '../src/lib/supabase/error';
 import type { Recipe, RecipePhoto } from '../src/lib/supabase';
@@ -16,6 +16,8 @@ import {
   MAX_RECIPE_PHOTOS,
   bookmarkAriaLabel,
   bookmarkButtonTitle,
+  createLoadGeneration,
+  createUsedMarkSync,
   editRecipeDraft,
   formatVersionDate,
   historySummaryLabel,
@@ -30,13 +32,18 @@ import {
   ratingChangeMessage,
   recipeDeleteConfirmMessage,
   recipeSaveError,
+  registerNames,
   resolveActiveRecipe,
   seedDraftPhotos,
   suggestedRevertMessage,
   trimmedOrNull,
+  toggleUsedKey,
   versionRowState,
+  withoutNames,
   type DraftPhoto,
 } from '../src/lib/ui/cookbook-screen';
+import { usedIngredientKey } from '../src/lib/ui/active-sessions';
+import type { ActiveSession } from '../src/lib/supabase/types/settings';
 
 function makeRecipe(over: Partial<Recipe> = {}): Recipe {
   return {
@@ -502,5 +509,173 @@ describe('recipeDeleteConfirmMessage', () => {
     expect(recipeDeleteConfirmMessage(null)).toBe(
       'Delete this recipe? This cannot be undone.'
     );
+  });
+});
+
+// ---------------------------------------------------------------
+// Grocery-bridge pending guards + reload generation
+// ---------------------------------------------------------------
+
+describe('createLoadGeneration', () => {
+  it('start order wins: a superseded run is never current', () => {
+    const gen = createLoadGeneration();
+    const first = gen.next();
+    const second = gen.next();
+    expect(gen.isCurrent(first)).toBe(false);
+    expect(gen.isCurrent(second)).toBe(true);
+  });
+});
+
+describe('registerNames', () => {
+  it('registers the batch names synchronously (no await before them)', () => {
+    // Same-tick semantics: the add-all click's own tick must already
+    // see the batch's names pending, so a tap dispatched in that same
+    // tick is refused. The old drain-then-register shape deferred the
+    // registration behind a microtask and a same-tick tap sailed
+    // through - double-creating the product.
+    const pending = registerNames(new Set(), ['flour', 'butter']);
+    expect(pending.has('flour')).toBe(true);
+    expect(pending.has('butter')).toBe(true);
+  });
+
+  it('keeps pre-existing pending names and skips empty strings', () => {
+    const pending = registerNames(new Set(['garlic']), ['flour', '']);
+    expect([...pending].sort()).toEqual(['flour', 'garlic']);
+  });
+});
+
+describe('withoutNames', () => {
+  it('clears the batch names without mutating the input set', () => {
+    const start = new Set(['flour', 'butter', 'salt']);
+    const cleared = withoutNames(start, ['flour', 'butter']);
+    expect([...cleared]).toEqual(['salt']);
+    expect(start.has('flour')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------
+// Cooking-mode optimistic used-marks
+// ---------------------------------------------------------------
+
+type SessionMap = Record<string, ActiveSession>;
+
+function markHarness() {
+  const flips: string[] = [];
+  const enqueued: Array<{ key: string; recipeId: string }> = [];
+  const applied: Array<{ sessions: SessionMap | undefined; recipeId: string }> = [];
+  let nextResult: () => Promise<SessionMap | undefined> = async () => ({});
+  const sync = createUsedMarkSync({
+    flip: (key) => flips.push(key),
+    enqueue: async (key, recipeId) => {
+      enqueued.push({ key, recipeId });
+      return nextResult();
+    },
+    apply: (sessions, recipeId) => applied.push({ sessions, recipeId }),
+  });
+  return {
+    sync,
+    flips,
+    enqueued,
+    applied,
+    resolveNext(result: Promise<SessionMap | undefined>) {
+      nextResult = () => result;
+    },
+  };
+}
+
+describe('toggleUsedKey', () => {
+  it('adds and removes a key without mutating the input set', () => {
+    const start = new Set<string>([usedIngredientKey(0, 'flour')]);
+    const added = toggleUsedKey(start, usedIngredientKey(1, 'butter'));
+    expect(added.has(usedIngredientKey(1, 'butter'))).toBe(true);
+    expect(start.has(usedIngredientKey(1, 'butter'))).toBe(false);
+    const removed = toggleUsedKey(added, usedIngredientKey(1, 'butter'));
+    expect(removed.has(usedIngredientKey(1, 'butter'))).toBe(false);
+    expect(added.has(usedIngredientKey(1, 'butter'))).toBe(true);
+  });
+});
+
+describe('createUsedMarkSync', () => {
+  it('flips optimistically at tap and applies the settled map', async () => {
+    const h = markHarness();
+    const settled: SessionMap = {
+      'cooking:1': { startedAt: '2026-11-17T00:00:00Z', used: ['0:flour'] },
+    };
+    h.resolveNext(Promise.resolve(settled));
+
+    h.sync.tap(usedIngredientKey(0, 'flour'), '1');
+    // The flip is local and immediate - before the write resolves.
+    expect(h.flips).toEqual([usedIngredientKey(0, 'flour')]);
+    expect(h.applied).toEqual([]);
+
+    await vi.waitFor(() => expect(h.applied).toHaveLength(1));
+    expect(h.applied[0].sessions).toEqual(settled);
+    expect(h.applied[0].recipeId).toBe('1');
+  });
+
+  it('an older tap\'s settle never overwrites a newer tap (latest-tap-wins)', async () => {
+    const h = markHarness();
+    let release1!: (v: SessionMap) => void;
+    const slow1 = new Promise<SessionMap>((res) => {
+      release1 = res;
+    });
+
+    h.resolveNext(slow1);
+    h.sync.tap(usedIngredientKey(0, 'flour'), '1');
+
+    // A newer tap issues while the first write is still in flight.
+    const newer: SessionMap = {
+      'cooking:1': { startedAt: '2026-11-17T00:00:00Z', used: [] },
+    };
+    h.resolveNext(Promise.resolve(newer));
+    h.sync.tap(usedIngredientKey(1, 'butter'), '1');
+    expect(h.flips).toHaveLength(2);
+
+    // The FIRST write settles late: its apply must be skipped, or it
+    // would flip the butter row back over the newer tap's state.
+    release1({
+      'cooking:1': { startedAt: '2026-11-17T00:00:00Z', used: ['0:flour'] },
+    });
+    await vi.waitFor(() => expect(h.applied).toHaveLength(1));
+    // The applied map is the NEWER tap's settle, not the older's.
+    expect(h.applied[0].sessions).toEqual(newer);
+  });
+
+  it('a failed write applies the refetched truth (rollback)', async () => {
+    const h = markHarness();
+    const truth: SessionMap = {
+      'cooking:1': { startedAt: '2026-11-17T00:00:00Z', used: [] },
+    };
+    h.resolveNext(Promise.reject(new Error('network gone')).catch(() => truth));
+
+    h.sync.tap(usedIngredientKey(0, 'flour'), '1');
+    await vi.waitFor(() => expect(h.applied).toHaveLength(1));
+    expect(h.applied[0].sessions).toEqual(truth);
+  });
+
+  it('a double failure (write and refetch) strands the flip as undefined', async () => {
+    const h = markHarness();
+    h.resolveNext(Promise.reject(new Error('network gone')).catch(() => undefined));
+
+    h.sync.tap(usedIngredientKey(0, 'flour'), '1');
+    await vi.waitFor(() => expect(h.applied).toHaveLength(1));
+    expect(h.applied[0].sessions).toBeUndefined();
+  });
+
+  it('a no-op write rolls the row back through the same apply path', async () => {
+    const h = markHarness();
+    // withUsedIngredient returns the map unchanged when the session
+    // entry is gone - the map lands WITHOUT the tapped key.
+    h.resolveNext(
+      Promise.resolve({
+        'cooking:1': { startedAt: '2026-11-17T00:00:00Z', used: [] },
+      })
+    );
+
+    h.sync.tap(usedIngredientKey(0, 'flour'), '1');
+    await vi.waitFor(() => expect(h.applied).toHaveLength(1));
+    expect(
+      h.applied[0].sessions?.['cooking:1'].used.includes(usedIngredientKey(0, 'flour'))
+    ).toBe(false);
   });
 });

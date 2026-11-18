@@ -76,6 +76,27 @@ bridge is untouched while cooking and fully intact after.
     mise run dev-sql "update profiles set settings = jsonb_set(settings, '{activeSessions,cooking:<recipe-id>,startedAt}', to_jsonb((now() - interval '7 hours')::text))"
     ```
 
+14. Consistency: cooking mode ON, tap `eggs`, `flour`, `milk` in
+    quick succession (under a second apart). Watch all three rows
+    and the counter.
+15. Navigate away and back mid-cook. Re-check the three rows.
+16. Consistency: cooking OFF, list empty. Double-click the `eggs`
+    checkbox fast (two clicks under ~300 ms). Check the grocery
+    rows with step 10's query.
+17. Consistency: clean the list (step-10 query to verify), tap
+    `flour`, then IMMEDIATELY click **Add all to grocery list**.
+    Check the rows for duplicates.
+18. Consistency: clean the list, click **Add all**, and while its
+    writes run tap the `eggs` checkbox. Check the rows.
+19. Consistency: with the list empty, tap `eggs` (bridge mode) and
+    immediately open the OTHER recipe and switch back. Check the
+    eggs box state and that no foreign items rendered.
+20. Consistency: cooking mode ON, browser offline, tap `eggs`;
+    wait out the request bound; back online, tap again. (The mark's
+    optimistic flip may strand until the retry - note which.)
+21. Consistency: cooking OFF, browser offline, tap `eggs`; wait;
+    back online, tap again. Watch the box revert and the spinner.
+
 ## Expected
 
 - (1) Both buttons render; three ingredient rows with grocery
@@ -109,6 +130,31 @@ bridge is untouched while cooking and fully intact after.
 - (13) A session older than 6 hours reads inactive on reload:
   toggle back to "Make this now", counter gone, aria labels back to
   the grocery verb, Add-all visible.
+- (13) A session older than 6 hours reads inactive on reload:
+  toggle back to "Make this now", counter gone, aria labels back to
+  the grocery verb, Add-all visible.
+- (14) Rapid cooking marks (three taps under a second apart): all
+  three rows end checked, counter 3 of 3. Pre-consistency baseline:
+  the first mark(s) could be silently unchecked by the last write.
+- (15) Navigate away and back mid-cook: all marks still checked.
+- (16) Bridge double-tap (two clicks under ~300 ms): exactly one
+  eggs product on the list. Baseline: two products, each with an
+  open entry.
+- (17) Single-tap flour then Add all immediately: every ingredient
+  exactly once, no duplicate flour. Baseline: duplicate flour
+  possible when the batch probe races the tap's write.
+- (18) Add all, then tap eggs mid-batch: the tap is ignored
+  (spinner/disabled) and no duplicate eggs appears. Baseline: a
+  duplicate was possible.
+- (19) Tap eggs (bridge mode) then immediately switch recipe and
+  back: eggs reads its server truth; no items from recipe A render
+  under recipe B.
+- (20) Cooking mode, browser offline, tap a checkbox: the row
+  reverts (or the error line shows) inside the request bound, never
+  stuck checked; back online, the tap lands.
+- (21) Bridge mode, offline, tap a checkbox: the box reverts to
+  unchecked inside the bound; online, the tap lands. Baseline: the
+  revert could stick or the spinner could hang on a hung request.
 
 ## Cleanup
 
@@ -123,3 +169,5 @@ Then stop the stack (`Ctrl-C` / SIGTERM to the dev-start process).
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-08-29 | local stack | 0acaf4ca | PASS | All steps as expected. Note: step 13's expiry is read-side only (the stale map entry persists until the next session-map write prunes it) - observed behavior matches the design. |
+| 2026-11-17 | local stack | 75262865 (pre-change baseline) | FAIL (as designed) | Steps 14 + 17 reproduced the races: flour's mark silently vanished under rapid taps (counter 2 of 3, row unchecked and stable); Add-all racing a single tap left TWO eggs products (SQL-confirmed: eggs x2, flour x2 rows). Steps 16 (fast double-tap) and 18 (revert race) did not reproduce under one attempt each - timing-dependent, as expected. Steps 1-6, 8-9, 15, 19, 20, 21 PASS. |
+| 2026-11-18 | local stack | 28b96465 (post-change) | PASS (after one fix) | Steps 1-6, 8-9, 14-17, 19-21 PASS. Step 14: three taps in 47 ms, all landed, counter optimistic. Step 18 FAILED on the first post-change run and the failure was REAL: an instrumented same-tick probe (add-all click + eggs tap dispatched back-to-back) double-created eggs - the pending guard read a separate controller's internal set that never learned about batch registrations. Fixed (guard reads the same reactive set the batch registers into, synchronously in the click's tick); re-probed: same-tick tap refused, exactly one product per ingredient. Two false symptoms documented along the way: a failed HMR hot update left a poisoned module whose batch handler threw ReferenceError (phantom "batch loses all writes" - a clean page load does not reproduce), and the Groceries tab's default recipe-ingredients filter hides rows (an empty-looking list with items present). |
