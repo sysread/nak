@@ -183,7 +183,7 @@ metadata-message details.
   there is no privacy reason to isolate it on a separate (e2ee) model -
   one shared, better-provisioned id also avoids the small-model 429
   overload that the earlier `e2ee-gpt-oss-20b-p` was prone to. The
-  sub-call opts into `retryRateLimit` (see `_shared/venice.ts`), so a
+  sub-call opts into `retryRateLimit` (see `_shared/venice/complete.ts`), so a
   transient 429 is ridden out rather than failing the cycle.
 - **`maxTokens` is 2048, not "title-sized."** The model sometimes
   emits a chain-of-thought preamble or ignores the length

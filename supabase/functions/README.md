@@ -68,8 +68,9 @@ Concretely:
 - Imports use explicit `.ts` extensions (Deno requirement).
 - The model registry is duplicated in miniature. `stream-guards.ts`
   carries `LEAKY_MODEL_IDS` mirroring the browser's
-  `leaksSpecialTokens` flag. `_shared/venice.ts` carries the
-  embed wire-shape. The header comment on `_shared/venice.ts`
+  `leaksSpecialTokens` flag. `_shared/venice.ts` (a re-export barrel
+  over the per-concern helpers in `_shared/venice/`) mirrors the
+  browser wire-shapes. The header comment on `_shared/venice.ts`
   documents this stance: *"Sharing the browser client is a
   consolidation-phase decision, not a step-5 one."*
 - Drift management is manual. When a browser-side capability

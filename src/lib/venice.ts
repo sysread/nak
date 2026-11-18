@@ -682,7 +682,7 @@ export function buildChatBody(req: ChatRequest, streaming: boolean): Record<stri
   // when Venice flattened the knob before forwarding). The edge
   // function recovers by stripping the field and re-issuing, per
   // request (see DROPPABLE_WIRE_FIELDS and stripModelQuirkFields in
-  // supabase/functions/_shared/venice.ts), so sending it
+  // supabase/functions/_shared/venice/complete.ts), so sending it
   // optimistically stays safe.
   if (req.verbosity) {
     body.text = { verbosity: req.verbosity };

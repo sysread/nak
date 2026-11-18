@@ -17,7 +17,7 @@ refinement record (kept for rationale) is
 
 ## Files
 
-- `supabase/functions/_shared/venice.ts` - the wire helpers
+- `supabase/functions/_shared/venice/image.ts` - the wire helpers
   `veniceEditImage` / `veniceUpscaleImage` / `veniceRemoveBackground`:
   camel-to-snake translation, binary response parsing (the edit
   family returns raw bytes with the format in `Content-Type`, unlike

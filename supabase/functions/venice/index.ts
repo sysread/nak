@@ -32,6 +32,11 @@
 //               browser's retry loop can act on Venice's hint. The streaming
 //               sibling (streamChat) is the project's final attractor and
 //               does not move yet.
+//   /decisions - browser-triggered, thin proxy for Venice's POST /decisions
+//               (beta decision models): evaluates a state against typed
+//               questions and relays the structured answers verbatim. The
+//               body is shaped and coerced by the caller; this route just
+//               attaches the shared key and forwards.
 //
 // The handlers are intentionally thin: request/response shaping, the Venice
 // call, and the backfill orchestration live in ../_shared/* (pure, unit-tested
@@ -40,6 +45,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   veniceComplete,
+  veniceDecision,
   veniceExtractText,
   veniceFetchModels,
   veniceFetchUsageAnalytics,
@@ -512,6 +518,60 @@ async function handleComplete(req: Request): Promise<Response> {
     // upstream relay); log the whole thing - stack included - so it is
     // not a silent 500.
     console.error('[venice/complete] unexpected error:', err);
+    return json({ error: (err as Error).message }, 500);
+  }
+}
+
+/**
+ * Browser-triggered relay for POST /decisions, the beta decision-model
+ * endpoint. Mirrors handleComplete: shape checks up front, shared-key
+ * relay, and the same error mapping. The caller owns the body shape
+ * (model, state, questions) and the answer coercion - the helper and
+ * this handler inspect nothing, so beta wire drift surfaces as an
+ * upstream 400 instead of a coercion bug.
+ */
+async function handleDecisions(req: Request): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return json({ error: 'body must be a JSON object' }, 400);
+  }
+
+  // Same blocked-model policy as /complete: a refused id in the wire
+  // body is rejected before the shared key is even sourced.
+  const decisionModel = (body as Record<string, unknown>).model;
+  if (typeof decisionModel === 'string' && isBlockedModelId(decisionModel)) {
+    return json({ error: 'model is not allowed' }, 403);
+  }
+
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
+
+  try {
+    const result = await veniceDecision({
+      apiKey,
+      body: body as Record<string, unknown>,
+    });
+    return json(result);
+  } catch (err) {
+    if (err instanceof VeniceError) {
+      if (err.kind === 'rate_limit') {
+        return json(
+          { error: err.message, kind: err.kind, retryAfterMs: err.retryAfterMs ?? null },
+          429
+        );
+      }
+      console.error(
+        `[venice/decisions] upstream failure kind=${err.kind} status=${err.status ?? 'n/a'}: ${err.message}`,
+      );
+      return json({ error: err.message, kind: err.kind }, 502);
+    }
+    console.error('[venice/decisions] unexpected error:', err);
     return json({ error: (err as Error).message }, 500);
   }
 }
@@ -1290,6 +1350,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
   if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
   if (route === 'complete' && req.method === 'POST') return handleComplete(req);
+  if (route === 'decisions' && req.method === 'POST') return handleDecisions(req);
   if (route === 'stream' && req.method === 'POST') return handleStream(req);
   // MCP integration routes - dispatched via the handler module so
   // the router stays a thin table. The ctx carries the router

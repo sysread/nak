@@ -296,9 +296,9 @@ Venice base URL; the function does.
   guards, persistence, retry/control-channel fan-out. See
   [Streaming and tool dispatch in the venice edge function](./chat.md).
 - `/complete`, `/embed`, `/text-parser`, `/usage`, `/models`,
-  `/image/generate` - one-shot relays. `/embed` uses the built-in
-  `Supabase.ai.Session('gte-small')` (local ONNX inference, no Venice
-  key); the rest relay to Venice.
+  `/image/generate`, `/decisions` - one-shot relays. `/embed` uses the
+  built-in `Supabase.ai.Session('gte-small')` (local ONNX inference,
+  no Venice key); the rest relay to Venice.
 - `/backfill` - service-role-only, the embedding backfill cron
   target; acks immediately and drains detached (same shape as the
   sweep routes).

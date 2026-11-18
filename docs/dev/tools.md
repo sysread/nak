@@ -115,7 +115,7 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   `enable_web_search: 'on'` + `enable_web_citations: true` and
   returns `{answer, citations}`. With `url`, posts the link to
   Venice's `/augment/scrape` endpoint (`veniceScrapeUrl` in
-  `_shared/venice.ts`) and returns `{url, content}` - the page as
+  `_shared/venice/scrape.ts`) and returns `{url, content}` - the page as
   markdown, capped at 32k chars with a `truncated` flag, plus a
   single self-citation so the page shows in the reply's sources
   panel. The split exists because the search pipeline is built

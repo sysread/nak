@@ -99,9 +99,10 @@ typed), the chat call runs only when the verdict says it is needed.
   path, against a full refresh fan-out that costs seconds. Open
   questions: where it runs (inside `runServerPriming` before the
   trigger evaluation), what state it sees (message only, or message
-  + cached payload digest), and the false-negative cost of skipping
-  a refresh. Privacy: the user's message would go to the decision
-  model on every turn - the private-tier model is load-bearing here.
+  plus a cached payload digest), and the false-negative cost of
+  skipping a refresh. Privacy: the user's message would go to the
+  decision model on every turn - the private-tier model is
+  load-bearing here.
 - **B2 - Second-thoughts verdict.** The reflex's disposition is a
   closed enum (`conviction | hedge | reframe | correct`,
   `supabase/functions/venice/agents/second_thoughts.ts:77-88`). A
@@ -225,12 +226,12 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
   proxy, its retry schedule, and the strict-validation wire-field
   machinery: `DROPPABLE_WIRE_FIELDS`, `hasWireField`,
   `deleteWireField`, `stripModelQuirkFields`, `rejectedWireField`),
-  `image.ts` (generate + the edit/upscale/background-remove family
-  + `base64FromBytesChunked`), `text-parser.ts`, `scrape.ts`,
-  `billing.ts` (usage analytics + key usage), `models.ts` (fetch +
-  the raw-catalog TTL cache), and `decisions.ts` (M2). `venice.ts`
-  becomes a barrel: the island-stance header comment plus one
-  `export * from` per submodule. Two private helpers cross the new
+  `image.ts` (the generate + edit/upscale/background-remove family
+  plus `base64FromBytesChunked`), `text-parser.ts`, `scrape.ts`,
+  `billing.ts` (usage analytics and key usage), `models.ts` (the
+  fetch plus the raw-catalog TTL cache), and `decisions.ts` (M2).
+  `venice.ts` becomes a barrel: the island-stance header comment
+  plus one `export * from` per submodule. Two private helpers cross the new
   file lines and become exported with a comment naming why:
   `parseVeniceRetryAfterMs` (complete + decisions) and
   `DEFAULT_BASE_URL` (currently an unexported `const` used at 10

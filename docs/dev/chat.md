@@ -262,7 +262,7 @@ A chat turn goes:
   thinking level, which is why it can look intermittent.
   Recovery, all server-side:
   - **Flash special case:** `stripModelQuirkFields` (in
-    `supabase/functions/_shared/venice.ts`) drops `text` before the
+    `supabase/functions/_shared/venice/complete.ts`) drops `text` before the
     first request when the model is z-ai-glm-5-3-flash AND
     `reasoning_effort` is present. Both senders call it. It is a
     hardcoded one-model exception, kept because flash is the default
@@ -272,7 +272,7 @@ A chat turn goes:
     (the pydantic extra-field shape, or the "Reasoning is mandatory"
     refusal that maps to `venice_parameters.disable_thinking`)
     strips that path from the body in place and re-issues (see
-    `DROPPABLE_WIRE_FIELDS` in `supabase/functions/_shared/venice.ts`),
+    `DROPPABLE_WIRE_FIELDS` in `supabase/functions/_shared/venice/complete.ts`),
     and emits a `wire_feature_rejected` signal. The one-shot
     `veniceComplete` helper (background agents, the browser's
     non-streaming completions proxy) does the same strip-and-retry
@@ -350,7 +350,7 @@ A chat turn goes:
   streaming path has its own retry surface server-side - the
   function emits a `rate_limit_retry` event around the sleep so
   the UI can pulse a banner. Distinct from the 429 loop:
-  `veniceComplete` (function-side, in `_shared/venice.ts`) retries
+  `veniceComplete` (function-side, in `_shared/venice/complete.ts`) retries
   *transient* upstream failures - an upstream 5xx or a connection
   drop - on a fixed `[500, 1500, 4000]ms` backoff before giving up,
   so a brief Venice hiccup no longer fails the whole non-streaming
@@ -911,7 +911,7 @@ A chat turn goes:
   write can never undo (each refresh only writes while the column is
   still set, so a mid-op null silences every later beat). The
   conversion now yields between chunks (`base64FromBytesChunked`,
-  `_shared/venice.ts`); the four-reader op-deadline extension remains
+  `_shared/venice/image.ts`); the four-reader op-deadline extension remains
   a documented standby in the plan if burial ever recurs.
 - **The heartbeat also covers the pre-row window.** The streaming
   row only exists from the first content delta, so it cannot
