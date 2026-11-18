@@ -278,6 +278,48 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
   living-docs treatment only. This plan doc is the
   brainstorm record.
 
+## B3 EXECUTION (appended 2026-11-18)
+
+Scope: convert the grocery auto-sectioning classifier to the
+Decisions endpoint (brainstorm B3). The `/decisions` route from the
+infra phase is the transport; the work is browser-side.
+
+- **E1 - Browser proxy.** `decide()` in
+  `src/lib/supabase/venice-proxy.ts` + a facade method on
+  `SupabaseService`. Mirrors `complete()`'s retry posture (3
+  attempts on rate_limit/transient, honoring the relayed
+  `retryAfterMs` hint with a fixed fallback) minus the chat-specific
+  body builder - the caller passes the decision wire body.
+- **E2 - Classifier rework.** `DECISION_MODEL = 'clef-api'` (per D1)
+  owned by the module - a decision model has no ModelSpec in the
+  chat catalog and must not appear in the model picker.
+  `buildDecisionBody` replaces prompt assembly: state is JSON
+  (sections with examples, recipe context, items to file); one
+  `choice` question per item, criteria keyed by section NAME plus a
+  `none` option ("no good fit - leave unfiled"). `parseDecisionAnswers`
+  replaces JSON parsing: missing answer, unknown section, or the
+  `none` pick all drop the item (fail-closed to Other, unchanged);
+  confident picks log their confidence for the live evaluation.
+- **E3 - Role removal.** The `grocerySection` AgentRole and
+  `AGENT_MODELS` entry are deleted - its sole consumer was the
+  classifier, and nothing iterates `AGENT_MODELS` for display
+  (grep-verified). The latency-slots docblock mention goes too.
+- **E4 - Tests.** `tests/grocery-section-agent.test.ts` rewritten
+  for the new pure functions (body building, answer parsing,
+  fail-closed paths).
+- **E5 - Docs.** `docs/dev/grocery-list.md` classifier sections and
+  `docs/dev/architecture.md` (the "last browser-side completion
+  path" claim) updated.
+- **Verification.** Gate, then live QA in the local dev stack:
+  seed unfiled products, add via the auto-file path, watch the item
+  hop out of Other; decision answers + confidence visible in logs.
+
+Sizing note: worst case (~20 items x 15 sections) is ~9k question
+tokens + ~2k state - well under clef-api's 32k total. Answer
+choices echo section names; name -> id mapping takes the first
+matching section (duplicate user-created section names are rare and
+either target is plausible).
+
 ## VERIFICATION
 
 - `mise run check` before each commit, exit code read directly (no
