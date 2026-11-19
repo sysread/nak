@@ -78,6 +78,8 @@ export const INTENT_MODEL = EASY_TASK_MODEL;
 export const INTENT_EMPLOYMENT_MODEL = DECISION_MODEL;
 // B5's follow-up resolution judge (reflection's decision pre-pass).
 export const FOLLOWUP_JUDGE_MODEL = DECISION_MODEL;
+// B6's falsification verifier (the bias observer's decision veto pass).
+export const BIAS_VERIFIER_MODEL = DECISION_MODEL;
 export const SAMSKARA_MODEL = EASY_TASK_MODEL;
 export const EVALUATION_MODEL = BIG_WINDOW_MODEL;
 export const SECOND_THOUGHTS_MODEL = EASY_TASK_MODEL;

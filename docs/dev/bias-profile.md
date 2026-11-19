@@ -126,7 +126,24 @@ interval lower bound (not the mean) as the surfacing gate.
   over-reporting in playful conversations), the single-completion
   `observeThread` call (parse the JSON envelope, drop items that
   fail shape checks or name unknown catalog keys, drop reactions
-  for non-active biases as fabrication), the analyze drain
+  for non-active biases as fabrication), the B6 falsification
+  VERIFIER behind it (one batched decision call - `clef-api` via
+  `DECISION_MODEL`, see `_shared/agent-models.ts` - with one noul
+  per emitted observation and per directional reaction, judged
+  against the same standard with the catalog's
+  definition/nearMiss in the criteria; below
+  `VERIFIER_VETO_THRESHOLD = 0.5` an observation is dropped and a
+  directional reaction downgraded to `was_confirmed = null`; a
+  neutral reaction is never verified - proving "no signal" is
+  proving absence; fail-open end to end, every skip logged with its
+  reason; the state is the observer's own payload trimmed
+  keep-newest at 80k chars with per-emission fail-open outside the
+  window; the calibration pairs - observer confidence vs verifier p
+  - log at debug), the deterministic provenance check (a present
+  `evidence_message_id` must resolve to a user row at or below the
+  fork boundary, else it is nulled and the observation kept - the
+  schema's deleted-message semantics - closing the FK save-wedge
+  and the inherited-row re-cite class), the analyze drain
   (claim via `bias_claim_next_thread_for_sweep`, fetch the
   transcript, clamp confidences through floor/cap, save under the
   message-count guard), the aggregate recompute, and the exported

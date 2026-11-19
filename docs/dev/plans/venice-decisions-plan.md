@@ -159,7 +159,13 @@ typed), the chat call runs only when the verdict says it is needed.
   per B4's hoist note). Original premise notes: "Did this turn
   resolve the pending follow-up?" is a noul. Today that check is
   folded into the reflection agent's prose reasoning.
-- **B6 - Bias observer (partial, do not lead with it).** The
+- **B6 - Bias observer (partial, do not lead with it).** IMPLEMENTED
+  on branch bias-verifier - see `docs/dev/plans/bias-verifier-plan.md`
+  (the direct-noul observer REJECTED per this entry's warning; the
+  built hybrid is a falsification VERIFIER behind the chat observer:
+  one batched noul per emission, veto-only, fail-open, calibration
+  pairs logged - plus a deterministic provenance check fixing the
+  evidence-FK save-wedge). Original premise notes: the
   Beta-Binomial aggregate would happily eat noul probabilities per
   bias key, and batching makes per-bias questions cheap. But the
   observer's falsification discipline is generative judgment

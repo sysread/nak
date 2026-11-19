@@ -91,7 +91,13 @@ deterministic stand-in for waiting on the :03 tick.
   rows is valid only when the agent genuinely found no bias-relevant
   signal - the `bias_processed_at` stamp is the proof the analysis
   ran); `bias_processed_at` set, `bias_processed_msg_count` matches
-  the thread's user-message count at claim time.
+  the thread's user-message count at claim time. Since the B6
+  verifier: any saved observation survived a decision-model
+  falsification pass (veto-only, fail-open) - the drawer's log
+  shows the verifier's usage + calibration pairs (open the level
+  filter: the pairs ride debug); a vetoed observation never lands
+  and a vetoed directional reaction lands downgraded to
+  `was_confirmed = null`.
 - (4) Aggregate runs in the same tick for every touched user (no
   dirty flag, no throttle - the hourly cadence is the throttle);
   a user whose oldest `bias_summary.computed_at` exceeds 24h gets
