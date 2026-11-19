@@ -1,10 +1,14 @@
 # Priming Pivot Gate Plan (B1)
 
-Status: PLANNED 2026-11-19 (branch priming-pivot-gate, base a9ce4ae1
-= landed venice-decisions). Research round done (priming pipeline
-mapped end to end, constraints below); refinement rounds not
-started. Line citations are research-verified and will be
-re-verified by the refinement reviewer.
+Status: IMPLEMENTED + live-QA'd 2026-11-19 (branch priming-pivot-gate,
+base a9ce4ae1; two fresh-context review rounds folded). Not yet
+landed to main. QA matrix: cold turn refreshes ('cold'); same-topic
+turn past the round fuse is VETOED (no refresh, payload untouched,
+'pivot gate: trigger recomputed' in the logs); a real topic pivot
+FIRES ('pivot', both pipelines, modal label "topic shifted", the
+fresh perception re-aimed at the new subject); a gate timeout fails
+open silently to the deterministic verdict (observed once - the
+reason the consumption line logs at info).
 
 ## SYNOPSIS
 
