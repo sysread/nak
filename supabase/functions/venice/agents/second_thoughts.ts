@@ -26,9 +26,10 @@
 // model produced usable verdicts on ~40% of turns) is structurally
 // impossible. The prose NOTE - the twinge itself - is the one part a
 // decision model cannot produce, so on a doubt verdict a small chat
-// completion writes it; conviction (write-only data - nothing reads it
-// but the isDoubt gate that hides the panel) writes an empty note and
-// skips the chat call entirely.
+// completion writes it; conviction is behaviorally inert - the
+// isDoubt gate hides the panel, samskara's doubt filter drops it, and
+// replay ignores un-acted rows - so it writes an empty note and skips
+// the chat call entirely.
 //
 // It does get a short BACKGROUND window of preceding user/assistant
 // content, which is a different thing from the priming chain. Reviewing
@@ -728,9 +729,9 @@ export async function secondThoughtsOnTurnTail(
     }
     const { disposition, confidence } = drawn;
 
-    // Conviction is write-only data: no reader consumes it beyond the
-    // isDoubt gate that hides the panel, so the note call is skipped
-    // entirely (D1). A doubt gets its note voiced by the fast chat
+    // Conviction is behaviorally inert: the isDoubt gate hides the
+    // panel, samskara's doubt filter drops it, replay ignores un-acted
+    // rows - so the note call is skipped entirely (D1). A doubt gets its note voiced by the fast chat
     // model; a note-call failure degrades to the empty-note doubt the
     // UI's fallback copy already owns (D3).
     let note = '';
