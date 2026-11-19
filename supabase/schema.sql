@@ -14184,8 +14184,12 @@ create table if not exists public.bias_observations (
   -- Post-floor, post-cap. The TypeScript clamp drops sub-floor
   -- observations entirely (the agent's "I am not sure" channel) and
   -- pulls supra-cap observations down to the cap before insert, so
-  -- every row that lands satisfies the [0.40, 0.85] range.
-  confidence real not null check (confidence between 0.40 and 0.85),
+  -- every row that lands satisfies the [0.40, 0.85] range. The
+  -- comparison is REAL-space on purpose: 0.85::real is not exactly
+  -- 0.85 in numeric space, so a numeric `between` rejects the cap
+  -- value itself (caught live 2026-11-19 - an observer emitting the
+  -- 0.85 anchor failed the save).
+  confidence real not null check (confidence >= 0.40::real and confidence <= 0.85::real),
   reasoning text not null,
   -- Soft pointer back to the user message the agent cited. Nullable
   -- because messages can be deleted while observations survive; if
@@ -14200,6 +14204,16 @@ create index if not exists bias_observations_thread_idx
 
 create index if not exists bias_observations_user_bias_idx
   on public.bias_observations (user_id, bias);
+
+-- The confidence check in REAL space (see the table comment): a
+-- numeric `between` rejects the 0.85 cap value (0.85::real is not
+-- exactly 0.85 numerically). Drop-and-add so existing stacks pick up
+-- the fixed comparison on re-apply; caught live 2026-11-19.
+alter table public.bias_observations
+  drop constraint if exists bias_observations_confidence_check;
+alter table public.bias_observations
+  add constraint bias_observations_confidence_check
+  check (confidence >= 0.40::real and confidence <= 0.85::real);
 
 alter table public.bias_observations enable row level security;
 
