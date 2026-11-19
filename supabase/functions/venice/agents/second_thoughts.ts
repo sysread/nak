@@ -1,4 +1,5 @@
-// Second-thoughts reviewer - the "doubt reflex" (v1).
+// Second-thoughts reviewer - the "doubt reflex" (v2: decision-model
+// verdict).
 //
 // Runs from the streaming function's completed-turn waitUntil tail
 // (getStreamingResponse.ts), a sibling to curateOnTurnTail /
@@ -16,6 +17,18 @@
 // recall). That exclusion is the load-bearing one: a reviewer that
 // replayed the author's own inner monologue would rationalize instead
 // of doubt.
+//
+// v2: the DISPOSITION VERDICT is a Decisions API call (veniceDecision,
+// model clef-api, private tier) - one `choice` question over the
+// serialized turn slice, returning the pick with a full probability
+// distribution and a confidence. No prose generation for the verdict
+// means the chain-of-thought-leak failure class (an earlier reasoning
+// model produced usable verdicts on ~40% of turns) is structurally
+// impossible. The prose NOTE - the twinge itself - is the one part a
+// decision model cannot produce, so on a doubt verdict a small chat
+// completion writes it; conviction (write-only data - nothing reads it
+// but the isDoubt gate that hides the panel) writes an empty note and
+// skips the chat call entirely.
 //
 // It does get a short BACKGROUND window of preceding user/assistant
 // content, which is a different thing from the priming chain. Reviewing
@@ -37,38 +50,36 @@
 //
 // Two guards against the model "continuing the conversation" as a
 // fourth voice instead of reviewing it:
-//   1. the turn slice is serialized into ONE fenced document inside a
-//      single user message, NOT replayed as role-tagged messages
+//   1. the turn slice is serialized into ONE fenced document carried
+//      as decision-call state, NOT replayed as role-tagged messages
 //      (role replay is what triggers continuation - same reason the
 //      chat path fences the user turn; see chat.md);
-//   2. completeJsonObject pins response_format to a JSON object, so
+//   2. the decision call returns typed judgments, not generated text -
 //      there is no schema slot for a conversational reply.
 //
-// Best-effort and non-throwing end to end: any failure leaves the row
-// without a verdict (the card just shows nothing), never breaks the
-// turn.
+// Best-effort and non-throwing end to end: a decision-call failure
+// leaves the row without a verdict (the card just shows nothing); a
+// note-call failure writes the doubt with an empty note (the UI's
+// fallback copy owns that shape) - never breaks the turn.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
-import { completeJsonObject } from './_curation_helpers.ts';
-import type { VeniceWireMessage } from './_recall_helpers.ts';
+import { veniceComplete, veniceDecision } from '../../_shared/venice.ts';
 import { SECOND_THOUGHTS_MODEL } from '../../_shared/agent-models.ts';
 
-// The reviewer model. A fast, NON-REASONING instruct model - the same
-// class (and literally the same id) the web_search / summary / topics
-// agents use, chosen for the same reason: it faithfully honors the
-// `json_object` response format. This is the reflex, a gut twinge, so
-// the intuition layer's rationale applies verbatim - latency is what
-// matters and reasoning would be actively wrong here. A reasoning model
-// (an earlier pick, xiaomi-mimo-v2-5) leaks its chain-of-thought around
-// the JSON: on the linked project it produced a usable verdict on only
-// ~40% of turns and NEVER a doubt (a longer doubt note came back messy
-// and failed the parser, while the trivial empty-note conviction
-// survived). A non-reasoning model emits the object cleanly. Held
-// directly here rather than in src/lib AGENT_MODELS because this agent
-// runs only server-side, like the curation / bias / samskara agents.
-// Repoint here to retune the reflex.
+// The verdict's model: the decision model that answers the disposition
+// question. The doubt NOTE (when one is written) is authored by
+// SECOND_THOUGHTS_MODEL below - the `model` field records the verdict's
+// producer, and no reader consumes it today (the browser coercer drops
+// it); it is diagnostics for a debugger tracing a bad note.
+const VERDICT_MODEL = 'clef-api';
+
+// The note-call model: the same fast instruct model the reflex has
+// always ridden (thinking pinned at the call site - it can reason, and
+// an unsuppressed thinking pass broke this exact agent before). Repoint
+// here to retune the note voice.
+const NOTE_MODEL = SECOND_THOUGHTS_MODEL;
 
 // The disposition spectrum. 'conviction' is the common "no second
 // thoughts" verdict; the reviewer is instructed to bias heavily
@@ -369,11 +380,18 @@ export function serializeBackground(
 
 /**
  * Serialize the turn slice into a single fenced transcript. This is
- * fed as DATA inside one user message, not as role-tagged turns - the
- * `<exchange_under_review>` fence plus the JSON-pinned output are what
- * keep the model reviewing instead of answering as a fourth voice.
+ * carried as decision-call STATE (data, not a chat turn), so nothing
+ * invites the model to answer as a fourth voice.
+ *
+ * `toolResultChars` is the per-result body cap; the budget guard
+ * re-serializes with a tighter cap rather than dropping rows (D7 in
+ * the plan) - the row structure, the anchor question, and the
+ * URL-surfacing survive every pass, only tool-result bodies thin out.
  */
-export function serializeExchange(rows: readonly TurnRow[]): string {
+export function serializeExchange(
+  rows: readonly TurnRow[],
+  toolResultChars: number = MAX_TOOL_RESULT_CHARS,
+): string {
   const parts: string[] = ['<exchange_under_review>'];
   for (const m of rows) {
     if (m.role === 'user') {
@@ -392,9 +410,9 @@ export function serializeExchange(rows: readonly TurnRow[]): string {
       parts.push(seg.join('\n'));
     } else if (m.role === 'tool') {
       const label = m.name ? `tool result: ${m.name}` : 'tool result';
-      const truncated = m.content.length > MAX_TOOL_RESULT_CHARS;
+      const truncated = m.content.length > toolResultChars;
       const body = truncated
-        ? `${m.content.slice(0, MAX_TOOL_RESULT_CHARS)}\n...[truncated]`
+        ? `${m.content.slice(0, toolResultChars)}\n...[truncated]`
         : m.content;
       const seg = [`[${label}]`, body];
       // Never let truncation hide the URLs a tool returned. A
@@ -430,7 +448,12 @@ export function serializeExchange(rows: readonly TurnRow[]): string {
   return parts.join('\n\n');
 }
 
-const SYSTEM_PROMPT = `You are the quiet voice of second thoughts inside an AI assistant -
+// The reviewer brief: persona, grounding discipline, and provenance
+// rules - carried as decision-call STATE so the verdict-shaping rules
+// travel with the verdict (plan D5). The disposition list + JSON
+// contract that used to close the chat prompt died with the chat
+// transport; the dispositions live on as choice criteria.
+const REVIEWER_BRIEF = `You are the quiet voice of second thoughts inside an AI assistant -
 the reflex of self-doubt that fires the moment after it answers. You
 are NOT continuing the conversation and you are NOT the assistant. Your
 only job is to re-read the assistant's most recent response and report
@@ -439,7 +462,7 @@ how confident you feel about it.
 You review ONE thing: the exchange inside <exchange_under_review> -
 the user's latest message and the assistant's response to it (with its
 reasoning and any tool calls). If a <conversation_so_far> block appears
-before it, that is BACKGROUND ONLY: it is there so you know what has
+with it, that is BACKGROUND ONLY: it is there so you know what has
 already been discussed. Do not review it, do not judge the older
 answers in it, and do not treat a topic change inside it as a problem.
 
@@ -447,17 +470,6 @@ You still do NOT see everything. The assistant also knows things from
 outside this conversation - earlier conversations, stored notes about
 the user, its own background context - none of which is shown to you.
 You are a gut check, not a full audit.
-
-Report one disposition:
-- "conviction": the response holds up. This is the DEFAULT and by far
-  the most common verdict - use it unless something genuinely nags at
-  you. Stands behind both the facts and the framing.
-- "hedge": the answer is basically fine but sounds more certain than it
-  should. A caveat is missing.
-- "reframe": you suspect the assistant misread what was being asked, or
-  approached it the wrong way - it may have answered a different
-  question than the one the user was asking.
-- "correct": you suspect an outright factual error in the response.
 
 Grounding check before doubting a reference to the user or to earlier
 discussion. The assistant referring to something you were not shown is
@@ -495,103 +507,167 @@ and what you are shown of those tools is INCOMPLETE:
 
 Doubt a citation only when it CONTRADICTS what a tool result plainly
 says, or when the assistant cites a source with no tool call behind it
-anywhere in the exchange.
+anywhere in the exchange.`;
 
-Respond with ONLY a JSON object, no prose around it:
-{"disposition": "conviction" | "hedge" | "reframe" | "correct",
- "note": "<one or two first-person sentences voicing the doubt, or an
- empty string for conviction>"}
-
-The note is written in the assistant's own first-person voice ("I said
-X, but I'm not sure...") - it is the twinge itself, phrased as
-something to reconsider, never as a command.`;
-
-const INSTRUCTION =
+// The decision question's instruction: the decision rule the
+// evaluator applies. The dispositions' meanings live in the choice
+// criteria; the conviction bias is restated here because it is the
+// single most load-bearing instruction the old prompt carried.
+const VERDICT_INSTRUCTION =
   `Review the exchange in <exchange_under_review> only; anything in ` +
-  `<conversation_so_far> is background. Emit the JSON verdict now.`;
+  `<conversation_so_far> is background. Apply the reviewer brief and ` +
+  `pick the one disposition that fits. When in doubt, choose ` +
+  `"conviction" - it is the default and by far the most common verdict.`;
+
+/** The choice criteria: each disposition's meaning from the old
+ *  prompt, carried verbatim-ish so the decision model judges the same
+ *  spectrum the chat prompt asked for. */
+const DISPOSITION_CRITERIA: Record<SecondThoughtsDisposition, string> = {
+  conviction:
+    'The response holds up. The DEFAULT and by far the most common ' +
+    'verdict - use it unless something genuinely nags at you. Stands ' +
+    'behind both the facts and the framing.',
+  hedge:
+    'The answer is basically fine but sounds more certain than it ' +
+    'should. A caveat is missing.',
+  reframe:
+    'You suspect the assistant misread what was being asked, or ' +
+    'approached it the wrong way - it may have answered a different ' +
+    'question than the one the user was asking.',
+  correct:
+    'You suspect an outright factual error in the response. This ' +
+    'means "I suspect this is wrong" - verification happens later, in ' +
+    'the user-triggered refinement.',
+};
+
+// Serialized-state budget (D7): clef-api's state cap is 32k tokens;
+// the serialized exchange's row count is uncapped and assistant
+// reasoning rides untrimmed. On overflow the guard re-serializes with
+// a tighter tool-result cap (dropping the background fence first) so
+// tool-heavy turns thin out instead of dying on an upstream 400 -
+// exactly the turns the provenance machinery exists for. ~4 chars per
+// token puts 96k chars at ~24k tokens: comfortable headroom.
+const STATE_BUDGET_CHARS = 96_000;
+const TOOL_RESULT_CAP_PASSES = [MAX_TOOL_RESULT_CHARS, 1000, 250];
 
 /**
- * Strip a leading/trailing markdown code fence some models add despite
- * the json_object response format. Mirrors the topics units' defense.
+ * Assemble the POST /decisions body: the reviewer brief + the fenced
+ * exchange/background as state, one `choice` question carrying the
+ * disposition semantics + grounding rules. The budget guard (D7)
+ * tightens tool-result caps and drops the background before it ever
+ * lets the state overflow the model's cap.
  */
-function stripJsonFence(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith('```')) return trimmed;
-  return trimmed
-    .replace(/^```(?:json)?\s*\n?/, '')
-    .replace(/\n?```\s*$/, '')
-    .trim();
-}
-
-/**
- * Extract the first balanced `{...}` object from arbitrary text, or
- * null if there isn't one. Belt-and-suspenders for a model that wraps
- * the JSON in prose (or leaks chain-of-thought around it) despite the
- * json_object format - a whole verdict must never be dropped over a
- * stray leading token. Walks braces while respecting string literals
- * and escapes so a `{` inside a note doesn't throw off the depth count.
- */
-function extractJsonObject(text: string): string | null {
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (ch === '\\') esc = true;
-      else if (ch === '"') inStr = false;
-      continue;
-    }
-    if (ch === '"') inStr = true;
-    else if (ch === '{') depth += 1;
-    else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, i + 1);
+export function buildVerdictRequest(
+  rows: readonly TurnRow[],
+  background: string,
+): Record<string, unknown> {
+  let backgroundFence = background;
+  let exchange = serializeExchange(rows);
+  if ((exchange.length + backgroundFence.length) > STATE_BUDGET_CHARS) {
+    backgroundFence = '';
+    for (const cap of TOOL_RESULT_CAP_PASSES.slice(1)) {
+      exchange = serializeExchange(rows, cap);
+      if (exchange.length <= STATE_BUDGET_CHARS) break;
     }
   }
-  return null;
+  const state: Record<string, unknown> = {
+    reviewer_brief: REVIEWER_BRIEF,
+    exchange_under_review: exchange,
+  };
+  if (backgroundFence) state.conversation_so_far = backgroundFence;
+  return {
+    model: VERDICT_MODEL,
+    state,
+    questions: {
+      disposition: {
+        type: 'choice',
+        instructions: VERDICT_INSTRUCTION,
+        criteria: DISPOSITION_CRITERIA,
+      },
+    },
+  };
 }
 
 /**
- * Parse the model's raw output into a verdict, or null on any failure
- * (parse error, missing/invalid disposition). A null return means "no
- * verdict written" - the row keeps its null column and the card shows
- * nothing. Exported for unit tests.
+ * Coerce the /decisions response into the verdict's disposition and
+ * the answer's confidence, or null on any drift (fail-open input -
+ * the caller treats null as "no verdict written"). The confidence is
+ * diagnostics only (plan D6 - no gating in v1).
  */
-export function parseVerdict(raw: string): {
+export function coerceDisposition(payload: unknown): {
   disposition: SecondThoughtsDisposition;
-  note: string;
+  confidence: number;
 } | null {
-  const stripped = stripJsonFence(raw);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripped);
-  } catch {
-    // Fall back to pulling the first balanced object out of surrounding
-    // prose before giving up.
-    const extracted = extractJsonObject(stripped);
-    if (extracted === null) return null;
-    try {
-      parsed = JSON.parse(extracted);
-    } catch {
-      return null;
-    }
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const obj = parsed as Record<string, unknown>;
-  const disposition = obj.disposition;
+  if (!payload || typeof payload !== 'object') return null;
+  const answers = (payload as { answers?: unknown }).answers;
+  if (!answers || typeof answers !== 'object') return null;
+  const answer = (answers as Record<string, unknown>).disposition;
+  if (!answer || typeof answer !== 'object') return null;
+  const a = answer as { choice?: unknown; confidence?: unknown };
   if (
-    typeof disposition !== 'string' ||
-    !DISPOSITIONS.includes(disposition as SecondThoughtsDisposition)
+    typeof a.choice !== 'string' ||
+    !DISPOSITIONS.includes(a.choice as SecondThoughtsDisposition)
   ) {
     return null;
   }
-  let note = typeof obj.note === 'string' ? obj.note.trim() : '';
+  const confidence =
+    typeof a.confidence === 'number' && Number.isFinite(a.confidence)
+      ? a.confidence
+      : 0;
+  return {
+    disposition: a.choice as SecondThoughtsDisposition,
+    confidence,
+  };
+}
+
+// The note prompt (M2): the reviewer persona + the exchange + the
+// drawn verdict, asking for the twinge itself. The falsification /
+// provenance rules are NOT here - the verdict is already drawn; this
+// call only voices it.
+const NOTE_PROMPT = `You are the quiet voice of second thoughts inside an AI assistant -
+the reflex of self-doubt that fires the moment after it answers. You
+are NOT continuing the conversation and you are NOT the assistant.
+
+A reviewer pass has already drawn its verdict about your most recent
+answer; your job is to voice that doubt in your own first-person voice.
+
+Respond with ONLY the note: one or two first-person sentences voicing
+the doubt ("I said X, but I'm not sure...") - the twinge itself,
+phrased as something to reconsider, never as a command. No preamble,
+no lists, no markdown.`;
+
+/**
+ * The doubt-note call's instruction: the disposition is already drawn;
+ * the exchange carries the specifics.
+ */
+function buildNoteRequest(
+  exchange: string,
+  disposition: SecondThoughtsDisposition,
+): string {
+  return (
+    `${exchange}\n\nThe verdict was "${disposition}". ` +
+    `Voice the note now.`
+  );
+}
+
+/**
+ * Shape-check the note text before it is persisted (D4): trimmed,
+ * capped at 800, and guarded against the two known leak shapes - a
+ * thinking-pass riding the content channel (`<think>` tags) and a
+ * prompt echo (the compound-summary guard's signature-phrase
+ * precedent). A failed check returns '' - the empty-note doubt shape
+ * the UI already handles.
+ */
+export function sanitizeNote(raw: string): string {
+  let note = raw.trim();
   if (note.length > MAX_NOTE_CHARS) note = note.slice(0, MAX_NOTE_CHARS);
-  return { disposition: disposition as SecondThoughtsDisposition, note };
+  if (note.includes('<think>')) return '';
+  if (/^You are the\b/i.test(note)) return '';
+  // A list-line leak: the note is one or two sentences of prose, so a
+  // line starting with a markdown bullet is a reasoning dump, not a
+  // twinge.
+  if (/\n\s*[-*]\s/.test(note)) return '';
+  return note;
 }
 
 /**
@@ -635,37 +711,70 @@ export async function secondThoughtsOnTurnTail(
       return;
     }
 
-    const prior = serializeBackground(background, backgroundUrls);
-    const transcript = serializeExchange(rows);
-    const body = prior
-      ? `${prior}\n\n${transcript}\n\n${INSTRUCTION}`
-      : `${transcript}\n\n${INSTRUCTION}`;
-    const messages: VeniceWireMessage[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: body },
-    ];
-
-    const text = await completeJsonObject({
+    // The verdict: one decision call over the serialized slice. A
+    // failure (transport, non-OK, malformed answer) = no verdict
+    // written - never a fabricated one (D3).
+    const decisionPayload = await veniceDecision({
       apiKey,
-      model: SECOND_THOUGHTS_MODEL,
-      // Classification/extraction over evidence already in context - a
-      // thinking pass is pure latency and budget burn. The model can
-      // reason, so this suppression is load-bearing, not a no-op.
-      disableThinking: true,
-      messages,
-      maxTokens: 512,
+      body: buildVerdictRequest(
+        rows,
+        serializeBackground(background, backgroundUrls),
+      ),
     });
-    const verdict = parseVerdict(text);
-    if (!verdict) {
+    const drawn = coerceDisposition(decisionPayload);
+    if (!drawn) {
       log.debug(`no usable verdict on ${terminalMsgId}`);
       return;
+    }
+    const { disposition, confidence } = drawn;
+
+    // Conviction is write-only data: no reader consumes it beyond the
+    // isDoubt gate that hides the panel, so the note call is skipped
+    // entirely (D1). A doubt gets its note voiced by the fast chat
+    // model; a note-call failure degrades to the empty-note doubt the
+    // UI's fallback copy already owns (D3).
+    let note = '';
+    if (disposition !== 'conviction') {
+      try {
+        const noteText = await veniceComplete({
+          apiKey,
+          body: {
+            model: NOTE_MODEL,
+            messages: [
+              { role: 'system', content: NOTE_PROMPT },
+              {
+                role: 'user',
+                content: buildNoteRequest(
+                  serializeExchange(rows),
+                  disposition,
+                ),
+              },
+            ],
+            // Prose generation, but the model can reason and its
+            // serving default effort is high - the pin is load-bearing
+            // (an unpinned call burns the small budget on a thinking
+            // pass).
+            venice_parameters: { disable_thinking: true },
+            max_completion_tokens: 256,
+          },
+        });
+        const text = extractContentText(noteText);
+        note = text === null ? '' : sanitizeNote(text);
+      } catch (err) {
+        log.debug(`note call failed on ${terminalMsgId}; writing empty-note doubt`, err);
+        note = '';
+      }
+      log.info(
+        `note for ${disposition} on ${terminalMsgId}: ` +
+          `${note.length > 0 ? `${note.length} chars` : '(empty - fallback copy owns it)'}`,
+      );
     }
 
     const payload: SecondThoughtsVerdict = {
       v: 1,
-      disposition: verdict.disposition,
-      note: verdict.note,
-      model: SECOND_THOUGHTS_MODEL,
+      disposition,
+      note,
+      model: VERDICT_MODEL,
       computed_at: Date.now(),
     };
     // RLS OFF (service role): filter by id; the row belongs to userId
@@ -678,7 +787,9 @@ export async function secondThoughtsOnTurnTail(
       log.debug(`failed to write verdict on ${terminalMsgId}: ${error.message}`);
       return;
     }
-    log.info(`${verdict.disposition} on ${terminalMsgId}`);
+    log.info(
+      `${disposition} on ${terminalMsgId} (confidence ${confidence.toFixed(2)})`,
+    );
   } catch (err) {
     log.debug(
       'review errored',
@@ -689,10 +800,26 @@ export async function secondThoughtsOnTurnTail(
   }
 }
 
-// Test-only surface: the parser + serializer are asserted in
-// supabase/functions/tests/second-thoughts.test.ts.
+/**
+ * Pull the assistant's text out of a /chat/completions response
+ * (veniceComplete returns the parsed body verbatim). Null when the
+ * shape drifts - the caller's shape check treats that as an empty
+ * note.
+ */
+function extractContentText(payload: unknown): string | null {
+  const choices = (payload as { choices?: unknown })?.choices;
+  if (!Array.isArray(choices) || choices.length === 0) return null;
+  const content = (choices[0] as { message?: { content?: unknown } })?.message
+    ?.content;
+  return typeof content === 'string' ? content : null;
+}
+
+// Test-only surface: the serializer + verdict-request shaping +
+// coercer are asserted in supabase/functions/tests/second-thoughts.test.ts.
 export const __test = {
-  parseVerdict,
+  buildVerdictRequest,
+  coerceDisposition,
+  sanitizeNote,
   serializeExchange,
   serializeBackground,
   verifiedQuotes,

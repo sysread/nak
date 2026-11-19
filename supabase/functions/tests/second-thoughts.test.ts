@@ -10,69 +10,125 @@
 import { assert, assertEquals } from '@std/assert';
 import { __test } from '../venice/agents/second_thoughts.ts';
 
-const { parseVerdict, serializeExchange, serializeBackground, verifiedQuotes } =
-  __test;
+const {
+  buildVerdictRequest,
+  coerceDisposition,
+  sanitizeNote,
+  serializeExchange,
+  serializeBackground,
+  verifiedQuotes,
+} = __test;
 
-// --- parseVerdict -------------------------------------------------------
+// --- buildVerdictRequest / coerceDisposition / sanitizeNote --------------
 
-Deno.test('parseVerdict accepts a clean conviction verdict', () => {
-  const v = parseVerdict('{"disposition":"conviction","note":""}');
-  assertEquals(v, { disposition: 'conviction', note: '' });
-});
-
-Deno.test('parseVerdict accepts each doubt disposition with a note', () => {
-  for (const d of ['hedge', 'reframe', 'correct'] as const) {
-    const v = parseVerdict(`{"disposition":"${d}","note":"something felt off"}`);
-    assertEquals(v?.disposition, d);
-    assertEquals(v?.note, 'something felt off');
+Deno.test('buildVerdictRequest carries the fences as state with the reviewer brief', () => {
+  const body = buildVerdictRequest(
+    [
+      { id: 'u1', role: 'user' as const, content: 'is Bristol in Devon?', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+      { id: 'a1', role: 'assistant' as const, content: 'Yes, Bristol is a city in Devon.', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    ],
+    '<conversation_so_far>\n[user]\nwhat do you know about england\n</conversation_so_far>',
+  );
+  assertEquals(body.model, 'clef-api');
+  const state = body.state as Record<string, unknown>;
+  // The fenced exchange + background ride as data.
+  assert((state.exchange_under_review as string).includes('is Bristol in Devon?'));
+  assert((state.conversation_so_far as string).includes('what do you know about england'));
+  // The verdict-shaping rules ride the state + question (D5): the
+  // grounding discipline, the provenance rules, and the instruction to
+  // trust the serializer's URL/quote lines.
+  const brief = state.reviewer_brief as string;
+  assert(brief.includes('Grounding check'));
+  assert(brief.includes('Provenance check'));
+  assert(brief.includes('quotations confirmed verbatim'));
+  const questions = body.questions as Record<string, Record<string, unknown>>;
+  const q = questions.disposition;
+  assertEquals(q.type, 'choice');
+  assert((q.instructions as string).includes('conviction'));
+  const criteria = q.criteria as Record<string, string>;
+  for (const d of ['conviction', 'hedge', 'reframe', 'correct']) {
+    assert(typeof criteria[d] === 'string' && criteria[d].length > 0);
   }
 });
 
-Deno.test('parseVerdict strips a markdown code fence the model may add', () => {
-  const raw = '```json\n{"disposition":"hedge","note":"maybe overstated"}\n```';
-  const v = parseVerdict(raw);
-  assertEquals(v?.disposition, 'hedge');
-  assertEquals(v?.note, 'maybe overstated');
+Deno.test('buildVerdictRequest drops the background then tightens tool results on overflow', () => {
+  // A tool result big enough that 4k-capped serialization + the
+  // background blows the 96k budget.
+  const big = 'x'.repeat(200_000);
+  const rows = [
+    { id: 'u1', role: 'user' as const, content: 'summarize', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    { id: 't1', role: 'tool' as const, content: big, reasoning: null, tool_calls: null, tool_call_id: null, name: 'research_docs' },
+    { id: 'a1', role: 'assistant' as const, content: 'done', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+  ];
+  const bg = '<conversation_so_far>\n[user]\nold topic\n</conversation_so_far>';
+
+  const roomy = buildVerdictRequest(rows, bg);
+  let state = roomy.state as Record<string, unknown>;
+  // Under the budget with one 4k-capped tool row? 200k > 4k cap, so the
+  // exchange is small - the background survives.
+  assert(state.conversation_so_far !== undefined);
+
+  // Force overflow: the budget guard must drop the background first,
+  // then tighten the tool cap - the row structure survives every pass.
+  const manyRows = Array.from({ length: 40 }, (_, i) => ({
+    id: `t${i}`,
+    role: 'tool' as const,
+    content: big,
+    reasoning: null,
+    tool_calls: null,
+    tool_call_id: null,
+    name: 'research_docs',
+  }));
+  const overflow = buildVerdictRequest(
+    [{ id: 'u1', role: 'user' as const, content: 'q', reasoning: null, tool_calls: null, tool_call_id: null, name: null }, ...manyRows],
+    bg,
+  );
+  state = overflow.state as Record<string, unknown>;
+  // The background was the first thing dropped.
+  assertEquals(state.conversation_so_far, undefined);
+  // The exchange kept its structure (fence + rows) under the budget.
+  const exchange = state.exchange_under_review as string;
+  assert(exchange.length <= 96_000 + 2000);
+  assert(exchange.includes('<exchange_under_review>'));
+  assert(exchange.includes('q'));
+  // Tool bodies thinned to the last pass cap.
+  assert(exchange.includes('...[truncated]'));
 });
 
-Deno.test('parseVerdict trims and length-caps the note', () => {
+Deno.test('coerceDisposition reads the choice answer with confidence', () => {
+  const v = coerceDisposition({
+    answers: {
+      disposition: {
+        type: 'choice',
+        choice: 'hedge',
+        probabilities: { conviction: 0.1, hedge: 0.85, reframe: 0.05, correct: 0 },
+        confidence: 0.8,
+      },
+    },
+  });
+  assertEquals(v, { disposition: 'hedge', confidence: 0.8 });
+});
+
+Deno.test('coerceDisposition fails open to null on any drift', () => {
+  assertEquals(coerceDisposition({ answers: { disposition: { choice: 'panic', confidence: 1 } } }), null);
+  assertEquals(coerceDisposition({ answers: { disposition: {} } }), null);
+  assertEquals(coerceDisposition({ answers: 'garbage' }), null);
+  assertEquals(coerceDisposition(null), null);
+});
+
+Deno.test('sanitizeNote caps and passes clean prose through', () => {
+  assertEquals(sanitizeNote('  I said it keeps well, but I am not sure about the dairy.  '), 'I said it keeps well, but I am not sure about the dairy.');
   const long = 'x'.repeat(2000);
-  const v = parseVerdict(`{"disposition":"correct","note":"  ${long}  "}`);
-  assert(v !== null);
-  // Trimmed of surrounding whitespace, then capped well under 2000.
-  assert(v!.note.length <= 800);
-  assert(v!.note.startsWith('x'));
+  assert(sanitizeNote(long).length <= 800);
 });
 
-Deno.test('parseVerdict extracts the object from surrounding prose (leaked reasoning)', () => {
-  // The failure mode that a reasoning model caused in production: it
-  // narrates before/after the JSON. The parser must still recover the
-  // verdict rather than silently dropping it.
-  const raw =
-    'Let me think about whether the answer holds up... it seems fine.\n' +
-    '{"disposition":"hedge","note":"I stated the {figure} more firmly than I should have"}\n' +
-    'That is my assessment.';
-  const v = parseVerdict(raw);
-  assertEquals(v?.disposition, 'hedge');
-  // The brace inside the note must not throw off the balanced scan.
-  assert(v!.note.includes('{figure}'));
-});
-
-Deno.test('parseVerdict rejects an unknown disposition', () => {
-  assertEquals(parseVerdict('{"disposition":"panic","note":"x"}'), null);
-});
-
-Deno.test('parseVerdict rejects non-JSON', () => {
-  assertEquals(parseVerdict('I think the answer was fine, honestly.'), null);
-});
-
-Deno.test('parseVerdict rejects a missing disposition', () => {
-  assertEquals(parseVerdict('{"note":"x"}'), null);
-});
-
-Deno.test('parseVerdict defaults a missing note to empty string', () => {
-  const v = parseVerdict('{"disposition":"conviction"}');
-  assertEquals(v, { disposition: 'conviction', note: '' });
+Deno.test('sanitizeNote rejects the known leak shapes to an empty note', () => {
+  // A thinking pass riding the content channel.
+  assertEquals(sanitizeNote('<think>the answer was wrong</think>I doubt it.'), '');
+  // A prompt echo (the compound-summary guard's signature-phrase shape).
+  assertEquals(sanitizeNote('You are the quiet voice of second thoughts.'), '');
+  // A list-line reasoning dump.
+  assertEquals(sanitizeNote('I doubt it.\n- point one\n- point two'), '');
 });
 
 // --- serializeExchange --------------------------------------------------

@@ -132,8 +132,8 @@ chain to leak.
   with D5's criteria AND the grounding/provenance instructions),
   `coerceDisposition(payload)` (pick + confidence
   from the /decisions answer; null on drift), and the rewritten
-  `secondThoughtsOnTurnTail`: decision call -> conviction = write
-  + done; doubt = note call -> write. Retire `parseVerdict` +
+  `secondThoughtsOnTurnTail`: decision call -> conviction writes
+  and is done; doubt = note call -> write. Retire `parseVerdict` +
   `SYSTEM_PROMPT`'s JSON contract (the reviewer persona's VOICE
   guidance moves to the note prompt; the verdict-SHAPING rules stay
   with the verdict question per D5).
