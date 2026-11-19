@@ -26,6 +26,11 @@ afterAll(() => {
 function fixture(userDocs: Record<string, string>, devDocs: Record<string, string>) {
   const userRoot = join(tmp, 'user');
   const devRoot = join(tmp, 'dev');
+  // Wipe first: every test gets a fresh tree. The roots are shared
+  // (one mkdtemp per file run), so accumulated files from an earlier
+  // test would poison the next test's counts.
+  rmSync(userRoot, { recursive: true, force: true });
+  rmSync(devRoot, { recursive: true, force: true });
   mkdirSync(userRoot, { recursive: true });
   mkdirSync(devRoot, { recursive: true });
   for (const [name, body] of Object.entries(userDocs)) {
@@ -70,6 +75,39 @@ describe('scannerSafeJsonStringify', () => {
     expect(/import\s+['"]/.test(encoded)).toBe(false);
     expect(encoded.includes('impo\\u0072t')).toBe(true);
   });
+
+  it('hides the raw from token too - prose quoting from-path pairs', () => {
+    // The 2026-11-19 poison, round one: plan-doc prose "files import
+    // from '../_shared/venice.ts'" survives the import escape (the
+    // token there is from) and the scanner resolves the quoted
+    // specifier against the corpus's own directory.
+    const content = "13 test files import from '../_shared/venice.ts'";
+    const encoded = scannerSafeJsonStringify(content);
+    expect(/from\s+['"]/.test(encoded)).toBe(false);
+    expect(JSON.parse(encoded)).toBe(content);
+  });
+
+  it('excludes the working-doc trees from the dev corpus', () => {
+    // Plans and in-progress docs quote file paths and import lines
+    // heavily; their path residue is what kills the runtime's
+    // decoded-bundle scanner (venice/_shared/venice.ts, 2026-11-19).
+    // They are agent-working documents, not research corpus.
+    const { userRoot, devRoot } = fixture(
+      { 'intro.md': '# Intro' },
+      {
+        'architecture.md': '# Architecture',
+        'plans/venice-decisions-plan.md':
+          "import from '../_shared/venice.ts' and '../../_shared/x.ts'",
+        'in-progress/intents.md': "from './schema.sql'",
+      },
+    );
+    const { source, devCount } = buildCorpus({ userRoot, devRoot });
+    expect(devCount).toBe(1);
+    expect(source).toContain('architecture.md');
+    expect(source).not.toContain('venice-decisions-plan.md');
+    expect(/from\s+['"]/.test(source)).toBe(false);
+    expect(/import\s+['"]/.test(source)).toBe(false);
+  });
 });
 
 describe('buildCorpus', () => {
@@ -96,6 +134,9 @@ describe('buildCorpus', () => {
     // raw text; the scanner cannot tell string content from code.
     expect(/import\s+['"]/.test(source)).toBe(false);
     expect(/import\(/.test(source)).toBe(false);
+    // The from-token's quoted-specifier adjacency is the 2026-11-19
+    // poison - same scanner, different keyword.
+    expect(/from\s+['"]/.test(source)).toBe(false);
     // And the content itself survives verbatim.
     const bodies = parsedBodies(source);
     expect(bodies.some((b) => b.includes("import './wiki_save.ts';"))).toBe(true);

@@ -45,14 +45,24 @@ const OUT_PATH = join(OUT_DIR, 'research-docs-corpus.ts');
  * "importing") round-trip exactly - while the raw file text no longer
  * contains any `import` token for the regex to latch onto.
  *
- * Known residual: an `export ... from './x'` line quoted in prose
- * would need the same treatment for the `export`/`from` tokens; left
- * alone because those words are common in prose and no failure has
- * been observed from them. Extend the escape here first if one ever
- * is.
+ * Two scanners, two defenses. (1) A RAW-TEXT regex over the emitted
+ * module: it cannot tell string content from code, so the `import`
+ * and `from` tokens are escaped as unicode escapes - the PARSED
+ * value is byte-identical (even incidental mid-word hits round-trip
+ * exactly), while the raw text no longer contains the tokens.
+ * (2) The runtime's decoded-bundle scanner: it reads the PARSED
+ * string values and resolves any `..`-bearing path residue against
+ * the function dir, stripping backslashes - escaping cannot win
+ * there (a \u002f escape survives into the bundle and the backslash
+ * gets stripped, observed 2026-11-19). Defense (2) is the corpus's
+ * content policy instead: the working-doc trees that quote paths
+ * heavily (docs/dev/plans/, docs/dev/in-progress/) are excluded
+ * from the corpus entirely - see EXCLUDED_DEV_DIRS.
  */
 export function scannerSafeJsonStringify(value) {
-  return JSON.stringify(value).replaceAll('import', 'impo\\u0072t');
+  return JSON.stringify(value)
+    .replaceAll('import', 'impo\\u0072t')
+    .replaceAll('from', 'f\\u0072om');
 }
 
 function walk(rootDir) {
@@ -124,10 +134,29 @@ function emit(entries) {
  * counts the CLI log line reports. Pure: no writes, no repo-relative
  * path assumptions - callers pass the roots, tests pass fixtures.
  */
+/**
+ * Docs excluded from the function-side corpus. docs/dev/plans/ and
+ * docs/dev/in-progress/ are agent-WORKING documents: they quote file
+ * paths and import lines heavily, and quoted `..`-bearing paths in
+ * the bundled corpus are fatal - the edge runtime's function scanner
+ * resolves path-like residue in the bundle against the function dir
+ * (stripping `..` segments and backslashes), and a missing hit kills
+ * the whole runtime at startup. The import/from escapes below handle
+ * the raw-text scanner; excluding the working-doc trees handles the
+ * decoded-bundle scanner for good. The model's research surface
+ * loses nothing it used: plans are git history, not current-state
+ * docs. (First observed 2026-10-29 on `import './wiki_save.ts'`
+ * quoted in a plan; re-observed 2026-11-19 on plain path prose in
+ * venice-decisions-plan.md.)
+ */
+const EXCLUDED_DEV_DIRS = ['plans', 'in-progress'];
+
 export function buildCorpus({ userRoot, devRoot }) {
   const entries = {
     user: asEntries(userRoot),
-    dev: asEntries(devRoot),
+    dev: asEntries(devRoot).filter(
+      ([rel]) => !EXCLUDED_DEV_DIRS.includes(rel.split('/')[0])
+    ),
   };
   const totalBytes = [...entries.user, ...entries.dev].reduce(
     (n, [, body]) => n + body.length,
