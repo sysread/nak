@@ -67,13 +67,37 @@ batching; `clef-api` is the private-tier model the plan
   wall-clock fuse stays absolute (it also governs injection
   suppression via the shared `STALE_FUSE_MS` -
   `priming-triggers.ts:34-41` - and lockstep is load-bearing).
-- **D2 - The gate runs inside the samskara race window.** The gate
-  inputs (user text, caches, mood) are all ready right after the
-  cache read (`priming.ts:640-641`); the samskara race already
-  occupies ~1500ms of concurrent work (`:682-690`). The gate call
-  (measured ~360ms) runs concurrently and is consumed before the
-  trigger evaluation needs it - adding ZERO serial latency when it
-  fits the window, and at most its own overage when it does not.
+  The round-fuse-only attribution needs no new scheduling logic:
+  the evaluator returns bare `'stale'` for either fuse
+  (`priming-triggers.ts:102-104`), and the wall-clock half is
+  already answerable by the exported injection guard -
+  `isPayloadFreshForInjection` (`priming-triggers.ts:118-123`).
+  Veto eligibility = verdict `'stale'` AND the cache is still
+  wall-clock fresh. The scheduling decision stays in one file.
+- **D2 - The gate runs inside the samskara race's ceiling.**
+  `SAMSKARA_PRIMING_TIMEOUT_MS` (`priming.ts:68`) is a CEILING, not
+  occupied work - the fire's common case lands well under it
+  (`:64-67`). The gate starts at the same point (inputs are all
+  ready right after the cache read, `:640-641`) and races the SAME
+  ceiling: `PRIME_GATE_TIMEOUT_MS` (1500, same value, separate
+  constant cross-referencing the samskara one). At the trigger
+  evaluation (`:700-705`) the gate verdict is awaited with the
+  remaining window; on timeout or any failure the gate fails open
+  (D3). The bound this buys: the gate can NEVER push the pre-round
+  stage past the ceiling today's samskara race already allows -
+  time-to-first-token's worst case is unchanged by the gate's
+  presence.
+- **D2b - The gate has a skip predicate.** One decision call
+  answers both pipelines' verdicts (they can legitimately differ -
+  `priming.ts:693-695` - and one answer may fire one while vetoing
+  nothing for the other). The gate runs ONLY when its verdict is
+  consumable: skip when both pipelines are feature-disabled (no
+  refresh can happen - the gate is pointless), on `'cold'` (the
+  refresh is unconditional and there is no cached payload to
+  digest), on `'mood'` (the refresh is unconditional, D1), and on
+  wall-clock-stale `'stale'` (veto is not allowed there, D1). It
+  runs exactly when the deterministic verdict is null (fire
+  opportunity) or round-fuse `'stale'` (veto opportunity).
 - **D3 - Fail-open to the deterministic verdict.** Any gate failure
   (transport, non-OK, malformed answer, beta drift) falls back to
   `evaluatePreRoundTrigger`'s own result. Rationale: the existing
@@ -114,21 +138,36 @@ batching; `clef-api` is the private-tier model the plan
   `{ pivotProbability } | null` (null = unusable -> fail-open per
   D3). Pure, fetch-injectable, Deno-tested: request shaping, answer
   coercion, and the decide/veto verdict as pure functions.
-- **M2 - Trigger integration.** `priming.ts` runs the gate
-  concurrently with the samskara race window (D2); the trigger
-  evaluation consumes the gate verdict: fire `'pivot'` on a
-  no-trigger turn above threshold; veto a round-fuse `'stale'`
-  below it. The evaluator itself stays pure - the gate composes
-  AROUND it (evaluate deterministic verdict first, then gate).
-- **M3 - `'pivot'` cross-runtime.** `IntuitionTrigger` union +
-  both coercers + the browser twin constants; the payload `v`
-  stays 1 if coercers just accept the new member (they reject
-  unknown members, so this is an additive union change in both
-  runtimes).
+- **M2 - Trigger integration.** `priming.ts` starts the gate when
+  the samskara fire starts (D2), and the trigger evaluation awaits
+  the verdict inside the gate deadline; timeout/failure = the
+  deterministic verdict stands. Composition: verdict `null` +
+  gate probability >= threshold -> fire `'pivot'` for each
+  ENABLED pipeline; verdict `'stale'` + veto eligibility (D1) +
+  probability < threshold -> skip the refresh. Both pipelines'
+  verdicts consume the same one gate answer (`priming.ts:693-695`).
+- **M3 - `'pivot'` cross-runtime.** The union + coercers in BOTH
+  runtimes - they are duplicated declarations, not shared imports
+  (`intuition-payload.ts:11-12`), so nothing forces lockstep
+  except tests: Deno side `priming/intuition-payload.ts:100-108` +
+  `context-recall-payload.ts:139-147` (note: recall payloads are
+  `v: 2`); browser side `src/lib/intuition/types.ts:79` (union) +
+  `:207-215` (coercer) + `src/lib/context-recall/types.ts:97`.
+  Plus the two exhaustive UI switches with the new label -
+  `src/lib/ui/intuition.ts:13-24` (`formatIntuitionTrigger`,
+  label: "topic shifted") and `src/lib/ui/recall.ts:64-77`
+  (`formatRecallTrigger`, same label) - rendered by the
+  Intuition/Recall modals (`Intuition.svelte:193`,
+  `RecallEntry.svelte:176`). The compiler forces every switch;
+  the label copy is decided here.
 - **M4 - Tests.** Gate module unit tests (M1 shapes + verdicts +
-  fail-open); trigger composition tests (pivot fires, veto holds,
-  cold/mood/wall-clock never vetoed); coercer acceptance of
-  `'pivot'` in both runtimes.
+  fail-open incl. the deadline); trigger composition tests (pivot
+  fires, veto holds, cold/mood/wall-clock never vetoed, both-
+  disabled skip); the coercer tests: Deno side extends
+  `tests/priming-payloads.test.ts:8-9`; **the browser coercer has
+  NO vitest coverage today** - its `'pivot'` acceptance test is
+  net-new and is the only tripwire that catches a missed twin
+  edit.
 - **M5 - Docs.** `docs/dev/architecture.md` priming description,
   `docs/dev/intuition.md` + context-recall doc Interactions, the
   corpus scanner gotcha untouched, `venice-decisions-plan.md` B1
@@ -138,7 +177,10 @@ batching; `clef-api` is the private-tier model the plan
   cache past round 8 without a refresh, wall-clock fuse still
   fires at 1h, gate failure (blocked key) falls back to the
   deterministic verdict. Latency: time-to-first-token with the
-  gate vs without, sampled.
+  gate vs without, sampled. The stack serving quirk applies:
+  functions serve only from /Users/jeff.ober/dev/nak. If the QA
+  session's model is Venice-hosted, screenshots follow the 64px
+  minimum rule (viewport shots, never thin element clips).
 
 ## RISKS
 
@@ -148,11 +190,14 @@ batching; `clef-api` is the private-tier model the plan
 - **False-negative pivots** (gate says "informs" on a real pivot):
   bounded by the unchanged fuses - the worst case is today's
   behavior. False-positives (extra refreshes): cost bounded by the
-  threshold and the 1500ms overlap window.
+  threshold and the 1500ms ceiling (D2).
 - **The veto's blast radius**: vetoing the round fuse extends cache
   ride time; the think-block age note + the unchanged 1h suppression
   bound the harm. This is the riskiest decision (D1b) - the
   refinement round should argue it specifically.
+- **The gate deadline under partial outage**: a hung clef call is
+  cut at `PRIME_GATE_TIMEOUT_MS` and the deterministic verdict
+  stands - the TTFT budget is never the gate's hostage (D2).
 
 ## VERIFICATION
 
