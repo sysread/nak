@@ -278,7 +278,7 @@ half (`agent-models.ts:43-47`), minus anything that emits prose.
   living-docs treatment only. This plan doc is the
   brainstorm record.
 
-## B3 EXECUTION (appended 2026-11-18)
+## B3 EXECUTION (appended 2026-11-18; IMPLEMENTED + live-QA'd 2026-11-19)
 
 Scope: convert the grocery auto-sectioning classifier to the
 Decisions endpoint (brainstorm B3). The `/decisions` route from the
@@ -319,6 +319,18 @@ tokens + ~2k state - well under clef-api's 32k total. Answer
 choices echo section names; name -> id mapping takes the first
 matching section (duplicate user-created section names are rare and
 either target is plausible).
+
+Live QA (2026-11-19, local stack + real clef-api): baguette ->
+Bread (0.94), parmesan wedge -> Dairy (0.62), frozen peas ->
+Frozen (0.90), corn -> Produce (0.63) - four for four, confidence
+logged per filing through the in-app log drawer; plain adds stay
+in Other (the (Auto) affordance is the trigger, unchanged). A
+direct-API probe with a chowder recipe moved bare "corn" from 0.17
+to 0.89 - the recipe disambiguation works. One infra fix rode
+along: the corpus builder now escapes the `from` token and excludes
+docs/dev/plans/ + in-progress/ - path-quoting plan docs poisoned
+the bundled corpus and killed every local edge runtime at startup
+(704dfb51).
 
 ## VERIFICATION
 
