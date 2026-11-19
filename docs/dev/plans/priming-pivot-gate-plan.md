@@ -83,27 +83,39 @@ batching; `clef-api` is the private-tier model the plan
   constant cross-referencing the samskara one). At the trigger
   evaluation (`:700-705`) the gate verdict is awaited with the
   remaining window; on timeout or any failure the gate fails open
-  (D3). The bound this buys: the gate can NEVER push the pre-round
-  stage past the ceiling today's samskara race already allows -
-  time-to-first-token's worst case is unchanged by the gate's
-  presence.
-- **D2b - The gate has a skip predicate.** One decision call
-  answers both pipelines' verdicts (they can legitimately differ -
-  `priming.ts:693-695` - and one answer may fire one while vetoing
-  nothing for the other). The gate runs ONLY when its verdict is
-  consumable: skip when both pipelines are feature-disabled (no
-  refresh can happen - the gate is pointless), on `'cold'` (the
-  refresh is unconditional and there is no cached payload to
-  digest), on `'mood'` (the refresh is unconditional, D1), and on
-  wall-clock-stale `'stale'` (veto is not allowed there, D1). It
-  runs exactly when the deterministic verdict is null (fire
-  opportunity) or round-fuse `'stale'` (veto opportunity).
+  (D3), and the fetch rides the orchestrator's abort signal
+  (`veniceDecision` takes one) so a cancelled turn cancels the
+  gate. The bound this buys: the gate can NEVER push the pre-round
+  stage past the ceiling today's samskara race already allows.
+  The common case on gate-eligible turns can still ADD up to the
+  gate's own latency (~360ms) whenever the fire resolves first -
+  the worst case is unchanged, the median is not free.
+- **D2b - The gate has a skip predicate, per pipeline.** One
+  decision call answers both pipelines' verdicts (they can
+  legitimately differ - `priming.ts:693-695` - and one answer may
+  fire one pipeline while the other's verdict vetoes). The gate
+  runs ONLY when some enabled pipeline's verdict is consumable:
+  skip when both pipelines are feature-disabled (no refresh can
+  happen - the gate is pointless; in practice the client always
+  sends both switches on non-skip turns, `Chat.svelte:4803/:4829`),
+  on `'cold'` (the refresh is unconditional and there is no cached
+  payload to digest), on `'mood'` (unconditional, D1), and on
+  wall-clock-stale `'stale'` (veto not allowed there, D1). It
+  runs exactly when an enabled pipeline's verdict is null-with-a-
+  live-cache (fire opportunity) or round-fuse `'stale'` (veto
+  opportunity) - and NEVER through the same-round debounce: a null
+  verdict can also mean "already primed this round"
+  (`priming-triggers.ts:88`), and firing through it would break
+  the evaluator's own contract (`:86-87`); eligibility requires
+  `cache.computed_at_round < round` explicitly.
 - **D3 - Fail-open to the deterministic verdict.** Any gate failure
-  (transport, non-OK, malformed answer, beta drift) falls back to
-  `evaluatePreRoundTrigger`'s own result. Rationale: the existing
-  posture treats a stale-but-recent prime as better than none
-  (`priming.ts:727-756`) and cache-read failure already degrades to
-  forced refresh (`:859-862`); the gate must never silently
+  (transport, non-OK, malformed answer, beta drift, the deadline)
+  falls back to `evaluatePreRoundTrigger`'s own result. Rationale:
+  the existing posture treats a stale-but-recent prime as better
+  than none - the splice's age note + the injection guard
+  (`priming.ts:779-784`, `priming-triggers.ts:118-123`) - and
+  cache-read failure already degrades to forced refresh
+  (`priming.ts:859-862`); the gate must never silently
   suppress refreshes when Venice is down.
 - **D4 - The gate state is a digest, never the transcript.** State:
   the user message text, the cached payload digest (the perception
@@ -138,40 +150,56 @@ batching; `clef-api` is the private-tier model the plan
   `{ pivotProbability } | null` (null = unusable -> fail-open per
   D3). Pure, fetch-injectable, Deno-tested: request shaping, answer
   coercion, and the decide/veto verdict as pure functions.
-- **M2 - Trigger integration.** `priming.ts` starts the gate when
-  the samskara fire starts (D2), and the trigger evaluation awaits
-  the verdict inside the gate deadline; timeout/failure = the
-  deterministic verdict stands. Composition: verdict `null` +
-  gate probability >= threshold -> fire `'pivot'` for each
-  ENABLED pipeline; verdict `'stale'` + veto eligibility (D1) +
-  probability < threshold -> skip the refresh. Both pipelines'
-  verdicts consume the same one gate answer (`priming.ts:693-695`).
+- **M2 - Trigger integration.** For the gate to know its
+  eligibility (D2b) BEFORE spending the call, the pure trigger
+  evaluation hoists ABOVE the samskara race - it is pure, so
+  evaluating early is behavior-identical, and hoisted, both
+  verdicts are known at fire-start. `priming.ts` then starts the
+  gate + the samskara fire together when the skip predicate
+  passes, and the composition consumes the verdict inside the
+  gate deadline; timeout/failure = the deterministic verdict
+  stands. Composition, PER PIPELINE (a `'mood'` verdict is never
+  relabeled into a fire): enabled pipeline's verdict null with a
+  live cache and not debounced + probability >= threshold ->
+  fire `'pivot'` for that pipeline; verdict `'stale'` + veto
+  eligibility (D1) + probability < threshold -> skip that
+  pipeline's refresh. Both pipelines' verdicts consume the same
+  one gate answer (`priming.ts:693-695`).
 - **M3 - `'pivot'` cross-runtime.** The union + coercers in BOTH
   runtimes - they are duplicated declarations, not shared imports
   (`intuition-payload.ts:11-12`), so nothing forces lockstep
   except tests: Deno side `priming/intuition-payload.ts:100-108` +
   `context-recall-payload.ts:139-147` (note: recall payloads are
   `v: 2`); browser side `src/lib/intuition/types.ts:79` (union) +
-  `:207-215` (coercer) + `src/lib/context-recall/types.ts:97`.
-  Plus the two exhaustive UI switches with the new label -
-  `src/lib/ui/intuition.ts:13-24` (`formatIntuitionTrigger`,
-  label: "topic shifted") and `src/lib/ui/recall.ts:64-77`
-  (`formatRecallTrigger`, same label) - rendered by the
-  Intuition/Recall modals (`Intuition.svelte:193`,
-  `RecallEntry.svelte:176`). The compiler forces every switch;
-  the label copy is decided here.
+  `:207-215` (coercer) + `src/lib/context-recall/types.ts` (the
+  type field `:97` AND the recall coercer's OWN literal trigger
+  check `:182-190` - a plain if-chain with no exhaustiveness
+  assert, so a missed edit compiles clean and silently drops
+  `'pivot'` recall payloads on the realtime echo path
+  (`stream-transport.ts:547`, `Chat.svelte:3280/:5082`,
+  `Recall.svelte:74`)). Plus the two exhaustive UI switches with
+  the new label - `src/lib/ui/intuition.ts:13-24`
+  (`formatIntuitionTrigger`, label: "topic shifted") and
+  `src/lib/ui/recall.ts:64-77` (`formatRecallTrigger`, same
+  label) - rendered by the Intuition/Recall modals
+  (`Intuition.svelte:193`, `RecallEntry.svelte:176`). The
+  compiler forces the union switches; the recall if-chain and the
+  label copy are decided here.
 - **M4 - Tests.** Gate module unit tests (M1 shapes + verdicts +
-  fail-open incl. the deadline); trigger composition tests (pivot
-  fires, veto holds, cold/mood/wall-clock never vetoed, both-
-  disabled skip); the coercer tests: Deno side extends
-  `tests/priming-payloads.test.ts:8-9`; **the browser coercer has
-  NO vitest coverage today** - its `'pivot'` acceptance test is
-  net-new and is the only tripwire that catches a missed twin
-  edit.
+  fail-open incl. the deadline + the debounce-skip); trigger
+  composition tests (pivot fires, veto holds, cold/mood/wall-clock
+  never vetoed, both-disabled skip); the coercer tests: Deno side
+  extends `tests/priming-payloads.test.ts:8-9`; browser side:
+  recall coercer coverage EXISTS - extend
+  `tests/context-recall-types.test.ts`; the intuition browser
+  coercer has NO vitest coverage today - its `'pivot'` acceptance
+  test is net-new, and together they are the tripwire that catches
+  a missed twin edit.
 - **M5 - Docs.** `docs/dev/architecture.md` priming description,
-  `docs/dev/intuition.md` + context-recall doc Interactions, the
-  corpus scanner gotcha untouched, `venice-decisions-plan.md` B1
-  pointer to this plan.
+  `docs/dev/intuition.md` + `docs/dev/context-recall.md`
+  Interactions AND their literal payload-shape snippets carrying
+  the trigger union (`intuition.md:212`, `context-recall.md:345`),
+  `venice-decisions-plan.md` B1 pointer to this plan.
 - **M6 - Live QA.** Local stack + a real pivoting conversation:
   pivot turn fires `'pivot'` (log line), same-topic turns ride the
   cache past round 8 without a refresh, wall-clock fuse still
@@ -198,6 +226,10 @@ batching; `clef-api` is the private-tier model the plan
 - **The gate deadline under partial outage**: a hung clef call is
   cut at `PRIME_GATE_TIMEOUT_MS` and the deterministic verdict
   stands - the TTFT budget is never the gate's hostage (D2).
+- **Deploy-order skew**: an old coercer on either side rejecting
+  `'pivot'` self-heals - server-side the payload regenerates as
+  `'cold'` (one extra refresh); browser-side the echo is dropped
+  until assets refresh (transient, cosmetic).
 
 ## VERIFICATION
 
