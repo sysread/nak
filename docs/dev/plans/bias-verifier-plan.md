@@ -56,12 +56,12 @@ The pipeline today (`venice/agents/bias.ts`, read this session):
   validate: observations `{bias, confidence [0.40,0.85], reasoning,
   evidence_message_id?}` and reactions `{bias in active set,
   was_confirmed true/false/null, reasoning}` - empty reasoning
-  drops, non-active-bias reactions drop as fabrication (`:361-382`).
+  drops, non-active-bias reactions drop as fabrication (`:346-347,361-382`).
   Confidence clamps in the CALLER (`:574-578`): below-floor
   observations drop entirely, supra-cap pull down. Save via
   `bias_save_observations` (delete-then-insert under the claim +
   message-count guard).
-- **Aggregate** (`:614-799`): per user per catalog bias (18 keys),
+- **Aggregate** (`:614-799`): per user per catalog bias (19 keys),
   the `p_conv` per processed thread is a NOISY-OR over that thread's
   observation confidences (`schema.sql:14663`:
   `1.0 - exp(sum(ln(greatest(1.0 - confidence, 1e-9))))`; threads
@@ -135,7 +135,7 @@ probabilities.
   than authoring: the verifier's question CARRIES the emission
   under test (bias key, the observer's reasoning, the evidence
   pointer) - a direct-noul observer would run open-world
-  hypothesis tests (18 per-bias questions per thread, no candidate
+  hypothesis tests (19 per-bias questions per thread, no candidate
   attached), each an independent false-positive generator the
   ladder's ordered discipline was built to suppress. Third, the
   required reasoning + evidence citation are the audit trail (the
@@ -214,19 +214,27 @@ probabilities.
   `evidence_message_id` must resolve to a USER message row in the
   transcript payload AT OR BELOW the fork boundary (the boundary
   index is already computed for the splice; the fork note's
-  only-cite-below rule becomes deterministic) - an unresolvable OR
+  only-cite-below rule becomes deterministic; an UNFORKED thread has
+  no boundary - the whole transcript is in scope) - an unresolvable OR
   above-boundary id is nulled out (the observation is kept, the
   deep link is dropped - the exact semantics the schema already
   documents for deleted messages) with a log line. This is the
   free half of the falsification discipline: it closes the
-  FK-violation wedge (no unresolvable id reaches the save's cast)
+  FK-violation wedge (no unresolvable id reaches the save's cast;
+  residual race: an id resolvable at read time can be hard-deleted
+  before the save and the FK fires anyway - vanishingly narrow,
+  pre-existing in kind, unchanged by this plan)
   AND the re-cite class (inherited rows were analyzed in the
   parent thread - citing them double-counts). The marker entry
   itself carries no id (bias's bespoke splice, verified), so the
   check cannot collide with it.
 - **D7 - Calibration is a deliverable that closes a recorded
-  debt.** Every verified emission logs the pair (observer's SAVED
-  confidence, verifier p) plus usage - the first real measurement
+  debt.** Every verified emission logs a pair plus usage: for
+  observations (observer's SAVED confidence, verifier p); for
+  reactions (the emitted `was_confirmed`, verifier p). The veto and
+  calibration lines ride at DEBUG (B5's usage/answers precedent) -
+  the fail-open skip lines stay at INFO (D3). This is the first real
+  measurement
   of the observer's calibration, closing the QA doc's parked
   "[hosted] follow-up" (open since 2026-06-11). The veto ships
   WITH the logging rather than after a measure-first month:
@@ -244,16 +252,25 @@ probabilities.
   fail-open outside the window.** The verifier sees the observer's
   payload EXCEPT that an over-budget state is trimmed keep-newest to
   `BIAS_VERIFIER_STATE_BUDGET_CHARS = 80_000` (the B4/B5 figure -
-  same constraint set). Why a budget at all (it was not obvious):
+  same constraint set). Trim mechanics: the MESSAGES ARRAY inside
+  the payload shape is trimmed keep-newest (figure-shared with
+  `trimToCharBudget`, not code-shared - that helper is row-aligned
+  over StoredMessage[], the verifier's state is the JSON payload);
+  the envelope is preserved exactly (`fork_note`, `active_biases`,
+  and the marker's relative position). Why a budget at all (it was
+  not obvious):
   untrimmed, a long thread's verifier call 400s deterministically
   over clef-api's 32k-token state and fails open - and since the
   save stamps `bias_processed_at`, those threads would be silently,
   permanently unverified (no re-eligibility until a new message)
   while the calibration data skews to short threads. The trim's own
-  hazard is handled per emission: on a TRIMMED state, an emission
-  whose support cannot be located in-window fails open INDIVIDUALLY
-  - an evidence id absent from the trimmed payload, or (on a trimmed
-  state only) no evidence id at all - it STANDS with a log line; it
+  hazard is handled per emission ("support" = the transcript content
+  backing an emission): on a TRIMMED state, an emission whose
+  support cannot be located in-window fails open INDIVIDUALLY
+  - an observation whose evidence id is absent from the trimmed
+  messages, a NO-EVIDENCE-ID observation (cannot locate support),
+  and EVERY directional reaction (reactions carry no evidence
+  pointer) - it STANDS with a log line; it
   is never vetoed on missing context. On a non-trimmed state (the
   common case) everything is judged. No queue-advance machinery
   (the verifier has no queue - B4's pattern does not apply).
@@ -273,7 +290,9 @@ probabilities.
    log lines; add `BIAS_VERIFIER_MODEL` to `agent-models.ts`. The
    observer prompt, the catalog, the sweep skeleton, the save RPC
    call, and the aggregate phase are untouched.
-2. **Tests** (`tests/bias.test.ts`): the verifier needs a NET-NEW
+2. **Tests** (`supabase/functions/tests/bias.test.ts` - full path
+   once, since a root `tests/` also exists): the verifier needs a
+   NET-NEW
    harness - the existing suite never exercises `observeThread`
    (no fetch stub exists). Use the `globalThis.fetch` URL-routing
    stub pattern (`tests/image-op-tools.test.ts:151-176`) routing
@@ -281,13 +300,18 @@ probabilities.
    takes no fetchImpl - the global stub is the only seam). Pin:
    the payload identity (fork note + marker splice); the provenance
    check (resolvable+below passes; unresolvable nulled + logged;
-   above-boundary nulled; missing id tolerated); the verifier body
-   builder (model alias, state = the payload verbatim, per-emission
+   above-boundary nulled; missing id tolerated; the unforked
+   case); the verifier body builder (model alias, state = the
+   payload VERBATIM on a non-trimmed thread, the envelope-preserving
+   trimmed shape on an over-budget one, per-emission
    noul ids, the catalog entry + ladder in the criteria, the cap);
-   the coercion + veto table (drop below 0.5, keep at/above,
-   fail-open on null/malformed/empty); the directional-only
-   reaction rule; the calibration pair log line. The timeout path
-   is glue - live-QA-covered, not unit-pinned.
+   the coercion + veto table (observation drop below 0.5, reaction
+   downgrade to null, keep at/above,
+   fail-open on null/malformed/empty); the trimmed-state per-emission
+   fail-open cases (observation + reaction); the calibration pair
+   log lines (both shapes). The timeout path
+   is glue - live-QA-covered, not unit-pinned. Expose
+   `buildObserverPayload` + `verifyEmissions` via `__test`.
 3. **Docs.** `docs/dev/bias-profile.md` (EXISTS - the pipeline's
    rationale doc): the analyze phase gains the verifier stage
    (veto-only, fail-open, the provenance check, the calibration
@@ -329,7 +353,7 @@ probabilities.
 - **Claim-TTL arithmetic**: the observer's 429 retry ladder plus the
   verifier's 10s ceiling stay well inside the 300s TTL; a timeout
   fail-opens into a save, so the worst case is one save-rejected
-  recycle next tick.
+  recycle next tick. (The observer call itself remains untimed - pre-existing, unchanged by this plan.)
 - **Beta wire drift / timeout** -> fail-open -> today's behavior.
   Same exposure as B1-B5.
 
