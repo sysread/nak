@@ -149,9 +149,11 @@ Decision API facts the design rides on (parent plan
   (`intent_employment.ts:123-131`) lifted to probabilities (today
   takes a verbatim boolean; the threshold is the probability
   translation). No conditional minting also means no second round
-  trip. If a fourth decision consumer lands someday, hoist a shared
-  body builder into `_shared/venice/decisions.ts` then - two
-  consumers with documented divergence is the existing convention.
+  trip. HOISTED (B5): the state shaping (serializer, coercers,
+  item cap, call timeout) now lives in
+  `venice/agents/_decision_state.ts` - B5's follow-up judge shares
+  it; the shared module is NOT the barrel (per-consumer builders
+  stay put).
 - **D3 - The reaction choice carries a 4th option, `none`.** The
   minter drops null reactions from its aggregate, so a forced 3-way
   pick would fabricate a signal today's judge refuses to give

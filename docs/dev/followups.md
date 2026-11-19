@@ -41,9 +41,22 @@ Three moving parts:
   epistemic register (below).
 - **Resolution** - the same two writers, because a resolution can
   only ever ARRIVE through a conversation. The chat model closes
-  live (it asked and heard the answer); reflection closes as the
+  live (whether you asked or they volunteered the outcome);
+  reflection closes as the
   settled-thread backstop (outcome volunteered unprompted, close
-  missed, toolbox off).
+  missed, toolbox off). Since the B5 judge pre-pass, reflection's
+  cycle also runs one batched decision call (clef-api) scoring each
+  OPEN follow-up against the settled transcript ("does this
+  conversation contain the outcome?"), and injects the verdicts as
+  an advisory `<followup_judge>` block in the reflection prompt -
+  evidence aimed at missed closes, never authority: the agent
+  verifies against the transcript and still writes the resolution
+  line itself. Fail-open: no open follow-ups, judge failure, or an
+  unusable answer composes the prompt byte-identical to the static
+  one. Nothing persists - the p values live only in the drawer logs
+  (plus a post-run reconcile line joining each judged p with the
+  row's status: a close of a low-p row is a false-close candidate,
+  a still-open high-p row a missed-close candidate).
 
 ## The epistemic register
 
@@ -95,7 +108,11 @@ gather (never inferred by the smoothing model):
   unfiltered - it is small by construction).
 - `supabase/functions/venice/agents/reflection.ts` - the follow-up
   wire schemas, the toolbox additions, and the reconcile section of
-  the reflection prompt.
+  the reflection prompt; plus the B5 judge pre-pass
+  (`judgeFollowups` + the pure builder/coercion/composer, pinned in
+  `tests/followup-judge.test.ts`) and the shared state-shaping
+  module it rides (`agents/_decision_state.ts`, extracted from the
+  intent-employment judge).
 - `supabase/functions/_shared/embed-input.ts` - the `followups`
   entry in `EMBED_SOURCES` (`buildFollowupEmbedInput`).
 - `src/lib/ui/followups-inspector.ts` +
@@ -192,13 +209,20 @@ Two hazards this split creates, both guarded:
   dedicated follow-up agent was considered and rejected: it would
   duplicate reflection's whole coordination apparatus for a second
   pass over the same transcripts, and mint-vs-resolve is one
-  portfolio judgment over one context.
+  portfolio judgment over one context. The B5 judge pre-pass does
+  not change this: it writes nothing and carries no tools - the
+  close still flows through reflection's one toolbox.
 - **Reflection runtime is the cost to watch.** Reflection already
   runs near the hosted wall clock (the measured ~9-minute run that
   motivated its attempt cap - see [`memory.md`](./memory.md)); the
-  follow-up duties add prompt + tool weight. If it starts dying at
-  the wall, trim the follow-up prompt section - do not split out a
-  second agent.
+  follow-up duties add prompt + tool weight. The measured
+  mechanism: ROUNDS and thinking dominate the wall time, not prompt
+  bytes - the judge pre-pass adds one bounded call (~10s ceiling)
+  plus log lines per cycle, and its block must not induce
+  verification round spirals; if reflection starts dying at the
+  wall, trim the follow-up prompt section (the judge block rides
+  between it and the single-word line) - do not split out a second
+  agent.
 - **The surfacing gate is `contextRecallEnabled`.** Follow-up
   surfacing lives inside the context-recall pipeline, so disabling
   context recall silently disables the asks too (capture still

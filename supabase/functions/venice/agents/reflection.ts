@@ -59,9 +59,19 @@ import {
 } from './_run.ts';
 import {
   messageToVenice,
+  trimToCharBudget,
+  type StoredMessage,
   type VeniceWireMessage,
 } from './_recall_helpers.ts';
-import { REFLECTION_MODEL } from '../../_shared/agent-models.ts';
+import {
+  answersOf,
+  DECISION_CALL_TIMEOUT_MS,
+  DECISION_ITEM_CAP,
+  noulOf,
+  serializeTranscript,
+} from './_decision_state.ts';
+import { REFLECTION_MODEL, FOLLOWUP_JUDGE_MODEL } from '../../_shared/agent-models.ts';
+import { veniceDecision } from '../../_shared/venice.ts';
 
 // 600s matches the other fleets' claim TTLs (wiki, librarian). The
 // browser-era 120s looked generous but a substantial thread's
@@ -355,6 +365,232 @@ then reconcile it against this conversation:
 When you have nothing more to write, reply with a single word. The
 word is discarded — only the tool calls matter.`;
 
+// The prompt splits into BODY + the final single-word line so the
+// follow-up judge's advisory block can ride BETWEEN them - the
+// discard-your-reply contract must stay the last thing the model
+// reads. REFLECTION_PROMPT stays the composed full prompt (the test
+// pins and the no-judge path are byte-identical to it). The em-dash
+// in the final line is grandfathered from the browser-era original
+// (see the header note above); the judge block is ASCII - new text
+// per the repo default.
+const REFLECTION_PROMPT_BODY = REFLECTION_PROMPT.slice(
+  0,
+  REFLECTION_PROMPT.indexOf('When you have nothing more to write'),
+);
+const SINGLE_WORD_REPLY_LINE = REFLECTION_PROMPT.slice(
+  REFLECTION_PROMPT.indexOf('When you have nothing more to write'),
+);
+
+// B5's own trim budget for the judge's transcript state - the same
+// 80k figure as B4's (same constraint set: clef-api's 32k-token state
+// cap, ~4 chars/token), applied at the call site.
+const REFLECTION_STATE_BUDGET_CHARS = 80_000;
+
+// The 0.5 reading at which the judge block's prose calls a follow-up
+// "likely resolved here". Display-only - the agent decides; the
+// probability is always shown alongside.
+const FOLLOWUP_JUDGE_LABEL_THRESHOLD = 0.5;
+
+/** The open follow-ups the judge reads (the columns it needs). */
+interface JudgeableFollowup {
+  id: string;
+  question: string;
+  context: string;
+}
+
+/** The skip predicate: the judge runs on a non-empty slice with at
+ *  least one open follow-up, never otherwise. (A missing Venice key
+ *  is not a skip case - the cycle throws before the judge exists.) */
+export function shouldJudgeFollowups(sliceLength: number, openCount: number): boolean {
+  return sliceLength > 0 && openCount > 0;
+}
+
+async function readOpenFollowups(
+  adminClient: SupabaseClient,
+  userId: string,
+): Promise<JudgeableFollowup[]> {
+  const { data, error } = await adminClient
+    .from('followups')
+    .select('id, question, context')
+    .eq('user_id', userId)
+    .eq('status', 'open')
+    .order('created_at');
+  if (error) throw new Error(`followup read failed: ${error.message}`);
+  return (data ?? []) as JudgeableFollowup[];
+}
+
+/**
+ * Assemble the judge's POST /decisions body: the transcript + the
+ * open follow-ups as state, one noul per follow-up asking whether
+ * THIS conversation contains its outcome. The outcome bar is
+ * deliberate - "the user reported how it went, asked or unprompted" -
+ * the same bar the reconcile section uses for a close; a plan merely
+ * moving or being mentioned is not an outcome.
+ */
+export function buildJudgeRequest(
+  followups: readonly JudgeableFollowup[],
+  transcript: string,
+): Record<string, unknown> {
+  const questions: Record<string, unknown> = {};
+  for (const f of followups) {
+    questions[`resolved-${f.id}`] = {
+      type: 'noul',
+      instructions:
+        `The assistant saved this follow-up for itself: "${f.question}"` +
+        (f.context ? ` (context: ${f.context})` : '') +
+        '. Decide whether THIS conversation contains the follow-up\'s ' +
+        'OUTCOME - the user reported how it went, asked or unprompted. ' +
+        'A plan merely moving or being mentioned is not an outcome.',
+      criteria: {
+        true: 'The conversation contains the outcome of this follow-up.',
+        false: 'The outcome is not in this conversation.',
+      },
+    };
+  }
+  return {
+    model: FOLLOWUP_JUDGE_MODEL,
+    state: {
+      transcript,
+      followups: followups.map(({ id, question, context }) => ({ id, question, context })),
+    },
+    questions,
+  };
+}
+
+/**
+ * Coerce the judge's response into per-id probabilities, or null when
+ * NOTHING is usable (fail-open input). Ids with missing or malformed
+ * answers are dropped individually; an empty survivor set reads as
+ * null.
+ */
+export function coerceJudgeVerdicts(
+  payload: unknown,
+  validIds: ReadonlySet<string>,
+): Map<string, number> | null {
+  const answers = answersOf(payload);
+  if (!answers) return null;
+  const out = new Map<string, number>();
+  for (const id of validIds) {
+    const p = noulOf(answers, `resolved-${id}`);
+    if (p !== null) out.set(id, p);
+  }
+  return out.size > 0 ? out : null;
+}
+
+/**
+ * Compose the reflection prompt's final user turn: the body, then the
+ * judge's advisory block (when there are verdicts), then the
+ * single-word line LAST - the discard-your-reply contract must be the
+ * final thing the model reads. No verdicts = byte-identical to the
+ * static prompt (the fail-open path).
+ */
+export function composeReflectionPrompt(
+  judgeVerdicts: Map<string, number> | null,
+): string {
+  if (!judgeVerdicts || judgeVerdicts.size === 0) {
+    return REFLECTION_PROMPT;
+  }
+  const lines = [...judgeVerdicts.entries()].map(([id, p]) => {
+    const reading = p >= FOLLOWUP_JUDGE_LABEL_THRESHOLD
+      ? 'likely resolved here'
+      : 'not resolved here';
+    return `- ${id}: ${reading} (p=${p.toFixed(2)})`;
+  });
+  return (
+    REFLECTION_PROMPT_BODY +
+    `<followup_judge>
+A judge pass scored each OPEN follow-up below against this
+transcript (the probability that this conversation contains the
+follow-up's outcome). This is EVIDENCE, not a verdict: verify against
+the transcript before closing anything, and a close still needs your
+own one-line resolution. A low score changes nothing.
+
+${lines.join('\n')}
+</followup_judge>
+
+` +
+    SINGLE_WORD_REPLY_LINE
+  );
+}
+
+/**
+ * The judge pre-pass: read the user's open follow-ups, score each
+ * against the settled transcript in ONE batched decision call, and
+ * return the per-id probabilities - or null on any failure (no open
+ * follow-ups, transport/timeout, unusable answers): fail-open to no
+ * block, never throwing into the cycle. The call is timed (a stalled
+ * fetch would otherwise hang the cycle before the agent runs) and
+ * single-attempt. Nothing here writes: the agent keeps all close /
+ * save authority.
+ */
+async function judgeFollowups(
+  adminClient: SupabaseClient,
+  apiKey: string,
+  userId: string,
+  slice: readonly StoredMessage[],
+  log: ReturnType<typeof createEdgeLogger>,
+): Promise<Map<string, number> | null> {
+  try {
+    const open = await readOpenFollowups(adminClient, userId);
+    if (!shouldJudgeFollowups(slice.length, open.length)) return null;
+    const judged = open.slice(0, DECISION_ITEM_CAP);
+    if (judged.length < open.length) {
+      log.info(
+        `followup judge cap: judging first ${judged.length} of ${open.length} open follow-ups`,
+      );
+    }
+    const transcript = serializeTranscript(
+      trimToCharBudget([...slice], REFLECTION_STATE_BUDGET_CHARS),
+    );
+    const payload = await veniceDecision({
+      apiKey,
+      body: buildJudgeRequest(judged, transcript),
+      signal: AbortSignal.timeout(DECISION_CALL_TIMEOUT_MS),
+    });
+    const verdicts = coerceJudgeVerdicts(payload, new Set(judged.map((f) => f.id)));
+    if (verdicts) {
+      log.debug(
+        `followup-judge usage ${JSON.stringify((payload as { usage?: unknown })?.usage ?? null)}; ` +
+          `answers ${JSON.stringify((payload as { answers?: unknown })?.answers ?? null)?.slice(0, 1500)}`,
+      );
+    }
+    return verdicts;
+  } catch (err) {
+    log.info(`followup judge failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * The post-run reconciliation line (the false-close / missed-close
+ * detector): the judge's p value per judged follow-up joined with the
+ * row's status AFTER the agent's run. A close of a low-p row is a
+ * false-close candidate; a still-open high-p row is a missed-close
+ * candidate. Read-only - the join lives only in this log line.
+ */
+async function logFollowupReconciliation(
+  adminClient: SupabaseClient,
+  judgeVerdicts: Map<string, number>,
+  log: ReturnType<typeof createEdgeLogger>,
+): Promise<void> {
+  try {
+    const { data, error } = await adminClient
+      .from('followups')
+      .select('id, status')
+      .in('id', [...judgeVerdicts.keys()]);
+    if (error) throw new Error(error.message);
+    for (const row of (data ?? []) as Array<{ id: string; status: string }>) {
+      log.debug(
+        `followup-judge reconcile: ${row.id} p=${judgeVerdicts.get(row.id)?.toFixed(2)} status=${row.status}`,
+      );
+    }
+  } catch (err) {
+    log.debug(
+      `followup-judge reconcile failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 function buildReflectionToolbox(): Toolbox {
   return {
     name: 'reflection',
@@ -403,11 +639,17 @@ async function reflectClaimedThread(
     const apiKey = await readVeniceKey(adminClient);
     if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
 
+    // The follow-up judge pre-pass: advisory evidence only - no open
+    // follow-ups, a judge failure, or unusable answers returns null
+    // and the prompt composes byte-identical to the static one
+    // (fail-open).
+    const judgeVerdicts = await judgeFollowups(adminClient, apiKey, userId, slice, log);
+
     const convo: VeniceWireMessage[] = slice.map(messageToVenice);
     // Reflection instruction as the final user turn - the "switch
     // modes" idiom. The model sees the whole prior conversation in its
     // native shape and reads this as "now do this different task."
-    convo.push({ role: 'user', content: REFLECTION_PROMPT });
+    convo.push({ role: 'user', content: composeReflectionPrompt(judgeVerdicts) });
 
     const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
       adminClient,
@@ -441,6 +683,9 @@ async function reflectClaimedThread(
     // writes the agent already made stay - they're owned by the user,
     // not the claim - and the next cycle re-reflects, finding its own
     // writes via memory_search rather than duplicating.
+    if (judgeVerdicts) {
+      await logFollowupReconciliation(adminClient, judgeVerdicts, log);
+    }
     const marked = await markReflected(adminClient, threadId, holderId, terminalMsgId, userId);
     if (marked) {
       log.info(
@@ -620,5 +865,17 @@ async function markReflected(
 // Test-only surface. The toolbox composition (soft-decay set, no
 // memory_delete, no ask_user) is a safety invariant - background agents
 // must never hard-delete or reach for a UI tool - so it gets its own
-// assertion in supabase/functions/tests/reflection.test.ts.
-export const __test = { buildReflectionToolbox, REFLECTION_PROMPT };
+// assertion in supabase/functions/tests/reflection.test.ts. The judge
+// pre-pass's pure parts (skip predicate, body builder, coercion, the
+// prompt composer's byte-stability) are pinned in
+// supabase/functions/tests/followup-judge.test.ts.
+export const __test = {
+  buildReflectionToolbox,
+  REFLECTION_PROMPT,
+  REFLECTION_PROMPT_BODY,
+  SINGLE_WORD_REPLY_LINE,
+  shouldJudgeFollowups,
+  buildJudgeRequest,
+  coerceJudgeVerdicts,
+  composeReflectionPrompt,
+};

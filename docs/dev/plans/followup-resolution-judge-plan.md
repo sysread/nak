@@ -20,7 +20,7 @@ something they already told us - the exact nag the follow-up feature
 exists to prevent. A focused per-follow-up judgment is repeatable and
 cheap: ~1.4k input tokens is MEASURED (B4's live QA, a 6-question call
 over a small scripted transcript); latency at this shape is UNMEASURED
-- the calibration's small-probe bound is sub-second, and the call is
+(the calibration's small-probe bound is sub-second), and the call is
 one batched round against a reflection run measured at ~9 minutes
 where ROUNDS dominate the wall time (not prompt bytes - see RISKS).
 The p values are logged, giving the first calibration data on how
@@ -123,9 +123,9 @@ consumed only by that module and its `__test`; the coercers
 - **D1 - Model: `clef-api` via `DECISION_MODEL`** (the B4 tier
   constant, `agent-models.ts:54`): the state carries the user's own
   words (parent plan D1). The judge gets its own one-line alias
-  `FOLLOWUP_JUDGE_MODEL = DECISION_MODEL` (the
-  `INTENT_EMPLOYMENT_MODEL` precedent, `:76-78`) so logged model ids
-  stay greppable per consumer.
+  `FOLLOWUP_JUDGE_MODEL = DECISION_MODEL` in
+  `_shared/agent-models.ts` (the `INTENT_EMPLOYMENT_MODEL` precedent
+  there, `:76-78`) so logged model ids stay greppable per consumer.
 - **D2 - The judge composes; reflection keeps all authority.** The
   verdicts are ADVISORY EVIDENCE in the prompt. The agent still calls
   op=list, still verifies against the transcript, still decides, and
@@ -144,8 +144,10 @@ consumed only by that module and its `__test`; the coercers
   (`serializeTranscript` + the private `clip`/`renderToolCalls`
   helpers), the three serializer clip caps (`MAX_ROW_CHARS` 24k,
   `MAX_TOOL_RESULT_CHARS` 4k, `MAX_TOOL_ARG_CHARS` 300) as
-  parameters, and the coercers (`noulOf` / `choiceOf` + the
-  answers-map shape). NOT homed in `_shared/venice/`: that
+  parameters, the coercers (`noulOf` / `choiceOf` + the answers-map
+  shape), and the item cap (`EMPLOYMENT_MAX_INTENTS` moves and is
+  renamed `DECISION_ITEM_CAP`; B4's `__test` export and its
+  `>= 1` assert follow the rename). NOT homed in `_shared/venice/`: that
   directory's contract is "the barrel re-exports every symbol"
   (`_shared/venice.ts:12-13`) and every member is a wire relay;
   worse, the module needs `StoredMessage` from
@@ -163,7 +165,7 @@ consumed only by that module and its `__test`; the coercers
   change (parameterized caps), not a pure move, and B4's budget pin
   (`intent_employment.test.ts:57-60`) keeps pinning B4's chosen
   budget after parameterization. B1's `coerceGateAnswer`
-  (`pivot-gate.ts:144-153`) - a third twin of `noulOf` hardcoded to
+  (`pivot-gate.ts:144-153`) - the one noul-coercer twin hardcoded to
   the `pivot` id - is rewired to the shared coercer in the same
   change (one line; a "shared answers coercer" module that leaves a
   fresh duplicate in the tree undercuts its own rationale).
@@ -208,12 +210,15 @@ consumed only by that module and its `__test`; the coercers
   timeout it hangs the cycle before the agent runs (no mark, no log,
   the isolate dies at ~400s, the claim burns an attempt; three hangs
   wedge the thread out of reflection). 10s is ~25x the expected
-  latency and far under the kill. The same fix lands for B4's judge
-  (its hang starves the remaining drain loop - see PLAN 2).
+  latency and far under the kill. The same timeout fix lands for
+  B4's judge (its hang starves the remaining drain loop) AND B2's
+  verdict call (its hang stalls the completed-turn waitUntil tail) -
+  both currently pass no signal (see PLAN 2).
   Timeout/transport/coercion failure = info log (B4's level) + no
   block (fail-open). The p values, the decision response's `usage`,
   AND a post-run reconciliation line are logged: after the agent's
-  run, each judged follow-up's p value joined with its row state -
+  run, one re-read of the judged rows (a single query by id) joins
+  each follow-up's p value with its row state -
   a close of a low-p row is a false-close candidate, a still-open
   high-p row is a missed-close candidate. (The Logs drawer
   broadcasts debug to the user - "log-only" means in-drawer, same
@@ -229,22 +234,28 @@ consumed only by that module and its `__test`; the coercers
 ## PLAN
 
 1. **Extract `venice/agents/_decision_state.ts`** (D3): move
-   `serializeTranscript` + helpers + coercers out of
-   `intent_employment.ts` with parameterized clip caps; rewire B1's
-   `coerceGateAnswer` to the shared coercer; update
-   `intent_employment.ts` (imports, call site, `__test` re-exports,
-   and the `:73-75` sync-by-intent comment now pointing at the
-   shared home) and its test (the budget pin stays; the serializer
-   tests follow the `__test` re-export).
+   `serializeTranscript` + helpers + coercers + the item cap
+   (renamed `DECISION_ITEM_CAP`) out of `intent_employment.ts` with
+   parameterized clip caps; rewire B1's `coerceGateAnswer` to the
+   shared coercer; update `intent_employment.ts` (imports, call
+   site, `__test` re-exports, and the `:73-75` sync-by-intent
+   comment now pointing at the shared home) and its test (the
+   budget pin stays; the cap assert follows the rename; the
+   serializer tests follow the `__test` re-export).
 2. **Add the judge to `reflection.ts`**: the follow-ups read (D4),
    the body builder (per-follow-up noul with the question + context
    in the instructions; state = `{ transcript, followups }`), the
    coercion (per-id verdicts, fail-open), the pure prompt builder
    with the split consts (D5), and the wiring in
-   `reflectClaimedThread` (D6, including the timeout). ALSO
-   fix-forward: B4's judge call in `intent_employment.ts` gains the
-   same `AbortSignal.timeout` (the hang case is pre-existing there
-   and worse - a hang starves the remaining drain).
+   `reflectClaimedThread` (D6, including the timeout; B5's own trim
+   budget = the same 80k figure as B4, applied at the judge's call
+   site - same constraint set). The alias
+   `FOLLOWUP_JUDGE_MODEL = DECISION_MODEL` lands in
+   `_shared/agent-models.ts`. ALSO fix-forward: B4's judge call in
+   `intent_employment.ts` AND B2's verdict call in
+   `second_thoughts.ts` gain the same `AbortSignal.timeout` (the
+   hang case is pre-existing in both: B4's starves the remaining
+   drain; B2's stalls the completed-turn waitUntil tail).
 3. **Tests.** New `followup-judge.test.ts`: the body builder (model
    alias, state fences, one noul per follow-up, the question
    verbatim in the instructions); coercion (happy path;
@@ -265,11 +276,17 @@ consumed only by that module and its `__test`; the coercers
    `docs/qa/use-cases/followup-capture.md`: the reflection-close arm
    gains the judge step (and the executed row after the live run).
    `docs/dev/plans/venice-decisions-plan.md`: flip the B5 entry to
-   implemented + pointer here.
+   implemented + pointer here. B4's plan doc's hoist note
+   (`intent-employment-decisions-plan.md:152-154`) gains a pointer
+   to the shared module's actual home (it named
+   `_shared/venice/decisions.ts` - the deviation is D3's, reasoned).
 5. **Gate, self-review, QA, land.** `mise run check` (exit code
    un-piped), the codified pre-merge self-review (slop-grep over
    added lines; straggler scan; adversarial read of own comments),
-   live QA below, land on main, CI watch through deploy.
+   live QA below (NOTE: fresh fixture threads are unclaimable past
+   the day gate - backdate `updated_at`/`created_at` to yesterday
+   via SQL, per the followup-capture doc's own Results log), land on
+   main, CI watch through deploy.
 
 ## RISKS
 
@@ -324,7 +341,8 @@ consumed only by that module and its `__test`; the coercers
      the judge's low p is logged.
   3. **Fail-open arm**: a thread with NO open follow-ups. Assert: no
      judge call logged; reflection completes byte-identically (the
-     prompt pin covers the shape).
-  Plus in arms 1-2: the tool-call-count sanity check (the block
-  should not inflate the agent's rounds) and the reconciliation log
+     builder's byte-stability unit test covers the shape; the arm
+     proves the skip predicate live).
+  Plus in arms 1-2: the tool-call-count sanity check (`result.toolCalls`
+  is already logged by the finish line) and the reconciliation log
   line. The executed rows land in the QA doc's Results log.

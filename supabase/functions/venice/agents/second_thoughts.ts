@@ -67,6 +67,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { veniceComplete, veniceDecision } from '../../_shared/venice.ts';
+import { DECISION_CALL_TIMEOUT_MS } from './_decision_state.ts';
 import { SECOND_THOUGHTS_MODEL } from '../../_shared/agent-models.ts';
 
 // The verdict's model: the decision model that answers the disposition
@@ -714,13 +715,17 @@ export async function secondThoughtsOnTurnTail(
 
     // The verdict: one decision call over the serialized slice. A
     // failure (transport, non-OK, malformed answer) = no verdict
-    // written - never a fabricated one (D3).
+    // written - never a fabricated one (D3). The timeout matters: a
+    // STALLED fetch is not an error fail-open can catch - it would
+    // stall the completed-turn waitUntil tail; 10s degrades a hang
+    // into the ordinary no-verdict path.
     const decisionPayload = await veniceDecision({
       apiKey,
       body: buildVerdictRequest(
         rows,
         serializeBackground(background, backgroundUrls),
       ),
+      signal: AbortSignal.timeout(DECISION_CALL_TIMEOUT_MS),
     });
     const drawn = coerceDisposition(decisionPayload);
     if (!drawn) {

@@ -102,7 +102,12 @@ them ([dev: followups](../../dev/followups.md)):
 - Step 9: the lasagna row is `status='answered'` with a
   `resolution` mentioning the outcome, closed by REFLECTION (no
   `followups` op=close call in any chat transcript; the reflection log
-  lines show the close). The manager row is untouched - closing
+  lines show the close). Since the B5 judge pre-pass, the reflection
+  log also shows one `followup-judge` decision call (usage +
+  per-follow-up noul answers), the `<followup_judge>` block riding
+  the prompt (trace), and a `followup-judge reconcile` line joining
+  the judged p with the post-run status. The manager row is
+  untouched - closing
   is per-loop judgment, not a sweep.
 - At no point does a row exist for chit-chat without a pending
   outcome - capture is judgment-gated, not every-plan-mechanical.

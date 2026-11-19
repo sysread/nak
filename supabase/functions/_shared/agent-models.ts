@@ -76,6 +76,8 @@ export const INTENT_MODEL = EASY_TASK_MODEL;
 // The employment judge emits no prose - it rides the decision tier,
 // NOT the easy-task tier: editing EASY_TASK_MODEL does not retarget it.
 export const INTENT_EMPLOYMENT_MODEL = DECISION_MODEL;
+// B5's follow-up resolution judge (reflection's decision pre-pass).
+export const FOLLOWUP_JUDGE_MODEL = DECISION_MODEL;
 export const SAMSKARA_MODEL = EASY_TASK_MODEL;
 export const EVALUATION_MODEL = BIG_WINDOW_MODEL;
 export const SECOND_THOUGHTS_MODEL = EASY_TASK_MODEL;

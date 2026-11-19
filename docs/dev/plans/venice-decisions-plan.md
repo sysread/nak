@@ -149,7 +149,14 @@ typed), the chat call runs only when the verdict says it is needed.
   dynamically from the active intent list. The `reasoning` sentence
   would be lost; it is telemetry, not product
   (`intent_employment.ts:37-42`).
-- **B5 - Follow-up / intent resolution checks.** "Did this turn
+- **B5 - Follow-up / intent resolution checks.** IMPLEMENTED on
+  branch followup-resolution-judge - see
+  `docs/dev/plans/followup-resolution-judge-plan.md` (a judge
+  pre-pass composed into reflection: one noul per OPEN follow-up
+  over the settled transcript, advisory verdicts injected in the
+  prompt, the agent keeps close authority + the resolution prose;
+  the shared state-shaping module `_decision_state.ts` extracted
+  per B4's hoist note). Original premise notes: "Did this turn
   resolve the pending follow-up?" is a noul. Today that check is
   folded into the reflection agent's prose reasoning.
 - **B6 - Bias observer (partial, do not lead with it).** The

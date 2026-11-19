@@ -27,9 +27,12 @@
 // were live during it) cross-user, run one judge over the transcript,
 // save under the claim + message-count guard, stamp processed. Gated on
 // the intentsEnabled toggle at the claim, so an opted-out user is never
-// processed. The request builder, serializer, coercion, and failure
+// processed. The request builder, coercion, and failure
 // classifier are pure and pinned by the Deno suite at
-// supabase/functions/tests/intent_employment.test.ts via __test.
+// supabase/functions/tests/intent_employment.test.ts via __test; the
+// state shaping (the transcript serializer, the clip caps, the
+// answers coercers, the item cap, the call timeout) is shared with
+// the other decision judges - see _decision_state.ts.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
@@ -38,8 +41,15 @@ import { VeniceError, veniceDecision } from '../../_shared/venice.ts';
 import {
   loadThreadSlice,
   trimToCharBudget,
-  type StoredMessage,
 } from './_recall_helpers.ts';
+import {
+  answersOf,
+  choiceOf,
+  DECISION_CALL_TIMEOUT_MS,
+  DECISION_ITEM_CAP,
+  noulOf,
+  serializeTranscript,
+} from './_decision_state.ts';
 import { INTENT_EMPLOYMENT_MODEL } from '../../_shared/agent-models.ts';
 const INTENT_EMPLOYMENT_CLAIM_TTL_SECONDS = 300;
 const INTENT_EMPLOYMENT_MIN_USER_MESSAGES = 2;
@@ -52,32 +62,14 @@ const INTENT_EMPLOYMENT_SWEEP_CAP = 10;
 // future calibration can retune this against real distributions.
 const EMPLOYMENT_NOUL_THRESHOLD = 0.5;
 
-// Cap on intents judged per thread. The claim's snapshot array is
-// unbounded and the 32k-TOKEN budget is shared by state AND questions,
-// so the question fan-out needs a ceiling. 12 is far past any real
-// portfolio; excess snapshot ids are logged and get no row this round.
-const EMPLOYMENT_MAX_INTENTS = 12;
-
 // Serialized-state budget: clef-api's state cap is 32k tokens; ~4
 // chars per token puts 80k chars at ~20k tokens, leaving room for the
 // questions under the 32k total. CJK-heavy transcripts run ~1-3
 // chars/token and can overflow - the decision response's usage is
-// logged so the real ratio is visible.
+// logged so the real ratio is visible. (This trim budget is B4's own
+// knob, applied at the call site via trimToCharBudget; the serializer
+// clip caps live in _decision_state.ts.)
 const EMPLOYMENT_STATE_BUDGET_CHARS = 80_000;
-// Per-row clip for transcript content. trimToCharBudget always keeps
-// the last message even when it alone exceeds the budget; without
-// this clip that row serializes whole, blows the 32k-token state cap,
-// and the thread takes a deterministic-400 empty verdict instead of a
-// judged one.
-const MAX_ROW_CHARS = 24_000;
-// Per-tool-result body cap in the serialized transcript. Same figure
-// as second_thoughts.ts MAX_TOOL_RESULT_CHARS - keep the two in sync
-// by intent (each module serializes for its own judge).
-const MAX_TOOL_RESULT_CHARS = 4000;
-// Per-tool-call argument cap in the rendered tool-call line. The lean
-// is visible in WHICH tool ran and roughly with what; the full
-// argument blob is not needed and can be huge.
-const MAX_TOOL_ARG_CHARS = 300;
 
 /** The firewall framing, carried into every question's instructions. */
 const BOOKKEEPING =
@@ -95,58 +87,6 @@ export interface EmploymentVerdict {
   opening: boolean;
   acted: boolean;
   reaction: EmploymentReaction | null;
-}
-
-function clip(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}...[clipped]` : text;
-}
-
-/**
- * Render one tool_calls array as a compact human-readable line list,
- * arguments capped (the lean is in the call, not the blob).
- */
-function renderToolCalls(raw: unknown[]): string {
-  const lines: string[] = [];
-  for (const c of raw) {
-    if (!c || typeof c !== 'object') continue;
-    const fn = (c as { function?: { name?: unknown; arguments?: unknown } }).function;
-    const name = typeof fn?.name === 'string' ? fn.name : 'unknown';
-    const args = typeof fn?.arguments === 'string' ? fn.arguments : '';
-    lines.push(`  - ${name}(${clip(args, MAX_TOOL_ARG_CHARS)})`);
-  }
-  return lines.join('\n');
-}
-
-/**
- * Serialize the transcript into a single fenced string, carried as
- * decision-call STATE (data, not a chat turn) so nothing invites the
- * model to answer as a conversational voice. Role-tagged rows: user
- * and assistant content, tool calls as rendered lines, tool-result
- * bodies capped, fork-framing system rows verbatim (short boundary
- * context; the chat path sends them as system messages).
- */
-export function serializeTranscript(rows: readonly StoredMessage[]): string {
-  const parts: string[] = ['<transcript>'];
-  for (const m of rows) {
-    if (m.role === 'user') {
-      parts.push(`[user]\n${clip(m.content ?? '', MAX_ROW_CHARS)}`);
-    } else if (m.role === 'assistant') {
-      const seg: string[] = ['[assistant]'];
-      const body = (m.content ?? '').trim();
-      if (body) seg.push(clip(body, MAX_ROW_CHARS));
-      if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-        seg.push(`(tool calls)\n${renderToolCalls(m.tool_calls)}`);
-      }
-      parts.push(seg.join('\n'));
-    } else if (m.role === 'tool') {
-      const label = m.name ? `tool result: ${m.name}` : 'tool result';
-      parts.push(`[${label}]\n${clip(m.content ?? '', MAX_TOOL_RESULT_CHARS)}`);
-    } else {
-      parts.push(`[system]\n${clip(m.content ?? '', MAX_ROW_CHARS)}`);
-    }
-  }
-  parts.push('</transcript>');
-  return parts.join('\n\n');
 }
 
 /**
@@ -212,21 +152,6 @@ export function buildEmploymentRequest(
   return { model: INTENT_EMPLOYMENT_MODEL, state, questions };
 }
 
-function noulOf(answers: Record<string, unknown>, id: string): number | null {
-  const answer = answers[id];
-  if (!answer || typeof answer !== 'object') return null;
-  const noul = (answer as { noul?: unknown }).noul;
-  if (typeof noul !== 'number' || !Number.isFinite(noul)) return null;
-  return Math.min(1, Math.max(0, noul));
-}
-
-function choiceOf(answers: Record<string, unknown>, id: string): string | null {
-  const answer = answers[id];
-  if (!answer || typeof answer !== 'object') return null;
-  const choice = (answer as { choice?: unknown }).choice;
-  return typeof choice === 'string' ? choice : null;
-}
-
 /**
  * Coerce the /decisions response into per-tag verdicts. Transport +
  * validation only: each tag needs a usable noul under BOTH boolean
@@ -243,10 +168,8 @@ export function parseEmploymentVerdicts(
   validTags: ReadonlySet<string>,
 ): Map<string, EmploymentVerdict> {
   const out = new Map<string, EmploymentVerdict>();
-  if (!payload || typeof payload !== 'object') return out;
-  const answers = (payload as { answers?: unknown }).answers;
-  if (!answers || typeof answers !== 'object') return out;
-  const a = answers as Record<string, unknown>;
+  const a = answersOf(payload);
+  if (!a) return out;
   for (const tag of validTags) {
     const openingP = noulOf(a, `opening-${tag}`);
     const actedP = noulOf(a, `acted-${tag}`);
@@ -365,7 +288,7 @@ async function employmentForThread(
     return;
   }
 
-  const judged = intents.slice(0, EMPLOYMENT_MAX_INTENTS);
+  const judged = intents.slice(0, DECISION_ITEM_CAP);
   if (judged.length < intents.length) {
     log.info(
       `intent cap: judging first ${judged.length} of ${intents.length} active intents`,
@@ -386,6 +309,7 @@ async function employmentForThread(
     payload = await veniceDecision({
       apiKey,
       body: buildEmploymentRequest(judged, transcript),
+      signal: AbortSignal.timeout(DECISION_CALL_TIMEOUT_MS),
     });
   } catch (err) {
     if (isDeterministicRejection(err)) {
@@ -466,7 +390,7 @@ async function saveEmployments(
 export const __test = {
   INTENT_EMPLOYMENT_MODEL,
   EMPLOYMENT_NOUL_THRESHOLD,
-  EMPLOYMENT_MAX_INTENTS,
+  DECISION_ITEM_CAP,
   EMPLOYMENT_STATE_BUDGET_CHARS,
   buildEmploymentRequest,
   parseEmploymentVerdicts,

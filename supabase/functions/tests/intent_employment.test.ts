@@ -13,7 +13,7 @@ import { __test } from '../venice/agents/intent_employment.ts';
 const {
   INTENT_EMPLOYMENT_MODEL,
   EMPLOYMENT_NOUL_THRESHOLD,
-  EMPLOYMENT_MAX_INTENTS,
+  DECISION_ITEM_CAP,
   EMPLOYMENT_STATE_BUDGET_CHARS,
   buildEmploymentRequest,
   parseEmploymentVerdicts,
@@ -56,7 +56,7 @@ Deno.test('the judge rides the decision tier, not the chat palette', () => {
 
 Deno.test('budget constants', () => {
   assertEquals(EMPLOYMENT_NOUL_THRESHOLD, 0.5);
-  assert(EMPLOYMENT_MAX_INTENTS >= 1);
+  assert(DECISION_ITEM_CAP >= 1);
   assertEquals(EMPLOYMENT_STATE_BUDGET_CHARS, 80_000);
 });
 

@@ -38,6 +38,7 @@ import {
   type RoundCacheSnapshot,
 } from '../../_shared/priming-triggers.ts';
 import { veniceDecision } from '../../_shared/venice.ts';
+import { answersOf, DECISION_CALL_TIMEOUT_MS, noulOf } from '../agents/_decision_state.ts';
 
 /** The gate's deadline, anchored to its own start. Same value as the
  *  samskara race's SAMSKARA_PRIMING_TIMEOUT_MS (priming.ts:68) and
@@ -142,14 +143,9 @@ export function buildGateRequest(inputs: PivotGateInputs): Record<string, unknow
  * stands".
  */
 export function coerceGateAnswer(payload: unknown): number | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const answers = (payload as { answers?: unknown }).answers;
-  if (!answers || typeof answers !== 'object') return null;
-  const pivot = (answers as Record<string, unknown>).pivot;
-  if (!pivot || typeof pivot !== 'object') return null;
-  const noul = (pivot as { noul?: unknown }).noul;
-  if (typeof noul !== 'number' || !Number.isFinite(noul)) return null;
-  return Math.min(1, Math.max(0, noul));
+  const answers = answersOf(payload);
+  if (!answers) return null;
+  return noulOf(answers, 'pivot');
 }
 
 export interface GateVerdictInput {
