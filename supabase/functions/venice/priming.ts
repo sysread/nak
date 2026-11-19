@@ -750,6 +750,9 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
   // gate answer (timeout/transport/malformed) fails open: the
   // deterministic verdict stands untouched.
   const gatePivot = gatePromise ? await gatePromise : null;
+  if (gatePromise) {
+    intuitionLog.info('pivot gate consumed', { pivot: gatePivot });
+  }
   const intuitionFinalTrigger = gatePromise
     ? composeTrigger({
         verdict: intuitionTrigger,
