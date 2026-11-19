@@ -21,8 +21,11 @@
 /** Why an intuition/context-recall refresh ran. 'title' is legacy-only
  *  (the mid-turn title trigger died when tool dispatch moved
  *  server-side); payloads persisted before that still carry it, so the
- *  coercers keep accepting it. */
-export type IntuitionTrigger = 'title' | 'mood' | 'stale' | 'cold';
+ *  coercers keep accepting it. 'pivot' is the decision-model gate's
+ *  reason: the gate judged the user's message a topic pivot (or
+ *  otherwise beyond what the cached payload informs) and fired the
+ *  refresh ahead of the round/wall-clock fuses. */
+export type IntuitionTrigger = 'title' | 'mood' | 'stale' | 'cold' | 'pivot';
 
 /** Forces a refresh after this many user-rounds without one, so a slow
  *  conversation that drifts under the mood threshold still gets a fresh

@@ -35,8 +35,10 @@ import {
   evaluatePreRoundTrigger,
   type IntuitionTrigger,
   isPayloadFreshForInjection,
+  type RoundCacheSnapshot,
 } from '../_shared/priming-triggers.ts';
 import { type BroadcastPublisher } from './broadcast.ts';
+import { composeTrigger, runPivotGate } from './priming/pivot-gate.ts';
 import {
   fireSamskaras,
   getCompoundSummary,
@@ -640,8 +642,60 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
   let { intuition: intuitionCache, contextRecall: contextRecallCache } =
     await readThreadCaches(adminClient, userId, threadId, recallLog);
 
-  // Samskara priming bundle: compound summary (always-on across turns) +
-  // situational fire (top-k for THIS user text), raced against the
+  // The deterministic trigger evaluation, hoisted ABOVE the samskara
+  // race. It is pure, so evaluating before the race is
+  // behavior-identical - and hoisted, the pivot gate (started with the
+  // samskara fire, below) knows whether its verdict is consumable
+  // before spending its call. Per-cache computed_at_round, so the same
+  // turn can refresh one pipeline and debounce the other.
+  const intuitionTrigger: IntuitionTrigger | null = intuitionModelId
+    ? evaluatePreRoundTrigger({ cache: intuitionCache, round: currentUserRound, mood, nowMs })
+    : null;
+  const recallTrigger: IntuitionTrigger | null = contextRecallEnabled
+    ? evaluatePreRoundTrigger({ cache: contextRecallCache, round: currentUserRound, mood, nowMs })
+    : null;
+
+  // The pivot gate (see pivot-gate.ts): one decision-model call that
+  // can fire a refresh ahead of the fuses ('pivot') or veto a
+  // round-fuse 'stale' verdict. Started HERE so it races the same
+  // ceiling as the samskara fire below (PRIME_GATE_TIMEOUT_MS, same
+  // t0) - the pre-round stage never waits past that ceiling for it.
+  // Skipped entirely when no enabled pipeline's verdict is consumable:
+  // cold/mood refresh unconditionally, a wall-clock-stale cache cannot
+  // be vetoed, a debounced or absent cache has nothing to judge, and
+  // with both pipelines disabled no refresh can happen at all
+  // (plan D2b).
+  const gateEligible = (
+    verdict: IntuitionTrigger | null,
+    cache: RoundCacheSnapshot | null
+  ): boolean =>
+    (verdict === null &&
+      cache !== null &&
+      cache.computed_at_round < currentUserRound) ||
+    (verdict === 'stale' &&
+      cache !== null &&
+      isPayloadFreshForInjection(cache, nowMs));
+  const gateEligibleForIntuition =
+    intuitionModelId && gateEligible(intuitionTrigger, intuitionCache);
+  const gateEligibleForRecall =
+    contextRecallEnabled && gateEligible(recallTrigger, contextRecallCache);
+  const gatePromise =
+    gateEligibleForIntuition || gateEligibleForRecall
+      ? runPivotGate({
+          apiKey,
+          userText,
+          intuitionCache,
+          recallCache: contextRecallCache,
+          round: currentUserRound,
+          mood,
+          nowMs,
+          signal,
+          log: intuitionLog,
+        })
+      : null;
+
+  // Samskara priming bundle: compound summary (always-on across turns)
+  // + situational fire (top-k for THIS user text), raced against the
   // timeout so a slow Venice never delays the first token. The fire's
   // start/end liveness brackets the underlying fire promise (not the
   // raced one), so the spinner end fires when the fire actually settles
@@ -690,23 +744,56 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
   ]);
   if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
 
-  // Subconscious-priming pipelines. Each reads the shared trigger
-  // evaluator independently (per-cache computed_at_round, so the same
-  // turn can refresh one and debounce the other) and is gated by its
-  // feature switch. The onWillRun-equivalent liveness publish fires only
-  // when a pipeline commits to running, so a no-trigger turn never
-  // flashes a spinner. Run in parallel: the wall-clock cost is
-  // max(intuition, recall), not additive.
-  const intuitionTrigger: IntuitionTrigger | null = intuitionModelId
-    ? evaluatePreRoundTrigger({ cache: intuitionCache, round: currentUserRound, mood, nowMs })
-    : null;
-  const recallTrigger: IntuitionTrigger | null = contextRecallEnabled
-    ? evaluatePreRoundTrigger({ cache: contextRecallCache, round: currentUserRound, mood, nowMs })
-    : null;
+  // Consume the gate (bounded - see PRIME_GATE_TIMEOUT_MS: started at
+  // the samskara fire's t0, so this await never extends the stage past
+  // that ceiling) and compose each pipeline's final trigger. A null
+  // gate answer (timeout/transport/malformed) fails open: the
+  // deterministic verdict stands untouched.
+  const gatePivot = gatePromise ? await gatePromise : null;
+  const intuitionFinalTrigger = gatePromise
+    ? composeTrigger({
+        verdict: intuitionTrigger,
+        cache: intuitionCache,
+        round: currentUserRound,
+        nowMs,
+        gatePivot,
+      })
+    : intuitionTrigger;
+  const recallFinalTrigger = gatePromise
+    ? composeTrigger({
+        verdict: recallTrigger,
+        cache: contextRecallCache,
+        round: currentUserRound,
+        nowMs,
+        gatePivot,
+      })
+    : recallTrigger;
+  if (gatePivot !== null) {
+    if (intuitionFinalTrigger !== intuitionTrigger) {
+      intuitionLog.info('pivot gate: intuition trigger recomputed', {
+        deterministic: intuitionTrigger,
+        final: intuitionFinalTrigger,
+        pivot: gatePivot,
+      });
+    }
+    if (recallFinalTrigger !== recallTrigger) {
+      recallLog.info('pivot gate: recall trigger recomputed', {
+        deterministic: recallTrigger,
+        final: recallFinalTrigger,
+        pivot: gatePivot,
+      });
+    }
+  }
 
+  // Subconscious-priming pipelines. Each is gated by its feature
+  // switch and its COMPOSED trigger (deterministic verdict composed
+  // with the pivot gate, above). The onWillRun-equivalent liveness
+  // publish fires only when a pipeline commits to running, so a
+  // no-trigger turn never flashes a spinner. Run in parallel: the
+  // wall-clock cost is max(intuition, recall), not additive.
   const [freshIntuition, freshRecall] = await Promise.all([
     (async (): Promise<IntuitionPayload | null> => {
-      if (!intuitionModelId || !intuitionTrigger) return null;
+      if (!intuitionModelId || !intuitionFinalTrigger) return null;
       void publisher.publish({ type: 'priming_start', op: 'intuition' });
       try {
         return await deps.runIntuitionPipeline({
@@ -720,7 +807,7 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
           round: currentUserRound,
           mood,
           nowMs,
-          trigger: intuitionTrigger,
+          trigger: intuitionFinalTrigger,
           signal,
           log: intuitionLog,
         });
@@ -732,7 +819,7 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
       }
     })(),
     (async (): Promise<ContextRecallPayload | null> => {
-      if (!contextRecallEnabled || !recallTrigger) return null;
+      if (!contextRecallEnabled || !recallFinalTrigger) return null;
       void publisher.publish({ type: 'priming_start', op: 'recall' });
       try {
         return await deps.runContextRecallPipeline({
@@ -744,7 +831,7 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
           round: currentUserRound,
           mood,
           nowMs,
-          trigger: recallTrigger,
+          trigger: recallFinalTrigger,
           signal,
           log: recallLog,
         });

@@ -149,7 +149,7 @@ export interface RunContextRecallOptions {
   round: number;
   mood: { band: number; column: 'confident' | 'tentative' } | null;
   nowMs: number;
-  trigger: 'title' | 'mood' | 'stale' | 'cold';
+  trigger: 'title' | 'mood' | 'stale' | 'cold' | 'pivot';
   signal?: AbortSignal;
   log: EdgeLogger;
 }

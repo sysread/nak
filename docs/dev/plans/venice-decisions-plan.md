@@ -85,8 +85,15 @@ The pattern to aim for: the decision call runs always (cheap, fast,
 typed), the chat call runs only when the verdict says it is needed.
 
 - **B1 - Pre-flight gate (Jeff's idea): decide when to run the full
-  priming chain.** The priming stage's refresh trigger today is
-  deterministic: cold start, mood-band change, an 8-user-round fuse,
+  priming chain.** IMPLEMENTED on branch priming-pivot-gate - see
+  `docs/dev/plans/priming-pivot-gate-plan.md` (the gate module is
+  `venice/priming/pivot-gate.ts`). The brainstorm's open questions
+  resolved there: the gate runs inside `runServerPriming` composed
+  WITH the deterministic trigger evaluation (not instead of it), it
+  sees the message plus a cached payload digest, and it fails open
+  to the deterministic verdict on any failure. Original premise
+  notes: the deterministic triggers are
+  cold start, mood-band change, an 8-user-round fuse,
   or a 1-hour wall-clock fuse
   (`supabase/functions/_shared/priming-triggers.ts:32,41,78-107`).
   Those fuses cannot see a TOPIC PIVOT: a conversation can change

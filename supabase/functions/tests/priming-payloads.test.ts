@@ -27,6 +27,27 @@ Deno.test('intuition: a well-formed payload coerces through', () => {
   assertEquals(out!.drives.curiosity, 'I want to know more');
 });
 
+Deno.test('intuition + recall: the pivot gate trigger coerces through', () => {
+  // The pivot gate (priming/pivot-gate.ts) fires refreshes with the
+  // 'pivot' reason; a coercer that rejects it would treat every
+  // gate-fired payload as a cold cache.
+  const intuitionOut = coerceIntuitionPayload({ ...intuition, trigger: 'pivot' });
+  assert(intuitionOut !== null);
+  assertEquals(intuitionOut.trigger, 'pivot');
+  const recallOut = coerceContextRecallPayload({
+    v: 2,
+    note: '',
+    citations: [],
+    computed_at_round: 3,
+    computed_at_band: 2,
+    computed_at_column: 'confident',
+    computed_at_at: 1_000,
+    trigger: 'pivot',
+  });
+  assert(recallOut !== null);
+  assertEquals(recallOut.trigger, 'pivot');
+});
+
 Deno.test('intuition: wrong version / missing fields -> null', () => {
   assertEquals(coerceIntuitionPayload({ ...intuition, v: 2 }), null);
   assertEquals(coerceIntuitionPayload({ ...intuition, perception: '' }), null);

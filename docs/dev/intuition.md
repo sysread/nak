@@ -209,7 +209,7 @@ Shape (see `IntuitionPayload` in
   computed_at_band: number | null,                    // 0..4 in MOOD_TABLE order
   computed_at_column: 'confident' | 'tentative' | null,
   computed_at_at: number,                             // ms since epoch
-  trigger: 'title' | 'mood' | 'stale' | 'cold',  // 'title' legacy-only (pre-migration payloads)
+  trigger: 'title' | 'mood' | 'stale' | 'cold' | 'pivot',  // 'title' legacy-only (pre-migration payloads); 'pivot' = the decision-model gate fired it
 }
 ```
 
@@ -250,6 +250,11 @@ demand.
   feature on. The synthesis lands as a `<think>` block on a synthetic
   assistant message spliced into the request history, mirroring the
   context-recall ephemeral pattern.
+- **Pivot gate (venice/priming/pivot-gate.ts,
+  [plan](./plans/priming-pivot-gate-plan.md))** - the decision-model
+  gate composes with this pipeline's trigger: it can fire the
+  refresh early (`'pivot'`) or veto a round-fuse `'stale'` when the
+  cache still informs. Fails open to the deterministic verdict.
 - **Samskara ([./samskara.md](./samskara.md))** - the mood
   trigger reads `moodState.current` (the same rune the mood
   pill uses) and projects it through `bandIndexFor` /

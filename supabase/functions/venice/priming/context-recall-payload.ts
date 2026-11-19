@@ -141,7 +141,8 @@ export function coerceContextRecallPayload(
     trigger !== 'title' &&
     trigger !== 'mood' &&
     trigger !== 'stale' &&
-    trigger !== 'cold'
+    trigger !== 'cold' &&
+    trigger !== 'pivot'
   ) {
     return null;
   }

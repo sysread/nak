@@ -102,7 +102,8 @@ export function coerceIntuitionPayload(raw: unknown): IntuitionPayload | null {
     trigger !== 'title' &&
     trigger !== 'mood' &&
     trigger !== 'stale' &&
-    trigger !== 'cold'
+    trigger !== 'cold' &&
+    trigger !== 'pivot'
   ) {
     return null;
   }

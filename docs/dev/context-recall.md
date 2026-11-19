@@ -342,7 +342,7 @@ Shape (see `ContextRecallPayload` in
   computed_at_band: number | null,
   computed_at_column: 'confident' | 'tentative' | null,
   computed_at_at: number,
-  trigger: 'title' | 'mood' | 'stale' | 'cold',
+  trigger: 'title' | 'mood' | 'stale' | 'cold' | 'pivot',
 }
 ```
 
@@ -421,6 +421,11 @@ readable content. Registered in the always-on toolbox.
   trigger evaluator. Independent caches, always co-fired via
   `Promise.all` to keep wall-clock cost bounded by the slower of the
   two.
+- **Pivot gate (venice/priming/pivot-gate.ts,
+  [plan](./plans/priming-pivot-gate-plan.md))** - composes with this
+  pipeline's trigger like intuition's: fires `'pivot'` refreshes
+  ahead of the fuses, vetoes round-fuse refreshes when the cache
+  still informs, fails open to the deterministic verdict.
 - **Memory ([./memory.md](./memory.md))** - the pipeline reads the
   memory layer via `searchMemoriesSemantic` (carrying `id` +
   `created_at` + `classifyMemoryConfidence` tags into the smoothing

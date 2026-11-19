@@ -76,7 +76,7 @@ export interface IntuitionPayload {
  *  (the browser no longer sees update_title results mid-turn), but
  *  payloads persisted before that still carry it, so the coercion
  *  below keeps accepting it. */
-export type IntuitionTrigger = 'title' | 'mood' | 'stale' | 'cold';
+export type IntuitionTrigger = 'title' | 'mood' | 'stale' | 'cold' | 'pivot';
 
 /** Wall-clock companion to the round-based staleness fuse (the
  *  STALE_FUSE_ROUNDS half lives server-side in
@@ -209,7 +209,8 @@ export function coerceIntuitionPayload(raw: unknown): IntuitionPayload | null {
     trigger !== 'title' &&
     trigger !== 'mood' &&
     trigger !== 'stale' &&
-    trigger !== 'cold'
+    trigger !== 'cold' &&
+    trigger !== 'pivot'
   ) {
     return null;
   }

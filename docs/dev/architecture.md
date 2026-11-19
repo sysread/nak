@@ -361,7 +361,13 @@ samskara substrate stub write. The priming layers themselves
 (intuition, context recall, the samskara cosine fire + compound read,
 the bias appendix) moved into `getStreamingResponse`'s priming stage so
 they survive a disconnect; the browser only renders their feedback off
-the priming events the function publishes.
+the priming events the function publishes. On top of the deterministic
+fuses (cold / mood-shift / 8-round / 1-hour), a decision-model gate
+(`venice/priming/pivot-gate.ts`, one `clef-api` noul per eligible
+turn) fires a refresh on semantic topic pivots (`'pivot'` trigger)
+and vetoes a round-fuse refresh when the cache still informs; it
+fails open to the deterministic verdict and never extends the
+pre-round ceiling. See `docs/dev/plans/priming-pivot-gate-plan.md`.
 
 A representative server agent:
 `supabase/functions/venice/agents/reflection.ts` fires from the

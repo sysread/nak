@@ -42,8 +42,17 @@ describe('coerceContextRecallPayload', () => {
     expect(coerceContextRecallPayload({ ...payload(), v: 3 })).toBeNull();
   });
 
-  it('treats an empty note as a valid cached state', () => {
-    // Empty string represents "both children returned the empty signal
+  it('accepts the pivot trigger (decision-model gate reason)', () => {
+    // The pivot gate fires recalls on topic pivots ahead of the fuses;
+    // the realtime echo path coerces the payload in the browser - a
+    // rejected trigger here would silently drop the payload (the
+    // if-chain has no exhaustiveness assert to lean on).
+    const out = coerceContextRecallPayload(payload({ trigger: 'pivot' }));
+    expect(out).not.toBeNull();
+    expect(out!.trigger).toBe('pivot');
+  });
+
+  it('treats an empty note as a valid cached state', () => {    // Empty string represents "both children returned the empty signal
     // this round" - cached so the same-round debounce holds. Coercion
     // must NOT collapse that to null.
     const out = coerceContextRecallPayload(payload({ note: '' }));

@@ -20,6 +20,8 @@ export function formatIntuitionTrigger(t: IntuitionPayload['trigger']): string {
       return 'staleness fuse';
     case 'cold':
       return 'first read on this thread';
+    case 'pivot':
+      return 'topic shifted';
   }
 }
 

@@ -73,6 +73,8 @@ export function formatRecallTrigger(
       return 'staleness fuse';
     case 'cold':
       return 'first read on this thread';
+    case 'pivot':
+      return 'topic shifted';
   }
 }
 
