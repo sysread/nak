@@ -17375,6 +17375,12 @@ $$;
 
 revoke all on function public.intent_employment_save(uuid, text, int, jsonb, uuid)
   from public, anon;
+-- The sweep's edge caller is service_role. Born without this grant
+-- (the claim RPC got one, the save didn't): every save failed with
+-- permission denied on stacks applied from this file - surfaced by
+-- the use-case's first live run 2026-11-19.
+grant execute on function public.intent_employment_save(uuid, text, int, jsonb, uuid)
+  to service_role;
 
 -- Hourly employment sweep cron. Settled threads accumulate daily; an
 -- hourly drain keeps intent_employments fresh for the daily mint pass

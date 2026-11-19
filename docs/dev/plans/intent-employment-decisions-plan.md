@@ -1,6 +1,11 @@
 # Intent Employment Judge via Decision Model (B4)
 
-Status: PLAN (round-1 lens fan-out folded; round-2 reviewer pending).
+Status: IMPLEMENTED 2026-11-19 (branch intent-employment-decisions;
+base origin/main cf45fb0e). Refinement: the seven-lens fan-out, then
+one fresh-context reviewer; round 2 caught a wrong mechanism claim
+folded in round 1 (D4's minter-consequence sentence - the row is
+aggregate-NEUTRAL) and the plan was rerooted per its prescription.
+Live QA passed and surfaced a day-one schema bug (PLAN step 3).
 
 ## SYNOPSIS
 
@@ -21,7 +26,9 @@ the non-empty-reasoning entry-validity gate it fed (D4 names the
 structural replacement).
 
 The sweep's skeleton - claim, guard, save, cap - does not change. This
-is a judge swap, not a workflow change. No UI, no routes, no schema.
+is a judge swap, not a workflow change. No UI, no routes. One schema
+line: the save RPC's service_role execute grant, a day-one bug the
+live QA surfaced (PLAN step 3).
 
 ## BACKGROUND
 
@@ -302,7 +309,16 @@ Decision API facts the design rides on (parent plan
    `INTENT_EMPLOYMENT_MAX_TOKENS`, `disableThinking`, and
    `retryRateLimit` die with the chat call (`toolComplete` keeps its
    11 other import sites - not orphaned).
-3. **Rewrite `tests/intent_employment.test.ts`.** Pin: the body
+3. **Grant the save RPC its execute** (schema.sql, one line beside
+   the existing revoke): `grant execute on function
+   public.intent_employment_save(...) to service_role`. Born without
+   it (the claim RPC got the grant, the save never did), every save
+   failed with `permission denied` and the sweep swallowed it as a
+   warn - the use case had never been executed live (its Results log
+   read "not run" since 2026-06-25). Production shows 167
+   employment rows as of 2026-07-29, so prod's ACL presumably
+   carries a live patch this backports to the source of truth.
+4. **Rewrite `tests/intent_employment.test.ts`.** Pin: the body
    shape (model via the destructured `INTENT_EMPLOYMENT_MODEL` -
    which also gives the currently-unused `__test` export a consumer,
    state fences, 3 correctly-typed questions per intent, the
@@ -314,7 +330,7 @@ Decision API facts the design rides on (parent plan
    fixture; the failure classifier's split (deterministic ->
    empty-save-and-stamp, transient -> leave). Follow the sibling
    suites' import spelling (`'@std/assert'`, not `'jsr:@std/assert'`).
-4. **Docs.** `docs/dev/in-progress/intents.md`: item 11 gains the
+5. **Docs.** `docs/dev/in-progress/intents.md`: item 11 gains the
    v2 behavior (decisions endpoint, `clef-api`, the D4 row-level
    change named - unassessable intents now leave `opening=false`
    rows where v1 left none, aggregate-neutral since the minter's
@@ -331,7 +347,7 @@ Decision API facts the design rides on (parent plan
    updates to row-per-assessed-intent; the executed row lands after
    the live run. `docs/dev/plans/venice-decisions-plan.md`: flip
    the B4 entry to implemented + pointer here.
-5. **Gate, self-review, QA, land.** `mise run check` (exit code read
+6. **Gate, self-review, QA, land.** `mise run check` (exit code read
    un-piped), the codified pre-merge self-review (slop-grep over
    added lines, straggler scan for retired names, adversarial read
    of own comments), live QA below, then land on main.
