@@ -135,10 +135,10 @@ Decision API facts the design rides on (parent plan
 - **D2 - ONE decision call per thread, 3N questions.** Minted from
   the live intent list: `opening-eN` (noul), `acted-eN` (noul),
   `reaction-eN` (choice). The state's tokens are counted once
-  regardless of question count, so N intents cost N×(2 noul + 1
+  regardless of question count, so N intents cost Nx(2 noul + 1
   choice) plus one state pass. No conditional minting: `acted` is
   asked even when `opening` reads false, and coercion enforces
-  `acted = opening ∧ p ≥ cut` - today's parser rule
+  `acted = opening and p >= cut` - today's parser rule
   (`intent_employment.ts:123-131`) lifted to probabilities (today
   takes a verbatim boolean; the threshold is the probability
   translation). No conditional minting also means no second round
@@ -220,7 +220,7 @@ Decision API facts the design rides on (parent plan
   counted chars OVERCOUNT what gets serialized - the safe direction;
   fence and role-prefix overhead add a small uncounted amount. A
   debug log of the final serialized length feeds calibration. 80k
-  chars ≈ 20k tokens at ~4 chars/token; questions + intent
+  chars ~ 20k tokens at ~4 chars/token; questions + intent
   statements ride in the same 32k budget with headroom. Two bounds
   on the question count: (1) the judge assesses at most
   `EMPLOYMENT_MAX_INTENTS = 12` snapshot ids (first by id order;
@@ -229,7 +229,7 @@ Decision API facts the design rides on (parent plan
   (2) the intents select gains `.order('id')` so tags `e1..eN` are
   deterministic (today: PostgREST return order - cosmetic, but the
   QA asserts per-tag ground truth). Residual: a pathological state
-  past every bound → upstream 400 → D7's deterministic-rejection
+  past every bound -> upstream 400 -> D7's deterministic-rejection
   path. Keep-newest is the right degradation: recent behavior is
   the most diagnostic, and the day-gate re-evaluates the thread
   after its next update. CJK risk: ~4 chars/token is an
@@ -284,13 +284,13 @@ Decision API facts the design rides on (parent plan
 
 1. **Rework `intent_employment.ts`.** Replace the prompt,
    `buildEmploymentRequest`, `stripJsonFence`, and the JSON parsing
-   with: `buildEmploymentRequest(intents, transcript)` → the
+   with: `buildEmploymentRequest(intents, transcript)` -> the
    `/decisions` body (D2/D5/D8), `parseEmploymentVerdicts(payload,
-   validTags)` → the same `Map<tag, verdict>` contract from the
-   answers map (D2/D3/D4), the transcript serializer + budget trim
-   + intent cap (D6/D8), the failure classifier
+   validTags)` -> the same `Map<tag, verdict>` contract from the
+   answers map (D2/D3/D4), the transcript serializer, the budget
+   trim, and the intent cap (D6/D8), the failure classifier
    (deterministic-vs-transient, D7), and the runner swap
-   (`toolComplete` → `veniceDecision`, D7). `EmploymentVerdict`
+   (`toolComplete` -> `veniceDecision`, D7). `EmploymentVerdict`
    loses `reasoning`; the row builder writes `reasoning: ''` (D5).
    The intents select gains `.order('id')` (D6). Claim/save/sweep
    skeleton, cap, and TTL unchanged (the new debug logs - per-tag
@@ -308,11 +308,11 @@ Decision API facts the design rides on (parent plan
    state fences, 3 correctly-typed questions per intent, the
    intent cap), the firewall language living in the question
    instructions, the coercion table - happy path; `acted` forced
-   false without an opening (reaction nulled too); reaction `none` →
+   false without an opening (reaction nulled too); reaction `none` ->
    NULL; unknown tag dropped; missing/malformed answers dropped per
    tag; budget trim + per-row clip behavior on an over-budget
-   fixture; the failure classifier's split (deterministic →
-   empty-save-and-stamp, transient → leave). Follow the sibling
+   fixture; the failure classifier's split (deterministic ->
+   empty-save-and-stamp, transient -> leave). Follow the sibling
    suites' import spelling (`'@std/assert'`, not `'jsr:@std/assert'`).
 4. **Docs.** `docs/dev/in-progress/intents.md`: item 11 gains the
    v2 behavior (decisions endpoint, `clef-api`, the D4 row-level
@@ -367,7 +367,7 @@ Decision API facts the design rides on (parent plan
   direction vs nothing-observable); QA watches the mix on the
   scripted transcript.
 - **Beta wire drift** (`/decisions` is BETA) surfaces as upstream
-  400 → deterministic-rejection path (above); the sweep degrades to
+  400 -> deterministic-rejection path (above); the sweep degrades to
   "not recording" without writing wrong rows. Same exposure as
   B1/B2.
 
@@ -388,8 +388,8 @@ Decision API facts the design rides on (parent plan
   transcript differently than the author did): the actual
   opening/acted/reaction values per tag; per-tag probabilities + the
   decision response's `usage` (actual state tokens - pins D6's
-  budget against real data). Then: toggle-off user → not claimed;
-  message-count drift → save rejected + thread re-eligibles
+  budget against real data). Then: toggle-off user -> not claimed;
+  message-count drift -> save rejected + thread re-eligibles
   (RPC guard, unchanged by this diff; best-effort in QA - the drift
   is a race by construction, not deterministically scriptable).
   The QA doc's manual case gets its executed row.

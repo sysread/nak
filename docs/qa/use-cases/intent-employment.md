@@ -94,10 +94,11 @@ case confirms employment writes do not touch `intents.efficacy`.
   picked up. (Route still returns `{"accepted":true}`.)
 - (2) Toggle on: the claim selects the settled, snapshot-bearing
   thread; the judge runs under waitUntil.
-- (3) One `intent_employments` row per active intention the judge
-  could assess: `opening` true/false; `acted` only true when
-  `opening` is true; `user_reaction` one of receptive/neutral/
-  resistant only when `acted`, else null; a non-empty `reasoning`.
+- (3) One `intent_employments` row per assessed active intention:
+  `opening` true/false; `acted` only true when `opening` is true;
+  `user_reaction` one of receptive/neutral/resistant only when
+  `acted`, else null; `reasoning` = `''` (the v2 decision-model
+  judge emits no prose - the column is vestigial).
   `intent_employment_processed_at` stamped, `processed_msg_count`
   matches the thread's user-message count, claim released. A new
   user message landing mid-judge makes the save reject (count guard)

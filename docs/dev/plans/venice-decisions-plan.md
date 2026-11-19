@@ -135,7 +135,13 @@ typed), the chat call runs only when the verdict says it is needed.
   replaces the parsing scaffolding, and the probability
   distribution answers "how confident was the filing" for real.
   Needs a browser proxy route (same shape as `/complete`'s).
-- **B4 - Intent employment judge.** The prompt asks for
+- **B4 - Intent employment judge.** IMPLEMENTED on branch
+  intent-employment-decisions - see
+  `docs/dev/plans/intent-employment-decisions-plan.md` (one
+  decision call per thread, 2 noul + 1 choice per intent minted
+  from the active intent list; the reasoning sentence retired,
+  the 32k-token state budget resolved with a keep-newest trim).
+  Original premise notes: the prompt asks for
   `opening: true/false`, `acted: true/false`,
   `reaction: receptive|neutral|resistant` per intent
   (`supabase/functions/venice/agents/intent_employment.ts:43-54`) -

@@ -167,9 +167,21 @@
     day-gated), save under the message-count guard
     (`intent_employment_save`), independent claim columns on
     `threads`, hourly `nak-intent-employment-sweep` cron, route
-    in `index.ts`. Pure prompt + parser Deno-tested. This is the
+    in `index.ts`. Pure builder + coercion Deno-tested. This is the
     minter's pruning telemetry and feeds the gather it already
     reads - and is NEVER an efficacy input (the firewall).
+    v2: the judge is ONE Decisions API call (`clef-api`, private
+    tier) with three typed questions per intent (opening/acted
+    noul, reaction choice) over the transcript serialized as
+    decision-call state - no prose, no JSON contract. Two v2
+    behavior changes: the per-intent `reasoning` sentence is gone
+    (the column receives `''`), and an intent the judge cannot
+    assess now leaves an `opening=false` row where v1 left NO row
+    (aggregate-neutral: the minter's counters only move on
+    true/non-null values). State budget: keep-newest trim at 80k
+    chars, per-row clip, tool bodies capped, at most 12 intents
+    judged per thread (plan:
+    docs/dev/plans/intent-employment-decisions-plan.md).
 12. The backtest aggregator
     (`supabase/functions/_shared/intent-backtest.ts`,
     `runBacktest`) - the corpus-level verdict (matched-control
@@ -387,8 +399,10 @@ normalization.
 ### `intent_employments`
 
 The retrospective *process* telemetry. One row per (intent,
-settled thread) where the evaluation agent judged the model
-acted on the intent. **Neutral - never feeds efficacy.** This
+settled thread) the judge assessed - `opening` distinguishes
+"no chance arose" from "chance arose, missed" (the day-one
+"where the judge acted" phrasing was wrong; rows land
+regardless of `acted`). **Neutral - never feeds efficacy.** This
 is the part that lets us answer "is the model actually using
 its intents" without letting the answer leak into "are they
 working."
@@ -403,7 +417,11 @@ working."
   null like `bias_reactions.was_confirmed`. Recorded as
   *observation only*; explicitly NOT an efficacy input (see
   Gotchas - "engagement is not efficacy").
-- `reasoning text not null`, `created_at`.
+- `reasoning text not null`, `created_at`. Since the v2
+  decision-model judge, `reasoning` is vestigial: the judge
+  emits no prose, so rows carry `''` (the column survives the
+  NOT NULL; a future migration may drop it - the save RPC's
+  insert list consumes it and would go too).
 
 ### `intent_target_samples`
 

@@ -46,6 +46,13 @@ export const BIG_WINDOW_MODEL = 'z-ai-glm-5-3-flash';
 // thinking pass outright.
 export const EASY_TASK_MODEL = 'z-ai-glm-5-3-flash';
 
+// Decision tier: Venice /decisions models answer typed questions
+// (noul / choice / score) about a state and return no prose - no
+// thinking knob exists to pin (that mandate is chat-completion-only).
+// Assigned to classification agents that emit no prose; see
+// _shared/venice/decisions.ts and docs/dev/plans/venice-decisions-plan.md.
+export const DECISION_MODEL = 'clef-api';
+
 // --- Per-agent assignments -------------------------------------------------
 // Roles mirrored from AGENT_MODELS in src/lib/models/index.ts
 export const REFLECTION_MODEL = BIG_WINDOW_MODEL;
@@ -66,7 +73,9 @@ export const TOPICS_MODEL = EASY_TASK_MODEL;
 export const RECIPE_TOPICS_MODEL = EASY_TASK_MODEL;
 export const MEMORY_TOPICS_MODEL = EASY_TASK_MODEL;
 export const INTENT_MODEL = EASY_TASK_MODEL;
-export const INTENT_EMPLOYMENT_MODEL = EASY_TASK_MODEL;
+// The employment judge emits no prose - it rides the decision tier,
+// NOT the easy-task tier: editing EASY_TASK_MODEL does not retarget it.
+export const INTENT_EMPLOYMENT_MODEL = DECISION_MODEL;
 export const SAMSKARA_MODEL = EASY_TASK_MODEL;
 export const EVALUATION_MODEL = BIG_WINDOW_MODEL;
 export const SECOND_THOUGHTS_MODEL = EASY_TASK_MODEL;

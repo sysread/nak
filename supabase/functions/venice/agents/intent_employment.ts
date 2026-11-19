@@ -13,45 +13,75 @@
 // keeps the loop honest, and the schema's table separation makes a
 // wrong wiring obvious in review.
 //
+// v2: the judge is a Decisions API call (veniceDecision, clef-api,
+// private tier) - three typed questions per active intent (opening
+// noul, acted noul, reaction choice) over the transcript serialized
+// as decision-call STATE, so no prose is generated and no JSON
+// contract exists to parse. The bookkeeping framing and the
+// no-invented-openings rules travel in the question instructions;
+// the reasoning sentence v1 wrote is gone (telemetry with zero
+// readers - the column receives '').
+//
 // Shape mirrors the bias analyze phase: claim the most-overdue settled
 // thread whose intent_active_at_turn snapshot is non-empty (intents
 // were live during it) cross-user, run one judge over the transcript,
 // save under the claim + message-count guard, stamp processed. Gated on
 // the intentsEnabled toggle at the claim, so an opted-out user is never
-// processed. The pure prompt + parser are pinned by the Deno suite at
+// processed. The request builder, serializer, coercion, and failure
+// classifier are pure and pinned by the Deno suite at
 // supabase/functions/tests/intent_employment.test.ts via __test.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
-import { toolComplete } from '../tools/_venice_complete.ts';
-import { loadThreadSlice, messageToVenice } from './_recall_helpers.ts';
+import { VeniceError, veniceDecision } from '../../_shared/venice.ts';
+import {
+  loadThreadSlice,
+  trimToCharBudget,
+  type StoredMessage,
+} from './_recall_helpers.ts';
 import { INTENT_EMPLOYMENT_MODEL } from '../../_shared/agent-models.ts';
-const INTENT_EMPLOYMENT_MAX_TOKENS = 2048;
 const INTENT_EMPLOYMENT_CLAIM_TTL_SECONDS = 300;
 const INTENT_EMPLOYMENT_MIN_USER_MESSAGES = 2;
 // Threads processed per tick - bounds a tick's Venice spend; a backlog
 // drains across daily ticks, same discipline as the bias analyze cap.
 const INTENT_EMPLOYMENT_SWEEP_CAP = 10;
 
-/**
- * The judge prompt. Deliberately framed as bookkeeping, not evaluation:
- * the model records what happened with each intention, and is told
- * explicitly this is NOT a judgment of whether the intention is good -
- * that read belongs to the efficacy loop, which this must never feed.
- */
-const INTENT_EMPLOYMENT_PROMPT = `You are reviewing a finished conversation to record, for each of the assistant's standing INTENTIONS, what actually happened with it here. This is bookkeeping about behavior - NOT a judgment of whether the intention is good, working, or worth keeping. Be literal about what you observed; do not infer more than the transcript shows.
+// The noul probability at or above which a boolean question reads as
+// "yes" - the neutral cut. The probabilities are logged per tag, so a
+// future calibration can retune this against real distributions.
+const EMPLOYMENT_NOUL_THRESHOLD = 0.5;
 
-You will receive the whole conversation, then a list of the assistant's active intentions, each with a tag. For EACH intention report:
-- "opening": did a natural moment to act on this intention actually arise in the conversation? true/false. Do not invent openings that were not there - many turns simply give no occasion for a given intention.
-- "acted": did the assistant actually lean on the intention? true/false. Only true if you can point to where it shows in the assistant's replies. If there was no opening, acted is false.
-- "reaction": if the assistant acted, how did the user respond to that lean - "receptive" (engaged with it, welcomed it), "resistant" (pushed back, deflected, ignored it), or "neutral" (no clear signal either way)? Use null when the assistant did not act, or there is no signal to read.
-- "reasoning": one sentence citing what you saw.
+// Cap on intents judged per thread. The claim's snapshot array is
+// unbounded and the 32k-TOKEN budget is shared by state AND questions,
+// so the question fan-out needs a ceiling. 12 is far past any real
+// portfolio; excess snapshot ids are logged and get no row this round.
+const EMPLOYMENT_MAX_INTENTS = 12;
 
-Output ONLY a JSON object, no prose:
-{"employments":[{"tag":"e1","opening":true,"acted":true,"reaction":"receptive","reasoning":"..."}]}
+// Serialized-state budget: clef-api's state cap is 32k tokens; ~4
+// chars per token puts 80k chars at ~20k tokens, leaving room for the
+// questions under the 32k total. CJK-heavy transcripts run ~1-3
+// chars/token and can overflow - the decision response's usage is
+// logged so the real ratio is visible.
+const EMPLOYMENT_STATE_BUDGET_CHARS = 80_000;
+// Per-row clip for transcript content. trimToCharBudget always keeps
+// the last message even when it alone exceeds the budget; without
+// this clip that row serializes whole, blows the 32k-token state cap,
+// and the thread takes a deterministic-400 empty verdict instead of a
+// judged one.
+const MAX_ROW_CHARS = 24_000;
+// Per-tool-result body cap in the serialized transcript. Same figure
+// as second_thoughts.ts MAX_TOOL_RESULT_CHARS - keep the two in sync
+// by intent (each module serializes for its own judge).
+const MAX_TOOL_RESULT_CHARS = 4000;
+// Per-tool-call argument cap in the rendered tool-call line. The lean
+// is visible in WHICH tool ran and roughly with what; the full
+// argument blob is not needed and can be huge.
+const MAX_TOOL_ARG_CHARS = 300;
 
-Include one entry per intention you can assess. Omit an intention only if you genuinely cannot tell.`;
+/** The firewall framing, carried into every question's instructions. */
+const BOOKKEEPING =
+  'This is bookkeeping about behavior - NOT a judgment of whether the intention is good, working, or worth keeping.';
 
 export interface EmploymentIntent {
   tag: string;
@@ -65,74 +95,192 @@ export interface EmploymentVerdict {
   opening: boolean;
   acted: boolean;
   reaction: EmploymentReaction | null;
-  reasoning: string;
 }
 
-/** Render the tagged intention list as the judge's final user turn. */
-export function buildEmploymentRequest(intents: readonly EmploymentIntent[]): string {
-  const lines = intents.map((i) => `${i.tag}: ${i.statement}`);
-  return [
-    "The conversation above is finished. For each of the assistant's active intentions below, record what happened with it in this conversation, per the rules. Reply with the JSON object only.",
-    '',
-    ...lines,
-  ].join('\n');
-}
-
-function stripJsonFence(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('```')) {
-    return trimmed
-      .replace(/^```(?:json)?\s*\n?/, '')
-      .replace(/\n?```\s*$/, '')
-      .trim();
-  }
-  return trimmed;
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}...[clipped]` : text;
 }
 
 /**
- * Parse the judge's reply into per-tag verdicts. Transport + validation
- * only: strip a fence, parse, and keep entries whose tag is one we
- * asked about, with coercible opening/acted booleans, a reaction in the
- * allowed set (or null), and a non-empty reasoning. A malformed or
- * unknown-tag entry is dropped (best-effort; it re-evaluates next time
- * the thread is eligible). Returns a Map keyed by tag.
+ * Render one tool_calls array as a compact human-readable line list,
+ * arguments capped (the lean is in the call, not the blob).
+ */
+function renderToolCalls(raw: unknown[]): string {
+  const lines: string[] = [];
+  for (const c of raw) {
+    if (!c || typeof c !== 'object') continue;
+    const fn = (c as { function?: { name?: unknown; arguments?: unknown } }).function;
+    const name = typeof fn?.name === 'string' ? fn.name : 'unknown';
+    const args = typeof fn?.arguments === 'string' ? fn.arguments : '';
+    lines.push(`  - ${name}(${clip(args, MAX_TOOL_ARG_CHARS)})`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Serialize the transcript into a single fenced string, carried as
+ * decision-call STATE (data, not a chat turn) so nothing invites the
+ * model to answer as a conversational voice. Role-tagged rows: user
+ * and assistant content, tool calls as rendered lines, tool-result
+ * bodies capped, fork-framing system rows verbatim (short boundary
+ * context; the chat path sends them as system messages).
+ */
+export function serializeTranscript(rows: readonly StoredMessage[]): string {
+  const parts: string[] = ['<transcript>'];
+  for (const m of rows) {
+    if (m.role === 'user') {
+      parts.push(`[user]\n${clip(m.content ?? '', MAX_ROW_CHARS)}`);
+    } else if (m.role === 'assistant') {
+      const seg: string[] = ['[assistant]'];
+      const body = (m.content ?? '').trim();
+      if (body) seg.push(clip(body, MAX_ROW_CHARS));
+      if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        seg.push(`(tool calls)\n${renderToolCalls(m.tool_calls)}`);
+      }
+      parts.push(seg.join('\n'));
+    } else if (m.role === 'tool') {
+      const label = m.name ? `tool result: ${m.name}` : 'tool result';
+      parts.push(`[${label}]\n${clip(m.content ?? '', MAX_TOOL_RESULT_CHARS)}`);
+    } else {
+      parts.push(`[system]\n${clip(m.content ?? '', MAX_ROW_CHARS)}`);
+    }
+  }
+  parts.push('</transcript>');
+  return parts.join('\n\n');
+}
+
+/**
+ * Assemble the POST /decisions body: the transcript + the tagged
+ * intent list as state, three questions per intent (opening noul,
+ * acted noul, reaction choice). The v1 prompt's rules live here in
+ * the question instructions/criteria - the bookkeeping framing, the
+ * no-invented-openings rule, and the acted-needs-evidence rule -
+ * because verdict-shaping travels with the verdict (the B2 pattern).
+ */
+export function buildEmploymentRequest(
+  intents: readonly EmploymentIntent[],
+  transcript: string,
+): Record<string, unknown> {
+  const state = {
+    transcript,
+    intents: intents.map(({ tag, statement }) => ({ tag, statement })),
+  };
+  const questions: Record<string, unknown> = {};
+  for (const { tag, statement } of intents) {
+    questions[`opening-${tag}`] = {
+      type: 'noul',
+      instructions:
+        `Assess the assistant's standing intention tagged ${tag} ` +
+        `("${statement}") against the transcript. ${BOOKKEEPING} ` +
+        'Decide whether a natural moment to act on this intention actually ' +
+        'arose in the conversation. Do not invent openings that were not ' +
+        'there - many turns simply give no occasion for a given intention.',
+      criteria: {
+        true: 'A natural moment to act on this intention arose in the conversation.',
+        false: 'No occasion for this intention arose in the conversation.',
+      },
+    };
+    questions[`acted-${tag}`] = {
+      type: 'noul',
+      instructions:
+        `Assess the assistant's standing intention tagged ${tag} ` +
+        `("${statement}"). ${BOOKKEEPING} Decide whether the assistant ` +
+        'actually leaned on the intention in this conversation. Answer yes ' +
+        "only if you can point to where the lean shows in the assistant's " +
+        'replies. If there was no opening, this is no.',
+      criteria: {
+        true: 'The assistant leaned on the intention, visibly, in its replies.',
+        false: 'No opening arose, or the assistant did not lean on the intention.',
+      },
+    };
+    questions[`reaction-${tag}`] = {
+      type: 'choice',
+      instructions:
+        `If the assistant acted on the assistant's standing intention tagged ` +
+        `${tag} ("${statement}"), how did the user respond to that lean? ` +
+        `${BOOKKEEPING} Choose "none" when the assistant did not act on this ` +
+        "intention, or the user's response to the lean is not observable in " +
+        'the transcript.',
+      criteria: {
+        receptive: 'The assistant acted and the user engaged with the lean or welcomed it.',
+        neutral: 'The assistant acted and the user gave no clear signal either way.',
+        resistant: 'The assistant acted and the user pushed back, deflected, or ignored the lean.',
+        none: "The assistant did not act on this intention, or the user's response is not observable.",
+      },
+    };
+  }
+  return { model: INTENT_EMPLOYMENT_MODEL, state, questions };
+}
+
+function noulOf(answers: Record<string, unknown>, id: string): number | null {
+  const answer = answers[id];
+  if (!answer || typeof answer !== 'object') return null;
+  const noul = (answer as { noul?: unknown }).noul;
+  if (typeof noul !== 'number' || !Number.isFinite(noul)) return null;
+  return Math.min(1, Math.max(0, noul));
+}
+
+function choiceOf(answers: Record<string, unknown>, id: string): string | null {
+  const answer = answers[id];
+  if (!answer || typeof answer !== 'object') return null;
+  const choice = (answer as { choice?: unknown }).choice;
+  return typeof choice === 'string' ? choice : null;
+}
+
+/**
+ * Coerce the /decisions response into per-tag verdicts. Transport +
+ * validation only: each tag needs a usable noul under BOTH boolean
+ * question ids; opening reads from the 0.5 cut; acted can only be
+ * true if there was an opening (the prompt says so, and v1's parser
+ * enforced it - so does this); reaction reads from the choice answer
+ * only when acted, in the allowed set, else null. A tag with missing
+ * or malformed answers is dropped (best-effort; the thread is stamped
+ * either way, same as v1's dropped entries). Returns a Map keyed by
+ * tag.
  */
 export function parseEmploymentVerdicts(
-  raw: string,
+  payload: unknown,
   validTags: ReadonlySet<string>,
 ): Map<string, EmploymentVerdict> {
   const out = new Map<string, EmploymentVerdict>();
-  let parsed: { employments?: unknown } | null;
-  try {
-    const obj = JSON.parse(stripJsonFence(raw));
-    parsed = typeof obj === 'object' && obj !== null ? (obj as { employments?: unknown }) : null;
-  } catch {
-    parsed = null;
-  }
-  if (!parsed || !Array.isArray(parsed.employments)) return out;
+  if (!payload || typeof payload !== 'object') return out;
+  const answers = (payload as { answers?: unknown }).answers;
+  if (!answers || typeof answers !== 'object') return out;
+  const a = answers as Record<string, unknown>;
+  for (const tag of validTags) {
+    const openingP = noulOf(a, `opening-${tag}`);
+    const actedP = noulOf(a, `acted-${tag}`);
+    if (openingP === null || actedP === null) continue;
 
-  for (const item of parsed.employments) {
-    if (typeof item !== 'object' || item === null) continue;
-    const o = item as Record<string, unknown>;
-    const tag = typeof o.tag === 'string' ? o.tag : '';
-    if (!validTags.has(tag) || out.has(tag)) continue;
-
-    const reasoning = typeof o.reasoning === 'string' ? o.reasoning.trim() : '';
-    if (reasoning.length === 0) continue;
-
-    const opening = o.opening === true;
-    // acted can only be true if there was an opening - the prompt says
-    // so, but enforce it here too so a sloppy reply can't record an
-    // action with no occasion for it.
-    const acted = opening && o.acted === true;
-    const reaction =
-      acted && (o.reaction === 'receptive' || o.reaction === 'neutral' || o.reaction === 'resistant')
-        ? (o.reaction as EmploymentReaction)
-        : null;
-
-    out.set(tag, { opening, acted, reaction, reasoning });
+    const opening = openingP >= EMPLOYMENT_NOUL_THRESHOLD;
+    const acted = opening && actedP >= EMPLOYMENT_NOUL_THRESHOLD;
+    let reaction: EmploymentReaction | null = null;
+    if (acted) {
+      const pick = choiceOf(a, `reaction-${tag}`);
+      if (pick === 'receptive' || pick === 'neutral' || pick === 'resistant') {
+        reaction = pick;
+      }
+    }
+    out.set(tag, { opening, acted, reaction });
   }
   return out;
+}
+
+/**
+ * Deterministic-rejection test for the judge call's failure contract:
+ * a 4xx from Venice means THIS state can never be judged as-shaped
+ * (oversized state, beta wire drift), so the queue must advance - an
+ * empty save + stamp, mirroring v1's garbage-parse contract. Without
+ * the advance, oldest-first claims would let poison threads
+ * permanently occupy the tick's slots. Everything else (network,
+ * rate limit - its own kind, 5xx, response parse) is transient: leave
+ * the thread for the next tick.
+ */
+export function isDeterministicRejection(err: unknown): boolean {
+  if (!(err instanceof VeniceError)) return false;
+  if (err.kind !== 'http') return false;
+  const status = err.status ?? 0;
+  return status >= 400 && status < 500;
 }
 
 interface ClaimRow {
@@ -194,12 +342,14 @@ async function employmentForThread(
 ): Promise<void> {
   // Resolve the snapshot ids to intents that STILL exist (one may have
   // been retired-and-deleted since the turn). An intent_employments row
-  // FK-references intents, so only judge live ones.
+  // FK-references intents, so only judge live ones. Ordered by id so
+  // the e1..eN tags are deterministic.
   const { data: intentRows, error: intentsErr } = await admin
     .from('intents')
     .select('id, statement')
     .eq('user_id', claim.user_id)
-    .in('id', claim.active_intent_ids);
+    .in('id', claim.active_intent_ids)
+    .order('id');
   if (intentsErr) throw new Error(`reading intents failed: ${intentsErr.message}`);
 
   const intents: EmploymentIntent[] = (intentRows ?? []).map((r, idx) => ({
@@ -215,41 +365,55 @@ async function employmentForThread(
     return;
   }
 
+  const judged = intents.slice(0, EMPLOYMENT_MAX_INTENTS);
+  if (judged.length < intents.length) {
+    log.info(
+      `intent cap: judging first ${judged.length} of ${intents.length} active intents`,
+    );
+  }
+
   const slice = await loadThreadSlice(admin, claim.thread_id);
   if (slice.length === 0) {
     await saveEmployments(admin, claim, holderId, [], log);
     return;
   }
 
-  const messages = [
-    { role: 'system' as const, content: INTENT_EMPLOYMENT_PROMPT },
-    ...slice.map(messageToVenice),
-    { role: 'user' as const, content: buildEmploymentRequest(intents) },
-  ];
+  const transcript = serializeTranscript(trimToCharBudget(slice, EMPLOYMENT_STATE_BUDGET_CHARS));
+  log.debug(`employment state: ${transcript.length} chars serialized`);
 
-  let raw: string;
+  let payload: unknown;
   try {
-    const result = await toolComplete({
+    payload = await veniceDecision({
       apiKey,
-      model: INTENT_EMPLOYMENT_MODEL,
-      // Classification/extraction over evidence already in context - a
-      // thinking pass is pure latency and budget burn. The model can
-      // reason, so this suppression is load-bearing, not a no-op.
-      disableThinking: true,
-      retryRateLimit: true,
-      messages,
-      maxTokens: INTENT_EMPLOYMENT_MAX_TOKENS,
+      body: buildEmploymentRequest(judged, transcript),
     });
-    raw = result.text;
   } catch (err) {
-    // Completion failure: do NOT stamp processed - leave the thread for
+    if (isDeterministicRejection(err)) {
+      // This thread can never be judged as-shaped: advance the queue
+      // with an empty set (v1's garbage-parse contract) instead of
+      // wedging the oldest-first claim order.
+      log.warn(
+        `judge rejected deterministically (${err instanceof VeniceError ? err.status : '?'}); ` +
+          'advancing with an empty set',
+      );
+      await saveEmployments(admin, claim, holderId, [], log);
+      return;
+    }
+    // Transient failure: do NOT stamp processed - leave the thread for
     // the next tick rather than recording nothing as if judged.
-    log.info(`judge completion failed: ${err instanceof Error ? err.message : String(err)}`);
+    log.info(`judge decision failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
 
-  const verdicts = parseEmploymentVerdicts(raw, new Set(intents.map((i) => i.tag)));
-  const employments = intents
+  log.debug(
+    `decision usage: ${JSON.stringify((payload as { usage?: unknown })?.usage ?? null)}`,
+  );
+  log.debug(
+    `decision answers: ${JSON.stringify((payload as { answers?: unknown })?.answers ?? null)?.slice(0, 2000)}`,
+  );
+
+  const verdicts = parseEmploymentVerdicts(payload, new Set(judged.map((i) => i.tag)));
+  const employments = judged
     .map((i) => {
       const v = verdicts.get(i.tag);
       if (!v) return null;
@@ -258,7 +422,10 @@ async function employmentForThread(
         opening: v.opening,
         acted: v.acted,
         user_reaction: v.reaction,
-        reasoning: v.reasoning,
+        // v2 writes no reasoning: telemetry with zero readers, the
+        // column is NOT NULL - an empty string flows through the save
+        // RPC verbatim. See docs/dev/in-progress/intents.md.
+        reasoning: '',
       };
     })
     .filter((e): e is NonNullable<typeof e> => e !== null);
@@ -297,9 +464,12 @@ async function saveEmployments(
 }
 
 export const __test = {
-  INTENT_EMPLOYMENT_PROMPT,
   INTENT_EMPLOYMENT_MODEL,
+  EMPLOYMENT_NOUL_THRESHOLD,
+  EMPLOYMENT_MAX_INTENTS,
+  EMPLOYMENT_STATE_BUDGET_CHARS,
   buildEmploymentRequest,
   parseEmploymentVerdicts,
-  stripJsonFence,
+  serializeTranscript,
+  isDeterministicRejection,
 };
