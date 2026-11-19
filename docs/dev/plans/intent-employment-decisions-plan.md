@@ -1,6 +1,6 @@
 # Intent Employment Judge via Decision Model (B4)
 
-Status: PLAN (refinement in progress - not yet built).
+Status: PLAN (round-1 lens fan-out folded; round-2 reviewer pending).
 
 ## SYNOPSIS
 
@@ -14,7 +14,9 @@ asks a yes/no (`opening`), a yes/no (`acted`), and a closed-set pick
 (`intent_employment.ts:43-54`). A decision model answers those
 natively: no JSON fence to strip, no prose to parse, no chain-of-
 thought to leak. The `reasoning` sentence is the only casualty, and it
-is telemetry with zero readers (verified below).
+is telemetry with zero readers in any revision of the repo (verified
+this session by grep over current code, full git history of the
+readers, and the unmerged parallel commits).
 
 The sweep's skeleton - claim, guard, save, cap - does not change. This
 is a judge swap, not a workflow change. No UI, no routes, no schema.
@@ -26,9 +28,19 @@ What the judge does today, end to end (all read this session):
 - **Sweep tick** (`intent_employment.ts:150-186`): claims up to 10
   settled threads cross-user (`intent_employment_claim_next_thread`,
   TTL 300s, min 2 user messages), toggle-gated on `intentsEnabled`
-  with `intent_active_at_turn` non-empty and
-  `processed_at is null or < updated_at` (schema.sql, claim RPC).
-  Per-thread failure is caught and logged; the tick never throws.
+  with `intent_active_at_turn` non-empty. Claims order oldest-first
+  (`order by t.updated_at asc`) and take one thread per call
+  (`for update skip locked`; the tick loops the cap). Per-thread
+  failure is caught and logged; the tick never throws.
+- **The day-gate** (the claim RPC's date predicate): a thread is
+  eligible only when its last update landed on a PREVIOUS local day -
+  `(t.updated_at at time zone usertz.tz)::date <
+  (now() at time zone usertz.tz)::date` (schema.sql,
+  claim RPC). A settled conversation is judged no earlier than the
+  day after it went quiet, and after processing, re-evaluation
+  requires BOTH a newer update (`processed_at is null or <
+  updated_at`) AND that update crossing a day boundary again. This
+  document uses "day-gate" only in that sense.
 - **Per thread** (`intent_employment.ts:188-268`): resolves the
   snapshot ids to intents that still exist (FK), tags them
   `e1..eN` (`:205-209`), loads the transcript via `loadThreadSlice`
@@ -43,11 +55,15 @@ What the judge does today, end to end (all read this session):
   (`_shared/agent-models.ts:47,69`), `disableThinking: true`,
   `retryRateLimit: true`, 2048 max tokens (`:230-242`). Completion
   failure = no save, no stamp; the thread re-eligibles next tick
-  (`:244-249`).
+  (`:244-249`). Note the ASYMMETRY in today's contract: a transport
+  failure leaves the thread unprocessed, but a garbage REPLY (parse
+  yields nothing) still saves an empty set and stamps processed -
+  the queue advances (`:251-266`; save RPC stamps under the guard).
 - **Parse** (`intent_employment.ts:81-136`): strip a JSON fence, then
   per-entry validation - tag must be one we asked about, non-empty
-  reasoning, `acted` forced false without an opening, `reaction`
-  forced null unless acted and in
+  reasoning (a content-quality gate: an entry that "said nothing
+  checkable" is dropped, `:120-121`), `acted` forced false without an
+  opening, `reaction` forced null unless acted and in
   `{receptive, neutral, resistant}`. Dropped entries are just lost
   (the save stamps the thread processed either way).
 - **Save** (`intent_employment.ts:270-297`): `intent_employment_save`
@@ -60,14 +76,17 @@ Why the conversion is safe, reader-wise (verified this session):
 
 - The minter reads aggregates only:
   `select('intent_id,opening,acted,user_reaction,created_at')`
-  (`venice/agents/intent.ts:506`) and **excludes null reactions** from
+  (`venice/agents/intent.ts:507`) and **excludes null reactions** from
   the aggregate (`:553-557`, `if (row.user_reaction)`), so the
   tri-state NULL semantics are load-bearing.
-- The backtest reads `intent_id, acted` only
-  (`_shared/intent-backtest.ts:79-82`).
+- The backtest reads `intent_id, acted` only (the `EmploymentRow`
+  interface, `_shared/intent-backtest.ts:75-78`; `buildCorpus` counts
+  ACTED rows among ALL rows, `:101-104`).
 - The browser reads nothing: `grep -rn 'intent_employments|user_reaction' src/`
   is zero hits.
-- **Nobody reads `reasoning`.** It is prompt-only telemetry today.
+- **Nobody reads `reasoning`.** It is prompt-only telemetry today, and
+  always was (archaeology: the column was created before any writer,
+  and no historical revision of any reader selected it).
 
 Decision API facts the design rides on (parent plan
 `venice-decisions-plan.md`, live-calibrated 2026-11-18):
@@ -101,15 +120,29 @@ Decision API facts the design rides on (parent plan
   `'clef-api'` with a comment - same name, same home, so imports and
   the `__test` exposure stand; the "decision models own the
   EASY_TASK tier's classification half" rule
-  (`venice-decisions-plan.md:164-165`) is the precedent.
+  (`venice-decisions-plan.md:164-165`) is the precedent. This
+  knowingly departs from B2's shape (a local `VERDICT_MODEL` const,
+  `second_thoughts.ts:77`): B2's shared constant still feeds the
+  note call; this one has exactly one consumer, so the repoint is
+  clean. The comment must state that the file's thinking-pin mandate
+  (`agent-models.ts:30-36`) is a chat-completion rule - a decisions
+  call has no thinking knob to pin - and the tier preamble gains a
+  line noting this constant is a decision model, not a tier alias,
+  so a future edit of `EASY_TASK_MODEL` does not assume this agent
+  moves with it.
 - **D2 - ONE decision call per thread, 3N questions.** Minted from
   the live intent list: `opening-eN` (noul), `acted-eN` (noul),
   `reaction-eN` (choice). The state's tokens are counted once
   regardless of question count, so N intents cost N×(2 noul + 1
   choice) plus one state pass. No conditional minting: `acted` is
   asked even when `opening` reads false, and coercion enforces
-  `acted = opening ∧ p ≥ cut` - exactly today's parser rule
-  (`intent_employment.ts:123-131`).
+  `acted = opening ∧ p ≥ cut` - today's parser rule
+  (`intent_employment.ts:123-131`) lifted to probabilities (today
+  takes a verbatim boolean; the threshold is the probability
+  translation). No conditional minting also means no second round
+  trip. If a fourth decision consumer lands someday, hoist a shared
+  body builder into `_shared/venice/decisions.ts` then - two
+  consumers with documented divergence is the existing convention.
 - **D3 - The reaction choice carries a 4th option, `none`.** The
   minter drops null reactions from its aggregate, so a forced 3-way
   pick would fabricate a signal today's judge refuses to give
@@ -117,26 +150,50 @@ Decision API facts the design rides on (parent plan
   `none` = "the assistant did not act, or the user's response is not
   observable" and coerces to NULL (as does anything when `acted` is
   false). Schema check constraint unchanged
-  (`user_reaction in (...)` or NULL).
-- **D4 - Probability cut at 0.5; confidence is log-only.**
+  (`user_reaction in (...)` or NULL). The tri-state split is day-one
+  design (neutral = acted with no directional signal, DISTINCT from
+  null; schema comment cites `bias_reactions.was_confirmed`'s null
+  as loose precedent), and the `none` option preserves it.
+- **D4 - Probability cut at 0.5; confidence is log-only; the
+  unassessable-case conflation is named and accepted.**
   `EMPLOYMENT_NOUL_THRESHOLD = 0.5` maps noul probability to the
   boolean - the neutral reading of "is this yes" - as a named,
   documented knob (B1 calibrated its own `GATE_FIRE_THRESHOLD = 0.7`
   for a different question). Per the B3 ruling's spirit: the cut
-  picks a SIDE, it never drops a row - every intent gets its
-  employment row regardless of confidence; the per-tag probabilities
+  picks a SIDE, it never drops a row - every ASSESSED intent gets
+  its employment row regardless of confidence (the D6 intent cap
+  bounds "assessed"); the per-tag probabilities
   and the choice confidence are logged (debug) for observability and
-  later calibration.
+  later calibration. THE CONFLATION, named: today an intent the
+  judge cannot assess gets NO row (the model may omit it,
+  `intent_employment.ts:54`; empty-reasoning entries drop,
+  `:120-121`), and the minter's aggregate never sees it. Post-change
+  every intent gets a row, and evidence that would have been
+  "cannot assess" coerces to `opening=false` - which the minter
+  reads toward "the pattern has gone quiet" (its DORMANT pruning
+  signal). Accepted, because the alternative (a drop-below-floor
+  rule) reintroduces row loss and violates the no-drop principle,
+  the day-gate means the judge only ever sees finished days, and
+  the logged probabilities make the bias diagnosable. Documented in
+  intents.md item 11 as a v2 behavior change. The retired
+  non-empty-reasoning gate had no content-quality replacement - the
+  answers-map presence check is structural only; that gate's
+  retirement is part of this same accepted drift.
 - **D5 - The `reasoning` sentence is retired; the column receives
   `''`.** No reader exists (verified above); the column is
   `text NOT NULL` so `''` satisfies it, and the save RPC passes it
   verbatim. No migration, no schema change - the column goes
-  vestigial; a future migration may drop it. The judge's bookkeeping
-  framing ("NOT a judgment of whether the intention is good" - the
-  firewall language, `intent_employment.ts:38-42`) travels into the
-  question `instructions` (B2's D5 pattern), where the "do not
-  invent openings" and "only if you can point to where it shows"
-  rules also land.
+  vestigial; a future migration that drops it must also touch the
+  save RPC's insert list (it consumes `v_e->>'reasoning'`). The
+  judge's bookkeeping framing ("NOT a judgment of whether the
+  intention is good" - the firewall language, `intent_employment.ts:38-42`)
+  travels into the question `instructions` (B2's D5 pattern), where
+  the "do not invent openings" and "only if you can point to where
+  it shows" rules also land. The firewall's enforcement is
+  structural (separate table, separate writer - archaeology: the
+  commit message binds "prompt framed as bookkeeping" to the
+  firewall, but the enforcement lives in the schema separation), so
+  a transport swap threatens nothing as long as the framing travels.
 - **D6 - State budget: trim rows, clip rows, cap tool bodies - one
   pass, no re-serialization loop.** The 32k-TOKEN state cap vs
   `loadThreadSlice`'s 200k-CHAR budget is the conversion's one real
@@ -145,33 +202,75 @@ Decision API facts the design rides on (parent plan
   keep-newest, `_recall_helpers.ts:78-94`), then serialize with a
   per-row content clip (`MAX_ROW_CHARS = 24_000` - the trim's
   always-keep-last edge would otherwise let one giant row fail the
-  thread on every tick, a failure the 1M-window chat path never
-  had) and the existing 4k per-tool-result cap in the serializer.
-  80k chars ≈ 20k tokens at ~4 chars/token; questions + intent
-  statements ride in the same 32k budget with headroom. Residual: a
-  pathological state past every bound → upstream 400 → no save, no
-  stamp → re-eligible next tick (accepted; mirrors B2's residual).
-  Keep-newest is the right degradation: recent behavior is the most
-  diagnostic, and the day-gate re-evaluates the thread on its next
-  update.
+  thread on every eligible tick, a failure the 1M-window chat path
+  never had) and B2's 4k per-tool-result cap
+  (`MAX_TOOL_RESULT_CHARS = 4000`, `second_thoughts.ts:121`),
+  reimplemented in the new serializer (nothing reusable exists -
+  see D8). Accounting note: the trim counts
+  `content + JSON.stringify(tool_calls)` (`_recall_helpers.ts:86-88`)
+  while the serializer renders tool calls as short lines, so the
+  counted chars OVERCOUNT what gets serialized - the safe direction;
+  fence and role-prefix overhead add a small uncounted amount. A
+  debug log of the final serialized length feeds calibration. 80k
+  chars ≈ 20k tokens at ~4 chars/token; questions + intent
+  statements ride in the same 32k budget with headroom. Two bounds
+  on the question count: (1) the judge assesses at most
+  `EMPLOYMENT_MAX_INTENTS = 12` snapshot ids (first by id order;
+  excess logged and skipped - no row for them this round, a
+  degenerate-portfolio guard; today ALL snapshot ids are judged);
+  (2) the intents select gains `.order('id')` so tags `e1..eN` are
+  deterministic (today: PostgREST return order - cosmetic, but the
+  QA asserts per-tag ground truth). Residual: a pathological state
+  past every bound → upstream 400 → D7's deterministic-rejection
+  path. Keep-newest is the right degradation: recent behavior is
+  the most diagnostic, and the day-gate re-evaluates the thread
+  after its next update. CJK risk: ~4 chars/token is an
+  English-calibrated figure; CJK-heavy transcripts run ~1-3
+  chars/token and can push 80k chars past 32k tokens - accepted for
+  now (the usage log in VERIFICATION exposes the real ratio; lower
+  the budget constant if it bites).
 - **D7 - Transport: `veniceDecision`, single attempt, no timeout
-  race.** The helper is a thin verbatim relay with no retry loop
-  (`_shared/venice/decisions.ts:1-14`). Failure (network, 429, 400,
-  malformed) = log + no save + no stamp, the same contract as
-  today's completion-failure path (`intent_employment.ts:244-249`).
+  race, and the failure contract mirrors today's asymmetric one.**
+  The helper is a thin verbatim relay with no retry loop
+  (`_shared/venice/decisions.ts:1-14`). Failure handling splits by
+  kind, extracted as a pure classifier pinned by tests:
+  - **Deterministic rejection** (`http` kind, status 400/422 -
+    oversized state, beta wire drift): save an empty set + stamp
+    processed, matching today's garbage-parse contract (the queue
+    ADVANCES; `intent_employment.ts:251-266`). Without this, a
+    deterministic 400 leaves the thread re-eligible forever, and
+    since claims order oldest-first, enough poison threads would
+    permanently occupy the tick's 10 slots and starve newer threads.
+  - **Transient failure** (network, rate_limit, 5xx, response parse):
+    log + no save + no stamp, the same contract as today's
+    completion-failure path (`intent_employment.ts:244-249`) - the
+    thread re-eligibles next tick.
   This sweep is a cron tail, not the TTFT path - B1's 1500ms race
-  does not apply here; the claim TTL bounds the work.
+  does not apply here; the claim TTL bounds the work. Decision calls
+  expose no thinking control (the endpoint owns any reasoning
+  behavior); the calibration's ~360ms and the usage log are the
+  cost evidence.
 - **D8 - State shape: object `{ intents, transcript }`.** The intent
   list rides as structured data (`[{tag, statement}]`); the
   transcript rides as a fenced string rendered from the slice rows -
   `[user]` / `[assistant]` content, tool calls as a rendered line
-  list, `[tool result: name]` bodies with the cap. B2's
-  `serializeExchange` is NOT reused: its fence names, reasoning
-  inclusion, and quote-verification extras are second-thoughts
-  semantics (`second_thoughts.ts:392-450`), and today's employment
-  judge never sees reasoning (the slice selects no reasoning
-  column, `intent_employment.ts:28`). The module gets its own small
-  serializer, exported for tests.
+  list, `[tool result: name]` bodies with the 4k cap,
+  fork-framing `[system]` rows rendered verbatim (they are short
+  boundary context; today's chat path sends them as system
+  messages). B2's `serializeExchange` is NOT reused: its fence
+  names, reasoning inclusion, and quote-verification extras are
+  second-thoughts semantics (`second_thoughts.ts:392-450`), and
+  today's employment judge never sees reasoning (the slice selects
+  no reasoning column, `_recall_helpers.ts:219`). A bespoke
+  serializer is also the repo's stated convention, not a one-off:
+  `_shared/thread-transcript.ts:71-75` documents that transcript
+  renderers are deliberately not shared because each consumer's
+  caps serve different purposes (its own renderer is no fit - it
+  drops tool-result bodies entirely, `:160`). The new serializer
+  cross-references B2's `MAX_TOOL_RESULT_CHARS` in a comment so the
+  two caps stay numerically consistent by intent. The module's
+  header comment changes shape with it: "pure request builder +
+  coercion pinned via `__test`", not "pure prompt + parser".
 
 ## PLAN
 
@@ -181,27 +280,47 @@ Decision API facts the design rides on (parent plan
    `/decisions` body (D2/D5/D8), `parseEmploymentVerdicts(payload,
    validTags)` → the same `Map<tag, verdict>` contract from the
    answers map (D2/D3/D4), the transcript serializer + budget trim
-   (D6/D8), and the runner swap (`toolComplete` → `veniceDecision`,
-   D7). `EmploymentVerdict` loses `reasoning`; the row builder
-   writes `reasoning: ''` (D5). Claim/save/sweep skeleton, cap, TTL,
-   and logging shape unchanged.
+   + intent cap (D6/D8), the failure classifier
+   (deterministic-vs-transient, D7), and the runner swap
+   (`toolComplete` → `veniceDecision`, D7). `EmploymentVerdict`
+   loses `reasoning`; the row builder writes `reasoning: ''` (D5).
+   The intents select gains `.order('id')` (D6). Claim/save/sweep
+   skeleton, cap, and TTL unchanged (the new debug logs - per-tag
+   probabilities, serialized length, `usage` - extend, not change,
+   the logging shape); the module header comment updates with the
+   shape (D8).
 2. **Repoint the model constant** (`agent-models.ts:69`) with the
-   decision-model comment (D1). `INTENT_EMPLOYMENT_MAX_TOKENS`,
-   `disableThinking`, and `retryRateLimit` die with the chat call.
+   decision-model comment and the tier-preamble line (D1).
+   `INTENT_EMPLOYMENT_MAX_TOKENS`, `disableThinking`, and
+   `retryRateLimit` die with the chat call (`toolComplete` keeps its
+   11 other import sites - not orphaned).
 3. **Rewrite `tests/intent_employment.test.ts`.** Pin: the body
-   shape (model, state fences, 3 correctly-typed questions per
-   intent), the firewall language living in the question
-   instructions, and the coercion table - happy path; `acted` forced
+   shape (model via the destructured `INTENT_EMPLOYMENT_MODEL` -
+   which also gives the currently-unused `__test` export a consumer,
+   state fences, 3 correctly-typed questions per intent, the
+   intent cap), the firewall language living in the question
+   instructions, the coercion table - happy path; `acted` forced
    false without an opening (reaction nulled too); reaction `none` →
    NULL; unknown tag dropped; missing/malformed answers dropped per
    tag; budget trim + per-row clip behavior on an over-budget
-   fixture.
-4. **Docs.** `docs/dev/in-progress/intents.md` item 11: the judge
-   rides the decisions endpoint (`clef-api`), reasoning no longer
-   produced (column receives `''`), the state budget guard.
-   `docs/dev/plans/venice-decisions-plan.md`: flip the B4 entry to
-   implemented + pointer here. QA use-case doc gets its executed row
-   after the live run.
+   fixture; the failure classifier's split (deterministic →
+   empty-save-and-stamp, transient → leave). Follow the sibling
+   suites' import spelling (`'@std/assert'`, not `'jsr:@std/assert'`).
+4. **Docs.** `docs/dev/in-progress/intents.md`: item 11 gains the
+   v2 behavior (decisions endpoint, `clef-api`, the D4 conflation
+   named, the reasoning gate retired, the state budget + intent
+   cap); the `### intent_employments` data-model section
+   (`:387-406`) marks the reasoning column vestigial; the day-one
+   phrase "one row per (intent, thread) where the judge ACTED" is
+   corrected - rows land regardless of acted; `opening` exists
+   precisely to split no-opening from missed-opening
+   (`buildCorpus` counts acted rows among all rows).
+   `docs/qa/use-cases/intent-employment.md`: the Expected section's
+   "non-empty `reasoning`" assertion and its verification SQL flip
+   to `reasoning = ''`; the "could assess" row-count phrasing
+   updates to row-per-assessed-intent; the executed row lands after
+   the live run. `docs/dev/plans/venice-decisions-plan.md`: flip
+   the B4 entry to implemented + pointer here.
 5. **Gate, self-review, QA, land.** `mise run check` (exit code read
    un-piped), the codified pre-merge self-review (slop-grep over
    added lines, straggler scan for retired names, adversarial read
@@ -212,18 +331,34 @@ Decision API facts the design rides on (parent plan
 - **Probability calibration.** The 0.5 noul cut is untested against
   real transcripts; B1 needed its own calibrated threshold. The
   constants are the knobs and the QA run sanity-checks a scripted
-  transcript; post-landing, the logged distributions are the
-  calibration data.
+  transcript; post-landing, the logged distributions + usage lines
+  are the calibration data.
+- **The unassessable-case conflation** (D4): evidence today's judge
+  omits now records as "no opening," tilting the minter's aggregate
+  toward DORMANT. Accepted and documented; the logs make it
+  diagnosable.
+- **Deterministic-rejection wedge shape** (D7): the empty-save +
+  stamp path keeps the queue advancing, but a uniform beta wire
+  drift would stamp EVERY thread processed with no rows - loud in
+  logs (empty saves + warnings on every tick), fixed by a code fix,
+  and the day-gate means the re-judge backlog drains a day later.
+  Accepted; an attempt-counter column was rejected as schema churn
+  this change does not need.
 - **Keep-newest trim narrows very long threads** relative to
   today's 200k view (D6). Accepted: telemetry only, day-gated
-  re-evaluation on update, and the alternative is per-tick failure.
+  re-evaluation after the next update, and the alternative is
+  per-tick failure.
+- **CJK token density** (D6): the 80k-char budget assumes English
+  calibration; CJK transcripts can overflow 32k tokens. Accepted
+  with the usage log as the tripwire.
 - **`none` vs `neutral` criteria blur** could inflate one bucket.
   The criteria wording carries the distinction (engaged-without-
   direction vs nothing-observable); QA watches the mix on the
   scripted transcript.
 - **Beta wire drift** (`/decisions` is BETA) surfaces as upstream
-  400 → no save → re-eligible; the sweep degrades to "not recording"
-  without writing wrong rows. Same exposure as B1/B2.
+  400 → deterministic-rejection path (above); the sweep degrades to
+  "not recording" without writing wrong rows. Same exposure as
+  B1/B2.
 
 ## VERIFICATION
 
@@ -237,7 +372,9 @@ Decision API facts the design rides on (parent plan
   stand-in for the hourly cron) with the service-role key. Assert:
   `intent_employments` rows match the scripted transcript's ground
   truth (opening/acted/reaction per intent); `reasoning = ''`;
-  reaction NULL when not acted; per-tag probabilities in the debug
-  log. Then: toggle-off user → not claimed; message-count drift →
-  save rejected + thread re-eligibles (RPC guard, unchanged).
-  The QA doc's manual case gets its executed row.
+  reaction NULL when not acted; per-tag probabilities + the
+  decision response's `usage` (actual state tokens - pins D6's
+  budget against real data) in the logs. Then: toggle-off user →
+  not claimed; message-count drift → save rejected + thread
+  re-eligibles (RPC guard, unchanged). The QA doc's manual case
+  gets its executed row.
