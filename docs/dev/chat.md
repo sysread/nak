@@ -98,8 +98,8 @@ A chat turn goes:
 - `src/lib/venice.ts` - the Venice wire-shape facade.
   `VeniceClient.streamChat` posts to the venice edge function's
   `/stream` route, subscribes to the per-thread Broadcast
-  channel, and yields a typed `StreamEvent` union. Background
-  callers go through `SupabaseService.complete` instead. See
+  channel, and yields a typed `StreamEvent` union. Decision-model
+  callers go through `SupabaseService.decide` instead. See
   [Venice adapter](./architecture.md#venice-adapter) for the
   full split.
 - `src/lib/supabase.ts` - thread CRUD, user-message inserts,

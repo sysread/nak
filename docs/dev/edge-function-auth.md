@@ -34,7 +34,7 @@ read this end to end before writing the first query.
   validated userId as a constructor argument.
 
 Routes that do *not* outlive their request - `/embed`, `/usage`,
-`/text-parser`, `/image-generate`, `/complete` - stay on the
+`/text-parser`, `/image-generate`, `/decisions` - stay on the
 user-scoped pattern (gateway's `verify_jwt` validates the JWT;
 `/embed` uses the built-in `Supabase.ai.Session` and needs no
 Venice key at all, while the others read the shared Venice key
