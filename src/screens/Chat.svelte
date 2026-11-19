@@ -1837,10 +1837,12 @@
   // it anyway; a no-op when the echo already delivered it (appendMessage
   // merges nothing) or when the reviewer wrote no verdict. Bounded set
   // of pending timers so a thread teardown can cancel them.
-  // Past the observed reviewer latency (avg ~5s, max ~12s in
-  // production) with margin, since this fires only when the realtime
-  // echo dropped - a rare path where a slightly longer wait costs
-  // nothing, and covering the slow tail matters more than being quick.
+  // Past the observed verdict latency - faster since the disposition
+  // moved to a decision-model call, but the note call on a doubt turn
+  // still costs seconds - with margin, since this fires only when the
+  // realtime echo dropped - a rare path where a slightly longer wait
+  // costs nothing, and covering the slow tail matters more than being
+  // quick.
   // The delay is the point: unlike reconcileTranscript, whose callers
   // run it after their rows are committed, the verdict does not exist
   // yet when the turn commits, so an immediate re-fetch would miss it.

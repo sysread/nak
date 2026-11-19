@@ -15,13 +15,14 @@ render path through `AssistantBody.svelte`
 ## Preconditions
 
 - Local stack up (`mise run dev-start`), signed in as the dev user.
-- The reviewer model id is reachable on the configured Venice key. It
-  pins `z-ai-glm-5-3-flash` in `second_thoughts.ts` with the thinking
-  pass disabled at the call; if that id is not available in the test
-  environment, temporarily repoint `SECOND_THOUGHTS_MODEL` to any
-  available fast chat model and keep the disable pin. An unsuppressed
-  thinking pass leaks chain-of-thought around the JSON and the parser
-  drops the verdict (the bug the pin fixes).
+- The verdict model pins `clef-api` (the decision model) in
+  `second_thoughts.ts`; the doubt-note call pins
+  `z-ai-glm-5-3-flash` (`NOTE_MODEL`) with the thinking pass
+  disabled at the call. If a model id is not available in the test
+  environment, temporarily repoint the corresponding constant
+  (`VERDICT_MODEL` / `NOTE_MODEL`). The v1 JSON contract and its
+  CoT-leak rationale retired with the decision-model conversion -
+  the verdict is now a typed answer, not parsed JSON.
 - To read a verdict directly:
 
   ```sql
@@ -156,7 +157,7 @@ render path through `AssistantBody.svelte`
 ## Cleanup
 
 - Delete the test thread if you made one.
-- If you repointed `SECOND_THOUGHTS_MODEL` in preconditions, revert it.
+- If you repointed `VERDICT_MODEL` or `NOTE_MODEL` in preconditions, revert it.
 
 ## Results log
 

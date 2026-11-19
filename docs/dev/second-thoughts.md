@@ -134,33 +134,39 @@ Replaying a conversation as role-tagged messages makes the model want
 to *continue* it - answering as a fourth voice instead of reviewing.
 Three layered defenses:
 
-1. **Separate completion with a reviewer system prompt** - an agent
-   whose whole job is the meta-task, a sibling to `summary` / `bias` /
-   `topics` under `venice/agents/`.
-2. **The slice is serialized as one fenced document** inside a single
-   user message, not replayed as role-tagged turns. Handed a fenced
-   `<exchange_under_review>` document the model analyzes instead of
-   continuing (same reason the chat path fences the user turn - see
-   [`chat.md`](./chat.md)).
-3. **Structured output** (`response_format: json_object`) leaves no
-   schema slot for a conversational reply. The hard guard; 1 and 2 keep
-   quality up.
+1. **The verdict is a decision-model call, not a chat turn** - one
+   `clef-api` `choice` question over the serialized slice (see Model
+   below); typed judgments in, no schema slot for a conversational
+   reply at all.
+2. **The slice is serialized as one fenced document** carried as
+   decision-call state, not replayed as role-tagged turns. Handed a
+   fenced `<exchange_under_review>` document the model analyzes
+   instead of continuing (same reason the chat path fences the user
+   turn - see [`chat.md`](./chat.md)).
+3. **The doubt note is its own single-purpose chat call** - the
+   reviewer persona, the exchange, and the already-drawn verdict;
+   nothing in its prompt invites continuation.
 
 ### Model
 
-Easy-task tier - `z-ai-glm-5-3-flash` with the thinking pass disabled,
-the same id `web_search` / `summary` / `topics` use. The reflex is dumb
-and fast by design, so intuition's model rationale applies verbatim:
-latency is what matters, reasoning is actively wrong here - the model
-can reason, so the disable pin at the call site is load-bearing. A reasoning
-model leaks chain-of-thought around the JSON, which in production
-dropped ~60% of verdicts and every doubt (the empty-note `conviction`
-survived the parser; longer doubt notes came back messy and failed it).
-The parser keeps a balanced-brace fallback (`extractJsonObject`) so a
-stray wrapping token can never again silently drop a verdict. Held
-directly in `second_thoughts.ts` (not `src/lib` `AGENT_MODELS`) because
-this agent runs only server-side, like the curation / bias / samskara
-agents.
+The verdict: `clef-api` (the decision model, private tier) - a
+`choice` question whose criteria carry each disposition's meaning
+and whose instructions carry the grounding/provenance rules. The
+decision call replaced the chat-completion verdict in the
+decision-model conversion (2026-11-19): an earlier chat pick
+(xiaomi-mimo-v2-5) leaked chain-of-thought around the JSON and
+produced usable verdicts on ~40% of turns; the decision model
+emits no chain to leak, and the verdict lands in ~360ms instead of
+the ~5-12s the chat call took. The doubt NOTE (the one part a
+decision model cannot produce) is still a chat completion -
+`z-ai-glm-5-3-flash` (`NOTE_MODEL`) with the thinking pass
+disabled (the pin is load-bearing: the model can reason) - and
+runs ONLY on doubt verdicts; conviction writes an empty note and
+skips the call. Persisted notes pass a shape check before the
+write (length cap, no `<think>` tag, no list-line dump) - the
+compound-summary guard's precedent for verbatim-persisted prose.
+Both model ids are held directly in `second_thoughts.ts` (not
+`src/lib` `AGENT_MODELS`) because this agent runs only server-side.
 
 ### Output: the disposition spectrum
 

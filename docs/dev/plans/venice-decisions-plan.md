@@ -112,7 +112,11 @@ typed), the chat call runs only when the verdict says it is needed.
   skipping a refresh. Privacy: the user's message would go to the
   decision model on every turn - the private-tier model is
   load-bearing here.
-- **B2 - Second-thoughts verdict.** The reflex's disposition is a
+- **B2 - Second-thoughts verdict.** IMPLEMENTED on branch
+  second-thoughts-verdict - see
+  `docs/dev/plans/second-thoughts-verdict-plan.md` (the decision
+  call owns the verdict; the prose note is a chat call only on
+  doubt). Original premise notes: the disposition is a
   closed enum (`conviction | hedge | reframe | correct`,
   `supabase/functions/venice/agents/second_thoughts.ts:77-88`). A
   `choice` question returns the verdict plus a real confidence to
