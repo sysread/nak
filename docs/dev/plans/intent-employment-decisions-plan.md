@@ -13,10 +13,12 @@ asks a yes/no (`opening`), a yes/no (`acted`), and a closed-set pick
 (`reaction`), minted dynamically from the thread's active intent list
 (`intent_employment.ts:43-54`). A decision model answers those
 natively: no JSON fence to strip, no prose to parse, no chain-of-
-thought to leak. The `reasoning` sentence is the only casualty, and it
-is telemetry with zero readers in any revision of the repo (verified
-this session by grep over current code, full git history of the
-readers, and the unmerged parallel commits).
+thought to leak. Two casualties, both verified harmless: the
+`reasoning` sentence - telemetry with zero readers in any revision
+of the repo (verified this session by grep over current code, full
+git history of the readers, and the unmerged parallel commits) - and
+the non-empty-reasoning entry-validity gate it fed (D4 names the
+structural replacement).
 
 The sweep's skeleton - claim, guard, save, cap - does not change. This
 is a judge swap, not a workflow change. No UI, no routes, no schema.
@@ -155,30 +157,36 @@ Decision API facts the design rides on (parent plan
   null; schema comment cites `bias_reactions.was_confirmed`'s null
   as loose precedent), and the `none` option preserves it.
 - **D4 - Probability cut at 0.5; confidence is log-only; the
-  unassessable-case conflation is named and accepted.**
+  row-level semantics change is named and accepted.**
   `EMPLOYMENT_NOUL_THRESHOLD = 0.5` maps noul probability to the
   boolean - the neutral reading of "is this yes" - as a named,
   documented knob (B1 calibrated its own `GATE_FIRE_THRESHOLD = 0.7`
-  for a different question). Per the B3 ruling's spirit: the cut
-  picks a SIDE, it never drops a row - every ASSESSED intent gets
-  its employment row regardless of confidence (the D6 intent cap
-  bounds "assessed"); the per-tag probabilities
-  and the choice confidence are logged (debug) for observability and
-  later calibration. THE CONFLATION, named: today an intent the
-  judge cannot assess gets NO row (the model may omit it,
-  `intent_employment.ts:54`; empty-reasoning entries drop,
-  `:120-121`), and the minter's aggregate never sees it. Post-change
-  every intent gets a row, and evidence that would have been
-  "cannot assess" coerces to `opening=false` - which the minter
-  reads toward "the pattern has gone quiet" (its DORMANT pruning
-  signal). Accepted, because the alternative (a drop-below-floor
-  rule) reintroduces row loss and violates the no-drop principle,
-  the day-gate means the judge only ever sees finished days, and
-  the logged probabilities make the bias diagnosable. Documented in
-  intents.md item 11 as a v2 behavior change. The retired
+  for a different question). Per the B3 ruling's spirit: low
+  confidence never drops a row - every ASSESSED intent gets its
+  employment row regardless of confidence (the D6 intent cap bounds
+  "assessed"; a missing or malformed per-tag ANSWER still drops that
+  tag's row - the presence check, `:120-121`'s only survivor); the
+  per-tag probabilities and the choice confidence are logged (debug)
+  for observability and later calibration. THE ROW-LEVEL CHANGE,
+  named: today an intent the judge cannot assess gets NO row (the
+  model may omit it, `intent_employment.ts:54`; empty-reasoning
+  entries drop, `:120-121`). Post-change every assessed intent gets
+  a row, and evidence that would have been "cannot assess" coerces
+  to `opening=false, acted=false, reaction=null`. That row is
+  AGGREGATE-NEUTRAL for today's consumers: the minter's counters
+  move only on `opening=true`, `acted=true`, or a non-null reaction
+  (`intent.ts:553-557`), so an all-false row moves nothing - the
+  aggregate cannot tell the new row from the old absence, and the
+  DORMANT signal ("few or no recent openings") is untouched. The
+  change is real only at row level - a future reader of the table
+  sees rows v1 never wrote - and in the logs. Accepted, because the
+  alternative (a drop-below-floor rule) reintroduces row loss and
+  violates the no-drop principle, and the day-gate means the judge
+  only ever sees finished days. Documented in intents.md item 11 as
+  a v2 behavior change (row-level; aggregate-neutral). The retired
   non-empty-reasoning gate had no content-quality replacement - the
   answers-map presence check is structural only; that gate's
-  retirement is part of this same accepted drift.
+  retirement is part of this same accepted change.
 - **D5 - The `reasoning` sentence is retired; the column receives
   `''`.** No reader exists (verified above); the column is
   `text NOT NULL` so `''` satisfies it, and the save RPC passes it
@@ -307,9 +315,11 @@ Decision API facts the design rides on (parent plan
    empty-save-and-stamp, transient → leave). Follow the sibling
    suites' import spelling (`'@std/assert'`, not `'jsr:@std/assert'`).
 4. **Docs.** `docs/dev/in-progress/intents.md`: item 11 gains the
-   v2 behavior (decisions endpoint, `clef-api`, the D4 conflation
-   named, the reasoning gate retired, the state budget + intent
-   cap); the `### intent_employments` data-model section
+   v2 behavior (decisions endpoint, `clef-api`, the D4 row-level
+   change named - unassessable intents now leave `opening=false`
+   rows where v1 left none, aggregate-neutral since the minter's
+   counters ignore all-false rows; the reasoning gate retired; the
+   state budget + intent cap); the `### intent_employments` data-model section
    (`:387-406`) marks the reasoning column vestigial; the day-one
    phrase "one row per (intent, thread) where the judge ACTED" is
    corrected - rows land regardless of acted; `opening` exists
@@ -333,10 +343,11 @@ Decision API facts the design rides on (parent plan
   constants are the knobs and the QA run sanity-checks a scripted
   transcript; post-landing, the logged distributions + usage lines
   are the calibration data.
-- **The unassessable-case conflation** (D4): evidence today's judge
-  omits now records as "no opening," tilting the minter's aggregate
-  toward DORMANT. Accepted and documented; the logs make it
-  diagnosable.
+- **The row-level semantics change** (D4): evidence today's judge
+  omits now records as `opening=false` rows - aggregate-neutral for
+  today's minter and backtest (their counters ignore all-false
+  rows), visible only to future readers of the table and the logs.
+  Accepted and documented; no pruning-signal risk.
 - **Deterministic-rejection wedge shape** (D7): the empty-save +
   stamp path keeps the queue advancing, but a uniform beta wire
   drift would stamp EVERY thread processed with no rows - loud in
@@ -369,12 +380,16 @@ Decision API facts the design rides on (parent plan
   `docs/qa/use-cases/intent-employment.md` preconditions: opted-in
   profile, forged active intent, settled thread with the snapshot;
   POST the `intent-employment-sweep` route (the deterministic
-  stand-in for the hourly cron) with the service-role key. Assert:
-  `intent_employments` rows match the scripted transcript's ground
-  truth (opening/acted/reaction per intent); `reasoning = ''`;
-  reaction NULL when not acted; per-tag probabilities + the
+  stand-in for the hourly cron) with the service-role key. HARD
+  asserts (structure): one row per assessed intent; `reasoning =
+  ''`; reaction NULL when not acted; the thread stamped processed
+  and the claim released. SOFT observations (logged for
+  calibration, not asserted - a real model may judge the scripted
+  transcript differently than the author did): the actual
+  opening/acted/reaction values per tag; per-tag probabilities + the
   decision response's `usage` (actual state tokens - pins D6's
-  budget against real data) in the logs. Then: toggle-off user →
-  not claimed; message-count drift → save rejected + thread
-  re-eligibles (RPC guard, unchanged). The QA doc's manual case
-  gets its executed row.
+  budget against real data). Then: toggle-off user → not claimed;
+  message-count drift → save rejected + thread re-eligibles
+  (RPC guard, unchanged by this diff; best-effort in QA - the drift
+  is a race by construction, not deterministically scriptable).
+  The QA doc's manual case gets its executed row.
