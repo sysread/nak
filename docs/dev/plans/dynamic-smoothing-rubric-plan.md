@@ -1,6 +1,6 @@
 # The dynamic smoothing rubric (B10) - the samskara-built per-user calibration
 
-Status: PLAN (refinement round 1 folded; round 2 pending).
+Status: PLAN (refinement complete: 2 rounds, all findings folded verbatim - the round-2 cap reached with no remaining disagreement).
 
 ## SYNOPSIS
 
@@ -56,10 +56,26 @@ start) or a failed build runs the fixed rubric alone - fail-open.
   the summary's call.** The summary prompt's wire format is prose
   only and its shape guard is a hard-won lesson; B10 adds a SECOND
   cheap call (`SMOOTHING_RUBRIC_PROMPT` through the same `callOnce`,
-  2 attempts + its own shape guard) in the same regen probe.
-  Independent failure: a rubric failure never blocks the summary
-  (and vice versa). The extra call rides the regen cadence (slow,
-  sweep-driven) - not the turn path.
+  2 attempts + its own shape guard) in the same regen probe, run in
+  PARALLEL with the summary build (the claim TTL is 180s and the
+  probe's worst case doubles to 4 calls - parallelism halves the
+  wall time and expresses the independence). **The four-case
+  failure matrix (the round-2 correction; "independence" is
+  asymmetric by design):**
+  - *Both succeed*: save both; `last_regen_at` advances.
+  - *Summary succeeds, rubric fails*: save the summary; the RPC's
+    coalesce (D2) keeps the stored rubric.
+  - *Rubric succeeds, summary fails*: DISCARD the rubric, save
+    nothing. The summary's freshness contract owns `last_regen_at`:
+    saving would advance the staleness clock over old prose (the
+    read side's 24h ceiling keys off it), so a failed summary means
+    no save at all - the sweep retries within the hour and the next
+    pass carries the rubric.
+  - *Both fail*: no save; today's retry behavior (the claim
+    TTL / next tick).
+  So: a rubric failure never blocks the summary; a summary failure
+  defers the rubric one pass. The extra call rides the regen
+  cadence (slow, sweep-driven) - not the turn path.
 - **D2 - Storage: a new `smoothing_rubric text` column on
   `samskara_compound_summary`** (same PK, shared stale ceiling, the
   regen cadence already correct). The save RPC
@@ -67,9 +83,14 @@ start) or a failed build runs the fixed rubric alone - fail-open.
   `p_smoothing_rubric text default null` - a schema change.
   **Migration mechanism (re-rooted per the round-1 audit; the
   plan's original citation pointed at another repo's flow)**: edit
-  `supabase/schema.sql` directly (the column + the RPC body) -
-  the `sync-supabase` CI job applies schema.sql on merge
-  (CLAUDE.md:919-930), and the dml-columns scanner
+  `supabase/schema.sql` directly - BOTH statements, because
+  schema.sql re-applies start-to-finish on every sync: the
+  `alter table samskara_compound_summary add column if not exists
+  smoothing_rubric text;` (idempotent; the CREATE TABLE body edit
+  alone never reaches existing databases - the PR #524 failure
+  class) AND the CREATE TABLE body (fresh resets) AND the RPC
+  body's coalesce. The `sync-supabase` CI job applies schema.sql
+  on merge (CLAUDE.md:919-930), and the dml-columns scanner
   (`tests/schema-dml-columns.test.ts`) pins the RPC body against
   schema.sql only. **UPDATE semantics (the wipe guard)**: the
   rubric build failing while the summary succeeds must not wipe a
@@ -77,7 +98,10 @@ start) or a failed build runs the fixed rubric alone - fail-open.
   `smoothing_rubric = coalesce(p_smoothing_rubric, smoothing_rubric)`
   (null means KEEP the stored rubric). Without this, one failed
   rubric call silences the dynamic layer for 6h+ (the regen
-  trigger's next-fire window) for a user who had a good one.
+  trigger's next-fire window) for a user who had a good one. The
+  summary's assignment stays UNCONDITIONAL (a null summary means
+  the probe saved nothing - D1's matrix; the freshness contract
+  owns that gate).
 - **D3 - The prompt's contract**: given the same top-samskaras
   payload, name what validation and comfort-rewriting look like for
   THIS user specifically - concrete tells drawn only from the
@@ -116,8 +140,9 @@ start) or a failed build runs the fixed rubric alone - fail-open.
 
 ## PLAN
 
-1. **`supabase/schema.sql`**: the `smoothing_rubric text` column on
-   `samskara_compound_summary` + the save RPC's signature and body
+1. **`supabase/schema.sql`**: the `smoothing_rubric text` column -
+   the idempotent ALTER (existing databases) + the CREATE TABLE
+   body (fresh resets) - and the save RPC's signature and body
    (the coalesce semantics per D2). Applied by the `sync-supabase`
    CI job on merge; the dml-columns scanner pins the RPC body here.
 2. **`agents/samskara.ts`**: `SMOOTHING_RUBRIC_PROMPT` (D3's
@@ -125,8 +150,10 @@ start) or a failed build runs the fixed rubric alone - fail-open.
    the summary's `isCleanSummaryParagraph` assumes the summary's
    third-person voice and has no length cap; the rubric guard
    enforces the ~600-char cap, no headings, no JSON, no lists) +
-   the regen probe calling both and passing both to the save RPC
-   (the null-rubric path hits the RPC's coalesce - the wipe guard).
+   the regen probe running BOTH builds in parallel (D1's claim-TTL
+   budget) and dispatching per D1's four-case matrix to the save
+   RPC (the null-rubric path hits the RPC's coalesce - the wipe
+   guard; the failed-summary path saves nothing).
 3. **`priming/samskara.ts`**: the sibling getter
    `getSmoothingRubric(admin, userId, log): Promise<string | null>`
    - the same swallow contract + stale ceiling as
@@ -137,6 +164,8 @@ start) or a failed build runs the fixed rubric alone - fail-open.
 5. **Tests**: the prompt's floor lint (the tighten-only rule cannot
    be violated - the prompt must carry the fleet anchors as the
    minimum); the agent's shape guard (the cap, no headings/JSON);
+   the four-case matrix (both succeed / summary-only with the
+   coalesce / rubric-only discards + saves nothing / both fail);
    the assembly's null/empty/stale arms; the coalesce semantics
    (a null rubric write keeps the stored value - the wipe guard's
    pin, in the schema/RPC test surface); the body assertion (the
@@ -161,6 +190,11 @@ start) or a failed build runs the fixed rubric alone - fail-open.
 - **Cold start / sparse patterns**: a user with thin samskaras gets
   a thin or absent rubric - fail-open to the fixed rubric; no
   behavioral cliff.
+- **Rubric freshness has no signal of its own** (the round-2
+  note): `last_regen_at` advances on every successful save
+  including coalesced ones, so an old surviving rubric always
+  passes the getter's stale ceiling. Accepted: bounded by the
+  specialize-only floor (D3) and the fail-open posture.
 
 ## VERIFICATION
 
@@ -176,9 +210,14 @@ start) or a failed build runs the fixed rubric alone - fail-open.
   2. **Cold-start arm**: a fresh user (no summary row) runs a turn;
      the line shows `smoothingRubricChars=0`; the judge behaves as
      B9 shipped.
-  3. **Wipe-guard arm**: with a good rubric stored, force a regen
-     where the rubric build fails (the summary succeeds); assert
-     the stored rubric survives (the coalesce).
+  3. **Wipe-guard arm (SQL-level)**: with a good rubric stored, call
+     `samskara_save_compound_summary_if_claimed` directly with
+     `p_smoothing_rubric = null` (a successful summary, a failed
+     rubric build); assert the stored rubric survives (the
+     coalesce). The live build-failure path itself is not reliably
+     forceable (the two builds share one key and lane), so the
+     semantics are proven at the RPC level and the matrix in unit
+     tests.
   4. **Regression arms**: B9's clean + clarity-bait arms re-run
      green under the dynamic layer.
   The executed row lands in the QA doc's Results log.
