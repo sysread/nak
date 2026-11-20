@@ -580,7 +580,11 @@ async function logFollowupReconciliation(
       .in('id', [...judgeVerdicts.keys()]);
     if (error) throw new Error(error.message);
     for (const row of (data ?? []) as Array<{ id: string; status: string }>) {
-      log.debug(
+      // Info, not debug: this join IS the detector's decision (a low-p
+      // close = a false-close candidate; a still-open high-p = a
+      // missed-close candidate) - the default-level drawer should tell
+      // that story.
+      log.info(
         `followup-judge reconcile: ${row.id} p=${judgeVerdicts.get(row.id)?.toFixed(2)} status=${row.status}`,
       );
     }
