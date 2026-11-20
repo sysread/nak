@@ -181,8 +181,9 @@ Deno.test('rubric shape guard: short prose only - cap, no structure', () => {
     'surface-level claim about distributed systems would be smoothing for them.';
   assert(isCleanRubricBlock(clean));
   assert(isCleanRubricBlock('  A short clean block.  '));
-  // The 600-char cap.
-  assert(!isCleanRubricBlock('x'.repeat(601)));
+  // The 1200-char cap (the prompt asks under 1000; the guard keeps
+  // ~2x headroom over what the model actually writes).
+  assert(!isCleanRubricBlock('x'.repeat(1201)));
   // Headings, lists, JSON braces, and the json word are structure leaks.
   assert(!isCleanRubricBlock('## Calibration\nThis user wants facts.'));
   assert(!isCleanRubricBlock('- tell one\n- tell two'));

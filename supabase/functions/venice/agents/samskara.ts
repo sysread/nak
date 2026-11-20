@@ -433,8 +433,9 @@ conversations. Each carries a \`prediction\`, an optional
 and a \`health\` in [0, 1]. Stronger samskaras (high health *
 confidence) are listed first.
 
-Write a short calibration block (2-4 sentences, under 600
-characters) telling a clarity judge what sycophantic smoothing and
+Write a short calibration block (2-4 sentences, under 1000
+characters - a hard limit) telling a clarity judge what sycophantic
+smoothing and
 narrative comfort-rewriting look like FOR THIS USER specifically.
 Ground every tell in the claims: domains where the user's knowledge
 runs deep (validating a surface claim there would be smoothing),
@@ -461,10 +462,17 @@ interface AssimilationResult {
 /** The B10 rubric block's shape guard: short prose, no structure.
  *  Deliberately NOT the summary's guard - that one assumes the
  *  summary's third-person voice and has no length cap; the rubric's
- *  contract is the ~600-char cap + no headings/JSON/lists. */
+ *  contract is the ~1200-char guard cap (the prompt asks under 1000
+  - live QA measured the model writing well-grounded 1300-char
+  blocks when asked for under 600, so the guard keeps headroom) +
+  no headings/JSON/lists. */
 export function isCleanRubricBlock(text: string): boolean {
   const trimmed = text.trim();
-  if (trimmed.length === 0 || trimmed.length > 600) return false;
+  // 1200, not the prompt's 1000: live QA (2026-11-20) measured the
+  // model writing well-grounded 1300-char blocks when asked for under
+  // 600 - it overflows by roughly 2x. The guard keeps headroom over
+  // the prompt's hard limit so a good long block survives.
+  if (trimmed.length === 0 || trimmed.length > 1200) return false;
   if (/\{|\}|\bjson\b/i.test(trimmed)) return false;
   if (/^\s*(?:\d+[.)]\s|-\s|#{1,6}\s)/m.test(trimmed)) return false;
   return true;
