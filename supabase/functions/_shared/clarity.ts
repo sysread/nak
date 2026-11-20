@@ -28,6 +28,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export const CLARITY_BLOCK = `\
 Write so a busy reader parses every sentence on the first pass.
 - Answer first: your first sentence carries the answer or the request. Reasons come after it; caveats come last.
+- When you explain something or present detailed information, keep the same pyramid: the answer, then the mechanism, then the caveats - so the reader stops when satisfied, not when the reveal lands.
 - One idea per sentence. One topic per paragraph.
 - Common words over impressive ones. Keep a technical term when it is the precise name; introduce it with a short definition the first time it appears.
 - Say what the thing does before naming it with a label.
@@ -105,10 +106,10 @@ export const FAULT_CATALOG: ReadonlyArray<{ name: string; test: string }> = [
 ];
 
 export const RUBRIC_LEVELS: ReadonlyArray<string> = [
-  'Riddled: faults on most sentences; a reader must re-read to parse the text at all.',
-  'Multiple violations: several faults from the catalog, clearly present.',
-  'Minor violations: a fault or two, but the text parses fine on first read.',
-  'Clean: every sentence parses on first read; the answer leads; nothing from the catalog appears.',
+  'Riddled: a reader cannot parse most sentences without re-reading, and the answer is hard to find at all - possibly built as a reveal the reader must excavate.',
+  'Multiple violations: several faults that genuinely impede reading - a reader loses the thread, re-reads, must work to find the answer, or the explanation builds to its point instead of leading with it.',
+  'Minor violations: a few style-level faults (a mechanical tell like a dash, a mild clause chain, an explanation whose structure is basically answer-first but wanders) that do not impede a normal read.',
+  'Clean: every sentence parses on first read; the answer leads; for an explanation or detailed information, the mechanism follows and the caveats close (the inverted pyramid); nothing from the catalog appears.',
 ];
 
 /**

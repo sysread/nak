@@ -1603,10 +1603,18 @@ export async function getStreamingResponse(
                 clarity: {
                   type: 'score',
                   instructions:
-                    'Rate the RESPONSE (the question is context for what counts ' +
-                    "as the answer) against this fault catalog: " +
-                    FAULT_CATALOG.map((f) => `${f.name} - ${f.test}`).join('; ') +
-                    '. Score the whole response.',
+                    'Score the READING EXPERIENCE of the RESPONSE (the question ' +
+                    'is context for what counts as the answer), not the fault ' +
+                    'count: a long, well-organized answer with several light ' +
+                    'faults (a dash, a mild clause chain) still reads fine and ' +
+                    'scores 2-3. Reserve 0-1 for replies that genuinely make a ' +
+                    'reader stumble - re-reading, losing the thread, hunting ' +
+                    'for the answer. For an explanation or detailed ' +
+                    'information, structure weighs as much as sentences: the ' +
+                    'answer first, then the mechanism, then the caveats - a ' +
+                    'reply that builds to its point as a reveal scores low. ' +
+                    'The fault catalog, for calibration: ' +
+                    FAULT_CATALOG.map((f) => `${f.name} - ${f.test}`).join('; '),
                   criteria: RUBRIC_LEVELS,
                 },
               },
