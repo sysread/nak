@@ -48,7 +48,6 @@
     showMessageActions,
   } from '$lib/ui/assistant-body';
   import { coerceSecondThoughts, isDoubt } from '$lib/ui/second-thoughts';
-  import { coerceClarity } from '$lib/ui/clarity';
   import { webCitationToDisplay } from '$lib/ui/citations';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
 
@@ -84,14 +83,6 @@
      * user/tool rows, older rows, and turns the reviewer skipped.
      */
     secondThoughts?: unknown;
-    /**
-     * Raw `messages.clarity` jsonb for this assistant row - the B8
-     * clarity judge's verdict when this reply was rewritten (see
-     * src/lib/ui/clarity.ts). Coerced here; the notice renders only
-     * when it parses. Absent on user/tool rows, older rows, turns
-     * with the setting off, and turns the judge scored fine.
-     */
-    clarity?: unknown;
     /**
      * Fired when the user clicks the second-thoughts refinement button.
      * Passed ONLY for the thread's latest assistant row (the actionable
@@ -191,7 +182,6 @@
     reasoningOpen = $bindable(false),
     citations = null,
     secondThoughts = null,
-    clarity = null,
     onRefine,
     contextWindow = null,
     usage = null,
@@ -239,11 +229,6 @@
   const showSecondThoughts = $derived(
     secondThoughtsVerdict !== null && isDoubt(secondThoughtsVerdict.disposition)
   );
-
-  // The B8 clarity notice: renders on the ORIGINAL row when the clarity
-  // judge rewrote its reply - the notice copy + (collapsibly) the
-  // score, between this message's body and the rewrite message below.
-  const clarityVerdict = $derived(coerceClarity(clarity));
 
   /**
    * Click delegation for `^N^` citation links inside the markdown
@@ -310,14 +295,9 @@
 
 {/if}
 
-<!-- B8 clarity notice: the judge rewrote this reply - the assistant-
-     voiced notice between this message's body and the rewrite message
-     below it. Renders only when the jsonb coerced to a real verdict. -->
-{#if clarityVerdict}
-  <div class="clarity-notice" role="note">
-    <span class="clarity-notice-copy">{clarityVerdict.notice}</span>
-  </div>
-{/if}
+<!-- B8 clarity notice rendered by the CALLER (Chat.svelte) as its OWN
+     card between this message and the rewrite below - an inline coda
+     inside the card was not visible enough. -->
 
 <!-- The action bar renders whenever there is content OR a regenerate
      target - a turn aborted mid-tool-call persists an assistant row
@@ -486,16 +466,6 @@
      orphaned if a future CSS-only theme needs a hook here. */
   .assistant-body {
     display: contents;
-  }
-
-  /* The B8 clarity notice: a quiet assistant-voiced line between the
-     original reply and the rewrite below it. Subtle by design - a
-     soft tone shift, not a warning card. */
-  .clarity-notice {
-    margin: 6px 0 2px;
-    font-size: 0.86em;
-    font-style: italic;
-    color: var(--subtle, var(--text-muted, #888));
   }
 
   /* Active state on the citations toggle mirrors the hover treatment

@@ -2800,6 +2800,18 @@ h1 {
   color: var(--muted);
 }
 
+/* B8 clarity notice: its OWN card between the original reply and the
+   rewrite below it. Reads as a calm system aside (not a warning): a
+   soft tint, a solid hairline, italic copy. Persisted via the
+   original row's clarity jsonb (the read-side render), so unlike the
+   slop-notice card it survives reloads and needs no animation. */
+.msg.assistant.msg-clarity-notice {
+  background: color-mix(in srgb, var(--surface) 88%, var(--text));
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* CRT power-off: collapse vertically to a bright scanline, shrink that
    line horizontally toward the center into a dot, then fade. Pure
    transform + opacity + brightness so it rides the compositor and

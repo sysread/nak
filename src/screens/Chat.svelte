@@ -224,6 +224,7 @@
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
+  import { coerceClarity } from '$lib/ui/clarity';
   import { buildMcpToolboxes } from '$lib/ui/mcp';
   import type { RetryIntent } from '$lib/ui/completion-status';
   import {
@@ -8480,7 +8481,6 @@
                   reasoningChars={reasoningPillsById[block.assistant.id]?.chars ?? null}
                   citations={block.assistant.citations}
                   secondThoughts={block.assistant.second_thoughts}
-                  clarity={block.assistant.clarity}
                   contextWindow={currentProfile.contextWindow}
                   usage={block.assistant.usage}
                   createdAt={block.assistant.created_at}
@@ -8564,7 +8564,6 @@
                   reasoningChars={reasoningPillsById[block.message.id]?.chars ?? null}
                   citations={block.message.citations}
                   secondThoughts={block.message.second_thoughts}
-                  clarity={block.message.clarity}
                   onRefine={block.message.id === latestAssistantId
                     ? () => { void refineFrom(block.message.id); }
                     : undefined}
@@ -8583,6 +8582,17 @@
                   onForkPreviewLeave={clearRegeneratePreview}
                 />
               </div>
+              {@const clarityVerdict = coerceClarity(block.message.clarity)}
+              {#if clarityVerdict}
+                <!-- B8 clarity notice: its OWN card between the original
+                     reply and the rewrite below it (Jeff's QA correction -
+                     an inline coda inside the original's card was not
+                     visible enough). The chip rides the original row's
+                     jsonb; the card is the read-side render. -->
+                <div class="msg assistant msg-clarity-notice" role="note">
+                  {clarityVerdict.notice}
+                </div>
+              {/if}
             {:else}
               {@const isUser = block.message.role === 'user'}
               {@const userRound = isUser
