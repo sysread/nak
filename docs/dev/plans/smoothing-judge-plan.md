@@ -1,6 +1,6 @@
 # Sycophancy / Narrative-Smoothing Judge (B9) - the composite post-message check
 
-Status: PLAN (refinement round 1 complete - 7 lenses; revised. Round 2 pending).
+Status: APPROVED-FOR-BUILD (refinement complete: round 1 = 7 lenses, round 2 = fresh reviewer, consensus).
 
 ## SYNOPSIS
 
@@ -65,8 +65,9 @@ connective describes every rewrite as a clarity rewrite (D9).
   claims, softening failures, comforting rewrites); opener-level
   validation stays the clarity question's job. Without this boundary
   the two judges double-count and the failed set gets noisy.
-- **The custom-prompt-wins contract (recorded since the founding
-  commit, `4f0ca479`)**: user prompts ride after the baseline on the
+- **The custom-prompt-wins contract (recorded since `4f0ca479`,
+  2026-04-21 - the commit that introduced the win-on-voice language,
+  not the repo's first commit)**: user prompts ride after the baseline on the
   wire and "win on voice" (three comment sites in
   `src/lib/chat/system-prompt.ts`). A hard-coded smoothing judge is
   in silent tension with that contract for a warmth-requesting user;
