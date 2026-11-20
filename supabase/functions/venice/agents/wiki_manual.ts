@@ -38,6 +38,7 @@ import {
   type WikiUserProfile,
 } from './_wiki_profile.ts';
 import { WIKI_MANUAL_MODEL } from '../../_shared/agent-models.ts';
+import { CLARITY_BLOCK, claritySettingOn } from '../../_shared/clarity.ts';
 
 // Upper bound on the model's reply. A full-article rewrite echoes the
 // entire body back (not a diff), and the body cap is 16000 chars
@@ -258,7 +259,9 @@ function renderRecordsForPrompt(records: readonly ManualRecord[]): string {
  * paragraph 2" should patch only that.
  */
 export function buildWikiManualPrompt(
-  opts: { userProfile: WikiUserProfile | null } = { userProfile: null },
+  opts: { userProfile: WikiUserProfile | null; clarity?: boolean } = {
+    userProfile: null,
+  },
 ): string {
   const profileBlock = renderUserProfileBlock(opts.userProfile);
   const lines: string[] = [
@@ -268,7 +271,12 @@ export function buildWikiManualPrompt(
   if (profileBlock.length > 0) {
     lines.push('', profileBlock);
   }
-  return lines.join('\n') + '\n' + WIKI_MANUAL_BODY_LINES;
+  return (
+    lines.join('\n') +
+    '\n' +
+    WIKI_MANUAL_BODY_LINES +
+    (opts.clarity ? `\n\n${CLARITY_BLOCK}` : '')
+  );
 }
 
 const WIKI_MANUAL_BODY_LINES = `
@@ -474,7 +482,7 @@ export async function runWikiManualUpdate(
     ].join('\n');
 
     const messages: VeniceWireMessage[] = [
-      { role: 'system', content: buildWikiManualPrompt({ userProfile: profile }) },
+      { role: 'system', content: buildWikiManualPrompt({ userProfile: profile, clarity: await claritySettingOn(adminClient, userId) }) },
       { role: 'user', content: userTurn },
     ];
 

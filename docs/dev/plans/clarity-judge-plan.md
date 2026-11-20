@@ -190,7 +190,7 @@ block does not copy that shape.)
   (`ensureAssistantRow`/`scheduleRowUpdate`/`flushRowUpdate` are
   closures hard-wired to the single `assistantRowId`/`accum` - a
   second row cannot reuse them; the twin takes an explicit row-id
-  + buffer target, keeping the debounce + the reconnecting-client
+  and buffer target, keeping the debounce + the reconnecting-client
   visibility the heartbeat comment documents). The rewrite
   completion is a "switch modes" completion: the same system prompt
   it inherits + a final user turn carrying the original response

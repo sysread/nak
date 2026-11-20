@@ -128,6 +128,7 @@ interface AppState {
    * chat/loop.ts for the exact blurb.
    */
   emphasisMarkdown: boolean;
+  clearWritingEnabled: boolean;
   /**
    * When true, completions that land in a thread other than the one the
    * user is currently viewing fire either an OS notification (document
@@ -264,6 +265,7 @@ export const app = $state<AppState>({
   defaultLogLevel: DEFAULT_LOG_LEVEL,
   systemPrompts: [],
   emphasisMarkdown: false,
+  clearWritingEnabled: false,
   notifyOnComplete: false,
   wikiAutomaticEnabled: true,
   intentsEnabled: false,

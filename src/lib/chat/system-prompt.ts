@@ -24,6 +24,16 @@
  */
 import { TOOLBOXES, alwaysOnToolbox } from '../tools';
 import type { Toolbox } from '../tools';
+import { CLARITY_BLOCK } from '$shared/clarity';
+
+/**
+ * The B8 clarity baseline block, wrapped so the system-prompt module
+ * owns its placement (adjacent to the voice block) while the content
+ * stays single-sourced in the shared module.
+ */
+function clarityBaselineBlock(): string {
+  return CLARITY_BLOCK;
+}
 
 /**
  * Inputs to the baseline system prompt.
@@ -490,19 +500,25 @@ function buildCatalog(mcpToolboxes: readonly Toolbox[] = []): string {
  * messages after the user turn. The baseline this function returns is
  * stable across rounds - nothing in it
  * varies per turn, which is what lets it anchor the prompt-prefix
- * cache. The one per-user variable is `mcpToolboxes` (the connected
- * MCP integrations): it only shifts when the user connects or
- * disconnects an integration from Settings, a rare user-driven event
+ * cache. The two per-user variables are `mcpToolboxes` (the connected
+ * MCP integrations) and `clarityEnabled` (the B8 clarity block): each
+ * only shifts when the user connects/disconnects an integration or
+ * flips the clarity toggle from Settings, rare user-driven events
  * analogous to a deploy picking up a new static toolbox, so the
- * cache-bust it causes is acceptable.
+ * cache-bust they cause is acceptable.
  */
 export function buildSystemPrompt(
-  mcpToolboxes: readonly Toolbox[] = []
+  mcpToolboxes: readonly Toolbox[] = [],
+  clarityEnabled = false
 ): string {
   const sections = [
     IDENTITY_BLOCK,
     VOICE_BLOCK,
     UNCERTAINTY_BLOCK,
+    // The B8 clarity baseline: the positive-phrased writing standard,
+    // present only when the user's clarity toggle is on (the same
+    // gated-baseline class as mcpToolboxes - see the cache note above).
+    ...(clarityEnabled ? [clarityBaselineBlock()] : []),
     RECALL_BLOCK,
     SUBCONSCIOUS_BLOCK,
     WIKI_BLOCK,

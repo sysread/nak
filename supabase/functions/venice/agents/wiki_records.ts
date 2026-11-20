@@ -54,6 +54,7 @@ import {
 } from './_accumulator.ts';
 import { MAX_WIKI_RECORD_CONTENT_CHARS } from '../../_shared/wiki-limits.ts';
 import { WIKI_RECORDS_MODEL } from '../../_shared/agent-models.ts';
+import { CLARITY_BLOCK, claritySettingOn } from '../../_shared/clarity.ts';
 
 // Balanced model with medium reasoning per the feature spec: parsing
 // whether a turn describes a discrete loggable event (vs general Q&A)
@@ -426,9 +427,12 @@ async function runExtractionOnThread(
     // Kept separate from the transcript so the distill path can swap
     // the conversation for notes while sending the same instruction.
     const attachmentsNote = await loadThreadAttachmentsNote(adminClient, threadId);
-    finalTurn = attachmentsNote
-      ? `${attachmentsNote}\n\n${WIKI_RECORDS_PROMPT}`
+    const recordsPrompt = (await claritySettingOn(adminClient, userId))
+      ? `${WIKI_RECORDS_PROMPT}\n\n${CLARITY_BLOCK}`
       : WIKI_RECORDS_PROMPT;
+    finalTurn = attachmentsNote
+      ? `${attachmentsNote}\n\n${recordsPrompt}`
+      : recordsPrompt;
   } catch (err) {
     return { kind: 'error', error: err instanceof Error ? err.message : String(err) };
   }

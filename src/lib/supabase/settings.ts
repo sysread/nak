@@ -219,6 +219,12 @@ export async function updateSettings(
       toSet.emphasisMarkdown = patch.emphasisMarkdown;
     }
   }
+  if ('clearWritingEnabled' in patch) {
+    if (patch.clearWritingEnabled === undefined) toRemove.push('clearWritingEnabled');
+    else if (typeof patch.clearWritingEnabled === 'boolean') {
+      toSet.clearWritingEnabled = patch.clearWritingEnabled;
+    }
+  }
   if ('notifyOnComplete' in patch) {
     if (patch.notifyOnComplete === undefined) toRemove.push('notifyOnComplete');
     else if (typeof patch.notifyOnComplete === 'boolean') {

@@ -175,7 +175,18 @@ typed), the chat call runs only when the verdict says it is needed.
 - **B7 - Generated-image QA (speculative).** The `images` input
   (up to 4) would let a noul check "does this generated image match
   the request" before the attach step. Adds latency to image
-  generation; park until a real complaint exists.
+  generation; park until a real complaint exists. (2026-11-20:
+  still parked - the image feature's first real user arrived; the
+  complaint, if any, is the trigger.)
+- **B8 - Clarity judge + auto-rewrite.** IMPLEMENTED on branch
+  clarity-judge - see `docs/dev/plans/clarity-judge-plan.md`
+  (a positive clarity block in the chat + wiki prompts, a
+  two-question judge - primarily-text noul + clarity score - after
+  the terminal round, and an automatic rewrite posted as a second
+  message below the original; settings-gated, off by default).
+  NOT from the original brainstorm - Jeff's own proposal
+  (2026-11-20), the first entry whose justification is a standing
+  standard rather than an existing failure.
 
 **Not fits:** auto-title, summary, digest, samskara formation
 (generation); intuition perception (needs the 1M window; the 32k cap

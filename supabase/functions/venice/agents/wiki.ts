@@ -88,6 +88,7 @@ import {
   MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
 } from '../../_shared/wiki-limits.ts';
 import { WIKI_MODEL, CONTENT_FILTER_FALLBACK_MODEL } from '../../_shared/agent-models.ts';
+import { CLARITY_BLOCK, claritySettingOn } from '../../_shared/clarity.ts';
 
 /**
  * Sentinel substring Venice emits when its content classifier rejects
@@ -454,7 +455,9 @@ const RECORD_FILE_ATTACH_WIRE_SCHEMA: AgentTool['wire'] = {
 // ---------------------------------------------------------------------------
 
 export function buildWikiAutonomousPrompt(
-  opts: { userProfile: WikiUserProfile | null } = { userProfile: null },
+  opts: { userProfile: WikiUserProfile | null; clarity?: boolean } = {
+    userProfile: null,
+  },
 ): string {
   const profileBlock = renderUserProfileBlock(opts.userProfile);
   const lines: string[] = [
@@ -499,7 +502,12 @@ export function buildWikiAutonomousPrompt(
   if (profileBlock.length > 0) {
     lines.push('', profileBlock);
   }
-  return lines.join('\n') + '\n' + WIKI_AUTONOMOUS_BODY_LINES;
+  return (
+    lines.join('\n') +
+    '\n' +
+    WIKI_AUTONOMOUS_BODY_LINES +
+    (opts.clarity ? `\n\n${CLARITY_BLOCK}` : '')
+  );
 }
 
 const WIKI_AUTONOMOUS_BODY_LINES = `
@@ -1094,7 +1102,10 @@ async function runWikiAgentOnThread(
     // native shape and reads this as "now do this different task."
     // Kept separate from the transcript so the distill path can swap
     // the conversation for notes while sending the same instruction.
-    const prompt = buildWikiAutonomousPrompt({ userProfile: profile });
+    const prompt = buildWikiAutonomousPrompt({
+      userProfile: profile,
+      clarity: await claritySettingOn(adminClient, userId),
+    });
     finalTurn = attachmentsNote ? `${attachmentsNote}\n\n${prompt}` : prompt;
   } catch (err) {
     // History fetch / prompt build failed before any Venice call. No

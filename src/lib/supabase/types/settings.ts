@@ -110,6 +110,16 @@ export interface UserSettings {
    * bolding.
    */
   emphasisMarkdown?: boolean;
+
+  /**
+   * Opt-in: the B8 clarity stage. When on, the chat turn's terminal
+   * reply is scored for writing clarity by a decision model, and a
+   * reply scoring poorly gets an automatic rewrite posted as a second
+   * message (the original stays). Also adds a positive clarity block
+   * to the chat + wiki system prompts. Off by default - the rewrite
+   * quality must earn the toggle.
+   */
+  clearWritingEnabled?: boolean;
   /**
    * Opt-in: when a chat completion finishes in a thread the user isn't
    * currently viewing, surface it via an OS notification (if the tab is
@@ -344,6 +354,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (isLogLevel(r.defaultLogLevel)) out.defaultLogLevel = r.defaultLogLevel;
   if (typeof r.emphasisMarkdown === 'boolean') {
     out.emphasisMarkdown = r.emphasisMarkdown;
+  }
+  if (typeof r.clearWritingEnabled === 'boolean') {
+    out.clearWritingEnabled = r.clearWritingEnabled;
   }
   if (typeof r.notifyOnComplete === 'boolean') {
     out.notifyOnComplete = r.notifyOnComplete;

@@ -20,6 +20,17 @@ const gatedPrompt = (mcp: Parameters<typeof buildSystemPrompt>[0] = []) =>
   buildSystemPrompt(mcp);
 
 describe('buildSystemPrompt', () => {
+  it('carries the clarity block only when the toggle is on', () => {
+    // The B8 baseline: positive-phrased writing standard, gated on the
+    // profile's clearWritingEnabled (the buildSystemPrompt param) -
+    // OFF means the block's absence is byte-exact with pre-B8.
+    const off = gatedPrompt();
+    const on = buildSystemPrompt([], true);
+    expect(off).not.toContain('busy reader');
+    expect(on).toContain('first sentence carries the answer');
+    expect(on).toContain('One idea per sentence');
+  });
+
   it('primes the model to write an activity sentence per call', () => {
     // The UI surfaces the sentence above the tool name; the prompt is
     // what makes the model supply a useful one. Grep-style assertions

@@ -92,6 +92,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     disableThinking,
     verbosity,
     emphasisMarkdown,
+    clearWritingEnabled,
     displayTimezone,
     lastAssistantTimestamp,
     userMessageId,
@@ -220,7 +221,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       // bias-free baseline and the orchestrator renders + appends the
       // block before the first round.
       role: 'system',
-      content: buildSystemPrompt(mcpToolboxes),
+      content: buildSystemPrompt(mcpToolboxes, clearWritingEnabled),
     },
     ...userSystem,
     ...conversation,

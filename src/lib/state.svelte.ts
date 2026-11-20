@@ -26,6 +26,7 @@ export {
   persistEditImageModel,
   persistDefaultLogLevel,
   persistEmphasisMarkdown,
+  persistClearWritingEnabled,
   persistNotifyOnComplete,
   persistUserName,
   persistUserLocation,

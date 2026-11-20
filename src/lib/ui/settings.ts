@@ -67,6 +67,10 @@ const TOGGLE_NOTICES = {
     on: 'Emphasis markdown enabled.',
     off: 'Emphasis markdown disabled.',
   },
+  clearWriting: {
+    on: 'Clear writing enabled. Replies that score poorly for clarity get a plainer rewrite below the original.',
+    off: 'Clear writing disabled. Replies stop being scored; nothing is rewritten.',
+  },
   wikiAutomatic: {
     on: 'Automatic wiki enabled.',
     off: 'Automatic wiki disabled. Manual edits and the per-article "ask agent to update" button still work.',

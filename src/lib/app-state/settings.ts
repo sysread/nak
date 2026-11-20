@@ -85,6 +85,10 @@ function setEmphasisMarkdown(enabled: boolean): void {
   app.emphasisMarkdown = enabled;
 }
 
+function setClearWritingEnabled(enabled: boolean): void {
+  app.clearWritingEnabled = enabled;
+}
+
 function setNotifyOnComplete(enabled: boolean): void {
   app.notifyOnComplete = enabled;
 }
@@ -305,6 +309,18 @@ export async function persistEmphasisMarkdown(enabled: boolean): Promise<void> {
   }
 }
 
+export async function persistClearWritingEnabled(enabled: boolean): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.clearWritingEnabled;
+  setClearWritingEnabled(enabled);
+  try {
+    await app.supabase.updateSettings({ clearWritingEnabled: enabled });
+  } catch (err) {
+    setClearWritingEnabled(prev);
+    throw err;
+  }
+}
+
 export async function persistNotifyOnComplete(enabled: boolean): Promise<void> {
   if (!app.supabase) throw new Error(NOT_CONNECTED);
   const prev = app.notifyOnComplete;
@@ -505,6 +521,7 @@ export function applyServerSettings(s: UserSettings): void {
   // an absent key explicitly false rather than passing `undefined`
   // through to the setter.
   setEmphasisMarkdown(s.emphasisMarkdown ?? false);
+  setClearWritingEnabled(s.clearWritingEnabled ?? false);
   setNotifyOnComplete(s.notifyOnComplete ?? false);
   // Wiki opt-in defaults to true for new accounts. Explicit false in
   // the blob disables; absent key falls through to the seed (also

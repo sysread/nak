@@ -70,6 +70,7 @@
     persistEditImageModel,
     persistDefaultLogLevel,
     persistEmphasisMarkdown,
+    persistClearWritingEnabled,
     persistNotifyOnComplete,
     persistWikiAutomaticEnabled,
     persistIntentsEnabled,
@@ -252,6 +253,10 @@
   // to use light Markdown emphasis as scan-points. Persisted on
   // `profiles.settings.emphasisMarkdown`.
   let emphasisMarkdown = $state<boolean>(app.emphasisMarkdown);
+
+  // Opt-in clarity stage (off by default). Persisted on
+  // `profiles.settings.clearWritingEnabled`.
+  let clearWritingEnabled = $state<boolean>(app.clearWritingEnabled);
   // Opt-in intents toggle (off by default). Persisted on
   // `profiles.settings.intentsEnabled`; the minting/evaluation sweeps
   // and applyIntentPriming all read it server-side.
@@ -1431,6 +1436,20 @@
     }
   }
 
+  async function onToggleClearWriting(next: boolean): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    const prev = clearWritingEnabled;
+    clearWritingEnabled = next;
+    try {
+      await persistClearWritingEnabled(next);
+      modelInfo = toggleNotice('clearWriting', next);
+    } catch (err) {
+      clearWritingEnabled = prev;
+      modelError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   /**
    * Flip the completion-notification toggle. Enabling requires the
    * browser's Notification permission - we ask for it inline the first
@@ -1943,6 +1962,24 @@
           <span>Ask the model to highlight save-points</span>
         </label>
 
+        <h3 class="pane-section">Clear writing</h3>
+        <p class="subtle">
+          When on, Nak scores each reply's writing clarity with a
+          decision model and, when a reply scores poorly, posts a
+          clearer rewrite below the original - the original stays.
+          Also asks the model (chat and wiki writers) to write to the
+          same standard from the start. Off by default.
+        </p>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            name="clear-writing"
+            checked={clearWritingEnabled}
+            onchange={(e) =>
+              onToggleClearWriting((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span>Rewrite unclear replies</span>
+        </label>
         <h3 class="pane-section">Working intentions</h3>
         <p class="subtle">
           When on, Nak forms standing intentions about how to help you

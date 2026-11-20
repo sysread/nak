@@ -204,6 +204,12 @@ export interface ChatLoopOptions {
    */
   emphasisMarkdown?: boolean;
   /**
+   * The B8 clarity toggle: when on, the baseline system prompt carries
+   * the positive clarity block (and the edge function's clarity stage
+   * scores + may rewrite the reply - read edge-side per turn).
+   */
+  clearWritingEnabled?: boolean;
+  /**
    * Optional free-form display name + location the user entered in
    * Settings -> AI -> About you. When either is non-empty, the
    * per-turn metadata system message opens with a short identity

@@ -30,6 +30,12 @@ import {
   buildRefinementThink,
   coerceSecondThoughts,
 } from '../ui/second-thoughts';
+import { coerceClarity } from '../ui/clarity';
+
+/** The replay connective for a clarity-rewritten reply (see
+ *  toVeniceMessage's clarity block). */
+const CLARITY_CONNECTIVE_THINK =
+  'The reply above was reworded for clarity; the next answer is the clearer restatement.';
 
 // --- appended verbatim from chat/loop.ts ---
 /** Placeholder string threads ship with from schema.sql + draft creation. */
@@ -734,6 +740,14 @@ export function toVeniceMessage(
     const verdict = coerceSecondThoughts(m.second_thoughts);
     if (verdict?.acted && typeof out.content === 'string') {
       out.content = `${out.content}\n\n${buildRefinementThink(verdict.note)}`;
+    }
+    // B8 clarity connective: a reply the clarity judge rewrote gets a
+    // <think> line so the model reads the two consecutive answers as a
+    // pair (the recorded consecutive-answers hazard). The connective
+    // rides replay only - the rows stay untouched.
+    const clarity = coerceClarity(m.clarity);
+    if (clarity && typeof out.content === 'string') {
+      out.content = `${out.content}\n\n<think>${CLARITY_CONNECTIVE_THINK}</think>`;
     }
   }
   return out;

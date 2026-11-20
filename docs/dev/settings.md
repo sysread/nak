@@ -45,7 +45,11 @@ landing tab move together.
   markdown" opt-in (a bionic-style scan
   aid - when on, chat-loop folds a short formatting blurb into
   the per-turn system-prompt appendix so the model bolds terms
-  and italicises phrases), reply notifications (an opt-in
+  and italicises phrases), the "Clear writing" opt-in (B8: a
+  decision-model clarity judge per reply plus an automatic
+  rewrite below any reply that scores poorly; also adds a
+  positive clarity block to the chat + wiki prompts - see
+  [clarity](clarity.md)), reply notifications (an opt-in
   completion notification persisted on
   `profiles.settings.notifyOnComplete`; enabling prompts for the
   browser's Notification permission), the **About you** profile

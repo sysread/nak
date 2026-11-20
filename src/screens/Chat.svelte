@@ -1813,16 +1813,18 @@
     const gainsAttachments = incomingHasAttachments && !existingHasAttachments;
     const gainsSecondThoughts =
       msg.second_thoughts != null && existing.second_thoughts == null;
+    const gainsClarity = msg.clarity != null && existing.clarity == null;
     // Draft promotion: the incoming row has status=null where the
     // existing row had status='draft', and the content changed.
     const draftPromoted =
       existing.status === 'draft' && msg.status == null;
-    if (!gainsAttachments && !gainsSecondThoughts && !draftPromoted) return;
+    if (!gainsAttachments && !gainsSecondThoughts && !gainsClarity && !draftPromoted) return;
     const updated = [...messages];
     updated[existingIdx] = {
       ...existing,
       ...(gainsAttachments ? { attachments: msg.attachments } : {}),
       ...(gainsSecondThoughts ? { second_thoughts: msg.second_thoughts } : {}),
+      ...(gainsClarity ? { clarity: msg.clarity } : {}),
       ...(draftPromoted ? { status: msg.status, content: msg.content } : {}),
     };
     messages = updated;
@@ -1854,8 +1856,10 @@
       verdictBackfillTimers.delete(timer);
       if (!app.supabase || activeThreadId !== threadId) return;
       // Already delivered by the realtime echo -> nothing to fetch.
+      // Either field counts: the second-thoughts verdict AND the B8
+      // clarity chip ride the same UPDATE-echo + backfill path.
       const local = messages.find((m) => m.id === messageId);
-      if (local?.second_thoughts != null) return;
+      if (local?.second_thoughts != null || local?.clarity != null) return;
       void app.supabase
         .getMessage(messageId)
         .then((fresh) => {
@@ -4106,6 +4110,7 @@
         sendDisableThinking,
         sendVerbosity,
         sendEmphasis: app.emphasisMarkdown,
+        sendClearWriting: app.clearWritingEnabled,
         sendUserName: app.userName,
         sendUserLocation: app.userLocation,
         originalText: text,
@@ -4275,6 +4280,7 @@
         sendDisableThinking,
         sendVerbosity,
         sendEmphasis: app.emphasisMarkdown,
+        sendClearWriting: app.clearWritingEnabled,
         sendUserName: app.userName,
         sendUserLocation: app.userLocation,
         originalText: anchor.content,
@@ -4331,6 +4337,7 @@
      * on their own send paths.
      */
     sendEmphasis: boolean;
+    sendClearWriting: boolean;
     /**
      * Snapshot of the user's name + location from Settings, taken at
      * send time. Same rationale as sendEmphasis - if the user opens
@@ -4787,6 +4794,7 @@
           disableThinking: ctx.sendDisableThinking,
           verbosity: ctx.sendVerbosity,
           emphasisMarkdown: ctx.sendEmphasis,
+          clearWritingEnabled: ctx.sendClearWriting,
           userName: ctx.sendUserName,
           userLocation: ctx.sendUserLocation,
           displayTimezone: app.displayTimezone || null,
@@ -5799,6 +5807,7 @@
       sendDisableThinking,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
+      sendClearWriting: app.clearWritingEnabled,
       sendUserName: app.userName,
       sendUserLocation: app.userLocation,
       originalText,
@@ -6149,6 +6158,7 @@
       sendDisableThinking,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
+      sendClearWriting: app.clearWritingEnabled,
       sendUserName: app.userName,
       sendUserLocation: app.userLocation,
       originalText: userMessage.content,
@@ -6240,6 +6250,7 @@
       sendDisableThinking,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
+      sendClearWriting: app.clearWritingEnabled,
       sendUserName: app.userName,
       sendUserLocation: app.userLocation,
       originalText: userMessage.content,
@@ -6991,6 +7002,7 @@
         sendDisableThinking,
         sendVerbosity,
         sendEmphasis: app.emphasisMarkdown,
+        sendClearWriting: app.clearWritingEnabled,
         sendUserName: app.userName,
         sendUserLocation: app.userLocation,
         // Not used inside runExchange after the user-message write,
@@ -8468,6 +8480,7 @@
                   reasoningChars={reasoningPillsById[block.assistant.id]?.chars ?? null}
                   citations={block.assistant.citations}
                   secondThoughts={block.assistant.second_thoughts}
+                  clarity={block.assistant.clarity}
                   contextWindow={currentProfile.contextWindow}
                   usage={block.assistant.usage}
                   createdAt={block.assistant.created_at}
@@ -8551,6 +8564,7 @@
                   reasoningChars={reasoningPillsById[block.message.id]?.chars ?? null}
                   citations={block.message.citations}
                   secondThoughts={block.message.second_thoughts}
+                  clarity={block.message.clarity}
                   onRefine={block.message.id === latestAssistantId
                     ? () => { void refineFrom(block.message.id); }
                     : undefined}

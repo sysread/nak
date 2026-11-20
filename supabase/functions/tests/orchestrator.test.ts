@@ -749,3 +749,188 @@ Deno.test('http error with status lands kind + honest retryable in last_error', 
   assertEquals(payload.retryable, false);
   assertStringIncludes(payload.message, 'HTTP 400');
 });
+
+// --- B8 clarity stage -------------------------------------------------------
+
+// The stage's decision call rides global fetch (veniceDecision has no
+// opts.complete seam); the chat rounds (including the rewrite round)
+// ride opts.complete. The stub routes /decisions only - the chat
+// rounds flow through the scripted `complete`.
+
+function stubDecisionFetch(
+  response: unknown,
+  calls: Array<{ url: string; body: Record<string, unknown> }> = [],
+): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = ((url: string | URL | Request, init?: unknown): Promise<Response> => {
+    const u = String(url);
+    if (u.endsWith('/decisions')) {
+      calls.push({ url: u, body: JSON.parse(String((init as { body?: string })?.body ?? '{}')) });
+      return Promise.resolve(
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    }
+    return original(url as Parameters<typeof fetch>[0], init as Parameters<typeof fetch>[1]);
+  }) as typeof fetch;
+  return () => {
+    globalThis.fetch = original;
+  };
+}
+
+const PROFILE_ON = {
+  data: { id: 'profile-qa', settings: { clearWritingEnabled: true } },
+  error: null,
+};
+const PROFILE_OFF = {
+  data: { id: 'profile-qa', settings: { clearWritingEnabled: false } },
+  error: null,
+};
+const SLOPPY_REPLY = 'We utilized a paradigm so that leverage of the patterns occurs.';
+const CLEAN_REPLY = 'We used a pattern to do the thing.';
+const VERDICT_OK = {
+  model: 'clef-api',
+  answers: {
+    'primarily-text': { type: 'noul', noul: 0.95 },
+    clarity: { type: 'score', score: 0.8, legend: {}, probabilities: {}, confidence: 0.8 },
+  },
+  usage: { input_tokens: 10, output_tokens: 0 },
+};
+
+Deno.test('clarity OFF: the stage never runs - one commit, no decision call', async () => {
+  const decisionCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const restore = stubDecisionFetch(VERDICT_OK, decisionCalls);
+  const env = makeEnv({
+    rows: { profiles: [PROFILE_OFF] },
+    rounds: [
+      async function* () {
+        yield text(SLOPPY_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+    ],
+  });
+  try {
+    await getStreamingResponse(env.opts);
+  } finally {
+    restore();
+  }
+  assertEquals(commitRpcs(env).length, 1);
+  assertEquals(decisionCalls.length, 0);
+  assertEquals(endEvent(env).persistedAssistantId, 'row-1');
+});
+
+Deno.test('clarity ON + clean score: the judge runs, no rewrite', async () => {
+  const decisionCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const restore = stubDecisionFetch(
+    {
+      model: 'clef-api',
+      answers: {
+        'primarily-text': { type: 'noul', noul: 0.95 },
+        clarity: { type: 'score', score: 2.9, legend: {}, probabilities: {}, confidence: 0.8 },
+      },
+      usage: { input_tokens: 10, output_tokens: 0 },
+    },
+    decisionCalls,
+  );
+  const env = makeEnv({
+    rows: { profiles: [PROFILE_ON, PROFILE_ON] },
+    rounds: [
+      async function* () {
+        yield text(CLEAN_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+    ],
+  });
+  try {
+    await getStreamingResponse(env.opts);
+  } finally {
+    restore();
+  }
+  assertEquals(decisionCalls.length, 1);
+  assertEquals(commitRpcs(env).length, 1);
+  assertEquals(endEvent(env).persistedAssistantId, 'row-1');
+});
+
+Deno.test('clarity ON + sloppy score: the rewrite streams, commits, and END names it', async () => {
+  const decisionCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const restore = stubDecisionFetch(VERDICT_OK, decisionCalls);
+  const env = makeEnv({
+    rows: { profiles: [PROFILE_ON, PROFILE_ON] },
+    rounds: [
+      async function* () {
+        yield text(SLOPPY_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+      async function* () {
+        yield text(CLEAN_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+    ],
+  });
+  try {
+    await getStreamingResponse(env.opts);
+  } finally {
+    restore();
+  }
+  // Two commits: the original, then the rewrite.
+  const commits = commitRpcs(env);
+  assertEquals(commits.length, 2);
+  assertEquals(commits[0].args.p_content, SLOPPY_REPLY);
+  assertEquals(commits[1].args.p_content, CLEAN_REPLY);
+  assertEquals(commits[1].args.p_replace_user_message_content, null);
+  assertEquals(commits[1].args.p_superseded_ids, null);
+  // END names the rewrite; the round_committed reset fired for the original.
+  assertEquals(endEvent(env).persistedAssistantId, 'row-2');
+  const resets = env.published.filter((e) => e.type === 'assistant_round_committed');
+  assertEquals(resets.length, 1);
+  assertEquals((resets[0] as { id: string }).id, 'row-1');
+  // The chip landed on the original (the clarity update) and nothing deleted.
+  const updates = callsOf(env, 'messages', 'update')
+    .map((a) => a[0] as Record<string, unknown>)
+    .filter((u) => u.clarity !== undefined);
+  assertEquals(updates.length, 1);
+  assertEquals((updates[0].clarity as { rewrite_id: string }).rewrite_id, 'row-2');
+  assertEquals(callsOf(env, 'messages', 'delete').length, 0);
+});
+
+Deno.test('clarity rewrite failure: the row is deleted, the chip cleared, END names the original', async () => {
+  const restore = stubDecisionFetch(VERDICT_OK);
+  const env = makeEnv({
+    rows: { profiles: [PROFILE_ON, PROFILE_ON] },
+    rounds: [
+      async function* () {
+        yield text(SLOPPY_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+      // The rewrite round errors (the model's stream dies mid-rewrite).
+      async function* () {
+        yield text('partial rewrite');
+        yield { type: 'error', message: 'stream died', kind: 'network', retryable: false } as StreamSignal;
+      },
+    ],
+  });
+  try {
+    await getStreamingResponse(env.opts);
+  } finally {
+    restore();
+  }
+  // One commit only: the original. The rewrite row deleted (a delete
+  // query's eq('id', ...) names it).
+  assertEquals(commitRpcs(env).length, 1);
+  assertEquals(endEvent(env).persistedAssistantId, 'row-1');
+  const deleteQuery = env.queries.find(
+    (q) => q.table === 'messages' && q.calls.some((c) => c.method === 'delete'),
+  );
+  assert(deleteQuery, 'the rewrite-row delete never ran');
+  const delEq = deleteQuery.calls.find((c) => c.method === 'eq');
+  assertEquals((delEq?.args as unknown[])?.[1], 'row-2');
+  // The chip cleared (an update writing clarity: null).
+  const chipClears = callsOf(env, 'messages', 'update')
+    .map((a) => a[0] as Record<string, unknown>)
+    .filter((u) => u.clarity === null);
+  assertEquals(chipClears.length, 1);
+  // The turn still completes.
+  assertEquals(endEvent(env).terminalKind, 'completed');
+});

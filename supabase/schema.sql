@@ -1129,6 +1129,14 @@ $cron$;
 alter table public.messages
   add column if not exists second_thoughts jsonb;
 
+-- The B8 clarity verdict on an assistant row whose reply the clarity
+-- judge rewrote: {v:1, score, notice, rewrite_id}. Written by the
+-- streaming stage before the rewrite streams; the browser renders the
+-- notice between the two messages from this field (UPDATE-echo
+-- delivered, reload-stable). NULL = never flagged.
+alter table public.messages
+  add column if not exists clarity jsonb;
+
 -- Mark a second-thoughts verdict as acted-on: the user clicked the
 -- refinement button ("Let me temper that", etc.), which promotes the
 -- doubt from a display-only column to a model-visible <think> connective

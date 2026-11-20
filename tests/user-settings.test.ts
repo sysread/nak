@@ -191,6 +191,16 @@ describe('coerceSettings', () => {
     });
   });
 
+  it('passes through a boolean clearWritingEnabled and drops the rest', () => {
+    expect(coerceSettings({ clearWritingEnabled: true })).toEqual({
+      clearWritingEnabled: true,
+    });
+    expect(coerceSettings({ clearWritingEnabled: false })).toEqual({
+      clearWritingEnabled: false,
+    });
+    expect(coerceSettings({ clearWritingEnabled: 'yes' })).toEqual({});
+  });
+
   it('drops a non-boolean emphasisMarkdown value', () => {
     // Truthy strings must not coerce to true - the setting is a
     // hard boolean, and the coercer's job is to reject anything else

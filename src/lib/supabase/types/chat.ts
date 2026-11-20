@@ -417,6 +417,17 @@ export interface Message {
    * disabled or errored.
    */
   second_thoughts?: unknown;
+
+  /**
+   * The B8 clarity verdict on an assistant row whose reply the clarity
+   * judge rewrote: {v:1, score, notice, rewrite_id}. Written by the
+   * streaming stage before the rewrite streams; the UI renders the
+   * notice between the two messages from this field. Null on
+   * non-assistant rows, on rows written before the column existed, on
+   * turns where the clarity setting was off, and on turns where the
+   * judge scored the reply fine.
+   */
+  clarity?: unknown;
 }
 
 /**

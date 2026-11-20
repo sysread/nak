@@ -93,6 +93,22 @@ import { attachGeneratedImages } from './tools/_attachment_io.ts';
 import { curateOnTurnTail } from './agents/curation.ts';
 import { samskaraOnTurnTail } from './agents/samskara.ts';
 import { secondThoughtsOnTurnTail } from './agents/second_thoughts.ts';
+import {
+  CLARITY_NOTICE,
+  FAULT_CATALOG,
+  RUBRIC_LEVELS,
+  describeFindings,
+  mechanicalScan,
+  REWRITE_SCORE_THRESHOLD,
+  buildClarityRewriteAsk,
+} from '../_shared/clarity.ts';
+import { veniceDecision } from '../_shared/venice.ts';
+import { CLARITY_JUDGE_MODEL } from '../_shared/agent-models.ts';
+import {
+  answersOf,
+  DECISION_CALL_TIMEOUT_MS,
+  noulOf,
+} from './agents/_decision_state.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 import { splitLeakedThink } from './think-leak.ts';
 import { runServerPriming, type PrimingInputs } from './priming.ts';
@@ -148,6 +164,15 @@ const ROW_UPDATE_MS = 500;
 // 400s; we trip our own abort ~20s before that so we have time to
 // flush the publisher, persist 'error' status, and emit END.
 const WALL_DEADLINE_MS = 380_000;
+
+// B8 clarity stage guards. The stage runs in the finally, AFTER the
+// wall timer clears - the runtime kill is still absolute, so the
+// stage skips when the turn has burned its budget down to this
+// reserve. The rewrite completion is capped on its own signal (a
+// stalled rewrite must not hang the turn; the heartbeat is still
+// alive during the stage, so a hang reads as live-but-silent).
+const CLARITY_STAGE_MIN_BUDGET_MS = 45_000;
+const REWRITE_TIMEOUT_MS = 30_000;
 
 // Liveness heartbeat cadence. Every readers' staleness ceiling is 60s
 // (STALE_HEARTBEAT_MS in stream-probe.ts, its browser twin in
@@ -434,6 +459,11 @@ export async function getStreamingResponse(
     usage: null as TokenUsage | null,
     citations: [] as VeniceCitation[],
   };
+
+  // The turn's start, for the clarity stage's wall-budget check (the
+  // stage runs after the wall timer clears; the runtime kill is
+  // absolute).
+  const turnStartedAt = Date.now();
 
   // Citations harvested from successful tool results across every
   // round of the turn. web_search's `{answer, citations}` result is
@@ -1487,6 +1517,258 @@ export async function getStreamingResponse(
             citations: finalCitations,
           },
         );
+      }
+    }
+
+    // --- B8 clarity stage ------------------------------------------------
+    // The judge + optional rewrite. Runs ONLY here: after the terminal
+    // commit above (which committed the original exactly as every turn
+    // does - this stage is the ONLY writer of the rewrite row) and
+    // before the empty-row sweep (whose keepId must name the FINAL
+    // terminal row). Gated on the per-user clearWritingEnabled setting
+    // (OFF default), a completed terminal, a non-empty response, and
+    // the wall reserve. Fail-open at every layer: any judge or rewrite
+    // failure deletes the rewrite row, clears the chip, reverts the
+    // ids, and leaves the original as the committed terminal row.
+    if (
+      terminalKind === 'completed' &&
+      assistantRowId !== null &&
+      settled.content.trim().length > 0 &&
+      Date.now() - turnStartedAt <= WALL_DEADLINE_MS - CLARITY_STAGE_MIN_BUDGET_MS
+    ) {
+      let clarityOn = false;
+      try {
+        const { data: profRow } = await opts.adminClient
+          .from('profiles')
+          .select('settings')
+          .eq('user_id', opts.userId)
+          .maybeSingle();
+        clarityOn =
+          (profRow as { settings?: { clearWritingEnabled?: boolean } } | null)?.settings
+            ?.clearWritingEnabled === true;
+      } catch {
+        clarityOn = false;
+      }
+      if (clarityOn) {
+        const originalId = assistantRowId;
+        let rewriteRowId: string | null = null;
+        let chipWritten = false;
+        const rewriteAccum = { content: '', usage: null as TokenUsage | null };
+        let rewriteTimer: ReturnType<typeof setTimeout> | null = null;
+        let rewriteLastContent = '';
+        const scheduleRewriteUpdate = (): void => {
+          if (rewriteTimer !== null) return;
+          rewriteTimer = setTimeout(() => {
+            rewriteTimer = null;
+            void flushRewriteUpdate();
+          }, ROW_UPDATE_MS);
+        };
+        const flushRewriteUpdate = async (): Promise<void> => {
+          if (rewriteRowId === null) return;
+          if (rewriteAccum.content === rewriteLastContent) return;
+          const snapshot = rewriteAccum.content;
+          const { error } = await opts.adminClient
+            .from('messages')
+            .update({ content: snapshot })
+            .eq('id', rewriteRowId);
+          if (!error) rewriteLastContent = snapshot;
+        };
+        try {
+          const findings = mechanicalScan(settled.content);
+          const lastUser = [...history].reverse().find((m) => m.role === 'user');
+          const decisionRes = await veniceDecision({
+            apiKey: opts.apiKey,
+            body: {
+              model: CLARITY_JUDGE_MODEL,
+              state: {
+                question:
+                  typeof lastUser?.content === 'string'
+                    ? lastUser.content.slice(0, 4000)
+                    : '',
+                response: settled.content.slice(0, 30_000),
+              },
+              questions: {
+                'primarily-text': {
+                  type: 'noul',
+                  instructions:
+                    'Is the RESPONSE primarily written prose, rather than code, ' +
+                    'structured output (tables, data lists, JSON), or ASCII art? ' +
+                    'Prose around code still counts as prose. Answer yes only ' +
+                    'when the response is mainly written prose.',
+                  criteria: {
+                    true: 'The response is mainly written prose.',
+                    false: 'The response is mainly code or structured output.',
+                  },
+                },
+                clarity: {
+                  type: 'score',
+                  instructions:
+                    'Rate the RESPONSE (the question is context for what counts ' +
+                    "as the answer) against this fault catalog: " +
+                    FAULT_CATALOG.map((f) => `${f.name} - ${f.test}`).join('; ') +
+                    '. Score the whole response.',
+                  criteria: RUBRIC_LEVELS,
+                },
+              },
+            },
+            signal: AbortSignal.timeout(DECISION_CALL_TIMEOUT_MS),
+          });
+          const answers = answersOf(decisionRes);
+          const textP = answers ? noulOf(answers, 'primarily-text') : null;
+          const clarityAnswer = answers
+            ? (answers.clarity as { score?: unknown } | undefined)
+            : undefined;
+          const score =
+            typeof clarityAnswer?.score === 'number' && Number.isFinite(clarityAnswer.score)
+              ? clarityAnswer.score
+              : null;
+          log.debug(
+            `${runId} clarity: text=${textP?.toFixed(2) ?? 'null'} score=${score?.toFixed(2) ?? 'null'} mechanicalFlags=${findings.length}`,
+          );
+          if (
+            answers !== null &&
+            textP !== null &&
+            score !== null &&
+            textP >= 0.5 &&
+            score < REWRITE_SCORE_THRESHOLD
+          ) {
+            // (b) the rewrite row, then the chip (it names the row), then the
+            // stream. The original stays untouched - the rewrite is a NEW
+            // message below it.
+            const { data: rr, error: rrErr } = await opts.adminClient
+              .from('messages')
+              .insert({
+                thread_id: opts.threadId,
+                role: 'assistant',
+                content: '',
+                status: 'streaming',
+                model: opts.bodyTemplate.model ?? null,
+              })
+              .select('id')
+              .single();
+            if (rrErr || !rr) {
+              throw new Error(`rewrite row insert failed: ${rrErr?.message ?? 'no row'}`);
+            }
+            rewriteRowId = rr.id as string;
+            const { error: chipErr } = await opts.adminClient
+              .from('messages')
+              .update({
+                clarity: {
+                  v: 1,
+                  score,
+                  notice: CLARITY_NOTICE,
+                  rewrite_id: rewriteRowId,
+                },
+              })
+              .eq('id', originalId);
+            if (chipErr) {
+              // The chip is cosmetic; the rewrite is the feature. A failed
+              // chip write proceeds - the connective's absence is the
+              // recorded consecutive-answers hazard.
+              log.info(`${runId} clarity chip write failed (rewrite proceeds): ${chipErr.message}`);
+            } else {
+              chipWritten = true;
+            }
+
+            // The buffer reset: the terminal path never publishes
+            // assistant_round_committed (tool-rounds only), so the stage
+            // publishes it for the original - the browser settles the
+            // original's card, resets the live bubble, and the rewrite's
+            // deltas start fresh.
+            await publisher.publish({
+              type: 'assistant_round_committed',
+              id: originalId,
+            });
+
+            const rewriteHistory: VeniceMessage[] = [
+              ...history,
+              { role: 'assistant', content: settled.content },
+              {
+                role: 'user',
+                content: buildClarityRewriteAsk(
+                  settled.content,
+                  describeFindings(findings, score),
+                ),
+              },
+            ];
+            for await (const ev of (opts.complete ?? getStreamingCompletion)({
+              apiKey: opts.apiKey,
+              body: {
+                ...body,
+                messages: rewriteHistory,
+                venice_parameters: {
+                  ...(body.venice_parameters ?? {}),
+                  disable_thinking: true,
+                },
+              },
+              signal: AbortSignal.any([
+                ctl.signal,
+                AbortSignal.timeout(REWRITE_TIMEOUT_MS),
+              ]),
+            })) {
+              if (ev.type === 'response_text') {
+                rewriteAccum.content += ev.content;
+                scheduleRewriteUpdate();
+              } else if (ev.type === 'usage') {
+                rewriteAccum.usage = ev.usage;
+              } else if (ev.type === 'error') {
+                throw new Error(`rewrite stream error: ${ev.message}`);
+              }
+            }
+            if (rewriteAccum.content.trim().length === 0) {
+              throw new Error('empty rewrite');
+            }
+            await flushRewriteUpdate();
+            const { error: cErr, data: cData } = await opts.adminClient.rpc(
+              'commit_assistant_message',
+              {
+                p_assistant_message_id: rewriteRowId,
+                p_user_message_id: opts.userMessageId,
+                p_user_id: opts.userId,
+                p_content: rewriteAccum.content,
+                p_model: opts.bodyTemplate.model ?? null,
+                p_usage: rewriteAccum.usage,
+                p_reasoning: null,
+                p_citations: null,
+                p_superseded_ids: null,
+                p_replace_user_message_content: null,
+              },
+            );
+            if (cErr) throw new Error(`rewrite commit failed: ${cErr.message}`);
+            if (cData && typeof cData === 'object' && 'conflict' in cData) {
+              const c = cData as { conflict?: boolean };
+              if (c.conflict) throw new Error('rewrite commit conflict');
+            }
+            // (c) the reassign: BOTH the row id (the sweep's keepId) and
+            // the persisted snapshot (END + the second-thoughts tail).
+            assistantRowId = rewriteRowId;
+            persistedId = rewriteRowId;
+            rewriteRowId = null;
+            log.info(`${runId} clarity: rewrote response (score ${score.toFixed(2)}) as message ${persistedId}`);
+          }
+        } catch (err) {
+          log.info(
+            `${runId} clarity stage failed (fail-open): ${err instanceof Error ? err.message : String(err)}`,
+          );
+          if (rewriteRowId !== null) {
+            try {
+              await opts.adminClient.from('messages').delete().eq('id', rewriteRowId);
+            } catch (delErr) {
+              log.info(`${runId} clarity rewrite-row delete failed: ${delErr instanceof Error ? delErr.message : String(delErr)}`);
+            }
+          }
+          if (chipWritten) {
+            try {
+              await opts.adminClient.from('messages').update({ clarity: null }).eq('id', originalId);
+            } catch (chipErr) {
+              log.info(`${runId} clarity chip clear failed: ${chipErr instanceof Error ? chipErr.message : String(chipErr)}`);
+            }
+          }
+          assistantRowId = originalId;
+          persistedId = originalId;
+        } finally {
+          if (rewriteTimer !== null) clearTimeout(rewriteTimer);
+        }
       }
     }
 
