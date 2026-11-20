@@ -338,15 +338,18 @@ async function employmentForThread(
   // The per-tag digest at info: this IS the sweep's decision - what
   // the judge said about each intent - so the default-level drawer
   // tells the story without opening the debug tap.
-  const digest = judged
-    .map((i) => {
-      const op = noulOf(answers, `opening-${i.tag}`);
-      const ap = noulOf(answers, `acted-${i.tag}`);
-      const pick = choiceOf(answers, `reaction-${i.tag}`);
-      return `${i.tag}: opening ${op?.toFixed(2) ?? '-'} / acted ${ap?.toFixed(2) ?? '-'} / ${pick ?? 'no reaction'}`;
-    })
-    .join(' | ');
-  log.info(`employment judge: ${digest}`);
+  const answers = answersOf(payload);
+  const digest = answers
+    ? judged
+        .map((i) => {
+          const op = noulOf(answers, `opening-${i.tag}`);
+          const ap = noulOf(answers, `acted-${i.tag}`);
+          const pick = choiceOf(answers, `reaction-${i.tag}`);
+          return `${i.tag}: opening ${op?.toFixed(2) ?? '-'} / acted ${ap?.toFixed(2) ?? '-'} / ${pick ?? 'no reaction'}`;
+        })
+        .join(' | ')
+    : '';
+  if (digest) log.info(`employment judge: ${digest}`);
 
   const verdicts = parseEmploymentVerdicts(payload, new Set(judged.map((i) => i.tag)));
   const employments = judged
