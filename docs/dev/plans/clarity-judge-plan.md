@@ -15,7 +15,7 @@ Three layers, all riding the existing chat machinery:
    than code or structured output?) and `clarity` (score, 1-4
    rubric: riddled -> clean). A deterministic mechanical scan (the
    dash/quote/filler checks) runs alongside, model-free.
-3. **The reframe**: a low score on a text response triggers ONE
+3. **The rewrite**: a low score on a text response triggers ONE
    streamed rewrite - a NEW assistant message after the original
    (nothing is hidden or edited), introduced by a notice the user
    sees in the turn. END publishes after the rewrite; the existing
@@ -103,7 +103,7 @@ verified by two lenses):
   user-driven changes are the accepted cache-bust class
   (`:489-497`). A settings-gated STATIC block changes the prompt
   only on toggle - the pre-approved class. The metadata-tail slot
-  (`prompt-assembly.ts:514-532`) exists for per-turn-VOLATILE
+  (`prompt-assembly.ts:427-458, 450-457`) exists for per-turn-VOLATILE
   content (the tail is where non-cacheable content lives - a
   settings-gated posture block is not that). The wiki-family agents
   assemble function-side, each independently
@@ -173,10 +173,13 @@ block does not copy that shape.)
   the ONLY writer of the original (running the stage before it
   would double-commit the reassigned rewrite row into the
   idempotency guard and error-terminal a successful turn). The
-  empty-row sweep's keepId, END's `persistedAssistantId`, and the
-  second-thoughts target all read the (possibly reassigned)
-  `assistantRowId` - the stage reassigns it ONLY after the
-  rewrite's commit succeeds, and reverts to the original's id on
+  empty-row sweep's keepId reads `assistantRowId`; END's
+  `persistedAssistantId` and the second-thoughts target read
+  `persistedId` - a SNAPSHOT taken before the commit block
+  (`:1385`, `let persistedId = assistantRowId ?? ''`), not a live
+  read - so the stage reassigns BOTH variables ONLY after the
+  rewrite's commit succeeds, and reverts both to the original's id
+  on
   any failure (a failed reassign-then-commit would otherwise leave
   END naming a dead row: the browser's END hydration 404s and the
   samskara substrate stub pairs to nothing).
@@ -214,13 +217,24 @@ block does not copy that shape.)
   chip live (the same path the second-thoughts verdict rides,
   `getStreamingResponse.ts:1616-1618`);
   Chat.svelte's realtime merge learns the field (`:1810-1825`) and
-  the 20s backfill covers a dropped echo (`:1849-1871`). The
-  browser renders the notice between the original and the live
-  rewrite bubble from the chip. The buffer reset rides the
-  EXISTING `assistant_round_committed` event (the original's commit
-  publishes one if the round loop does not already) - no new event
-  type, no fan-out, no replay gap; the chip is reload-stable by
-  construction (`thread_transcript` returns `m.*`).
+  the 20s backfill covers a dropped echo (`:1849-1871`; its
+  early-return guard becomes either-field-missing so one delivered
+  field cannot suppress the other's fetch). The browser renders the
+  notice between the original and the live rewrite bubble from the
+  chip. The buffer reset: the terminal path NEVER publishes
+  `assistant_round_committed` today (the sole publish, :927, is
+  tool-round-only; venice-stream.ts:221-222 - "the terminal round
+  is signaled by END instead"), so the stage publishes it for the
+  ORIGINAL's row before streaming the rewrite - the existing
+  browser handler then settles the original's card, resets the
+  live buffer, and schedules the chip backfill (`:4977-4981`), and
+  the rewrite's deltas start a fresh bubble. No new event type, no
+  fan-out, no replay gap; the chip is reload-stable by
+  construction (`thread_transcript` returns `m.*`). Chip-write
+  failure: PROCEED with the rewrite (the chip is cosmetic; the
+  rewrite is the feature) + a log line - the connective's absence
+  is the recorded consecutive-answers hazard, accepted at this
+  rarity.
 - **D7 - The mechanical scan** (model-free, runs first): the
   added-line slop-grep technique turned inward - typographic
   dashes/quotes, sycophancy openers, hedge softeners, filler
@@ -260,7 +274,12 @@ block does not copy that shape.)
   try/catch owns its row: a rewrite failure (timeout, cancel,
   error, conflict) DELETES the rewrite row (a direct delete - the
   aborted-regen rollback runs EARLIER in the finally and cannot
-  cover a later-created row), reverts `assistantRowId`/`persistedId`
+  cover a later-created row; if the delete itself fails, the row
+  gets `transitionRowTo('error')` so the janitor's story stays
+  legible), CLEARS the chip (a reload-stable notice promising a
+  rewrite whose id is dead is worse than no notice - a second
+  UPDATE re-marks the original chip-less), reverts
+  `assistantRowId`/`persistedId`
   to the original's id, and the turn stands `'completed'` on the
   original. Guards: `REWRITE_TIMEOUT_MS = 30_000`
   (AbortSignal.timeout - a stalled rewrite would otherwise hang the
@@ -271,21 +290,24 @@ block does not copy that shape.)
   already committed, there is nothing to mark); a rewrite-commit
   conflict (a competing send) = delete + `'completed'`; an EMPTY
   rewrite (the GLM stall case) = delete + `'completed'` (the
-  round-loop's empty guard does not cover the stage). The wall
+  round-loop's empty guard does not cover the stage). The stage
+  runs only when `terminalKind === 'completed'` (the sweep's guard
+  at `:1502` is the precedent). The wall
   budget: the stage SKIPS when the turn's elapsed time leaves less
   than ~45s before the hosted wall clock (the 380s timer cleared at
   `:1290` does not cover the stage; the runtime kill is absolute) -
   one elapsed-time check, fail-open. The decision call carries the
-  shared 10s timeout; its failure = no rewrite.
+  shared 10s timeout; its failure = no rewrite. (The OBSERVER call
+  itself remains untimed - pre-existing, unchanged by this plan.)
 - **D12 - Second thoughts + the two-answer slice.** ZERO code
   changes to the tail: `persistedId` targeting (D4) delivers the
   ordering. The reviewer's input contract is the TURN SLICE - with
-  a rewrite it contains BOTH answers; the serializer handles
+  a rewrite it contains BOTH answers as bare rows (the reviewer's
+  slice carries no chip and no connective); the serializer handles
   multi-row slices, and "the most recent response" (its framing)
   reads the rewrite. The slice-shape change is stated here and in
-  second-thoughts.md's input contract - the verdict may weigh that
-  the assistant already self-corrected, which is honest context,
-  not contamination. With the setting off, today's behavior.
+  second-thoughts.md's input contract. With the setting off,
+  today's behavior.
 - **D13 - The history connective: assembled at replay time, not
   written to rows.** Two consecutive assistant messages with no
   connective is a recorded hazard (`prompt-assembly.ts:728-730`:
@@ -331,16 +353,21 @@ block does not copy that shape.)
    `OrchestratorOpts.complete` harness (the two commits, the
    reassign + revert, `END.persistedAssistantId` asserted - zero
    coverage of that field exists today); the failure paths
-   (timeout/cancel/conflict/empty -> original stands, 'completed');
-   the edit-turn skip; the wall-budget skip; the settings
-   round-trip legs (the scrub whitelist test - the write side has
-   none today - + the coercer + the hydrate); the positive-phrasing
-   lint pin on the NEW block only (VOICE_BLOCK's grandfathered
-   imperatives are not the template); the realtime-merge test for
-   the clarity field.
+   (timeout/cancel/conflict/empty -> original stands, 'completed',
+   the chip cleared); the edit-turn skip; the wall-budget skip; the
+   settings round-trip legs (the scrub whitelist test - the write
+   side has none today - + the coercer + the hydrate); the
+   positive-phrasing lint pin on the NEW block only (VOICE_BLOCK's
+   grandfathered imperatives are not the template); the
+   realtime-merge test for the clarity field; the backfill's
+   either-field guard; the transport-translation test for any
+   published `assistant_round_committed` on the terminal path (the
+   existing shapes: venice.test.ts's broadcast-translation tests).
 8. **Docs + QA**: the QA use case (new file: the clarity arms);
    `docs/dev/` feature doc; the settings doc's AI-tab row; the
-   parent plan gains B8 (implemented + pointer).
+   parent plan gains B8 (implemented + pointer);
+   `docs/dev/second-thoughts.md`'s input contract gains the
+   two-answer slice note (D12).
 9. **Gate, self-review, QA, land.** The standard loop.
 
 ## RISKS
