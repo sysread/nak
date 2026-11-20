@@ -1,6 +1,6 @@
 # Sycophancy / Narrative-Smoothing Judge (B9) - the composite post-message check
 
-Status: APPROVED-FOR-BUILD (refinement complete: round 1 = 7 lenses, round 2 = fresh reviewer, consensus).
+Status: IMPLEMENTED (2026-11-20 - landed as 19e7650c + the QA row 0181e665; see docs/dev/clarity.md).
 
 ## SYNOPSIS
 

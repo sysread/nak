@@ -1,6 +1,6 @@
 # Clarity Judge + Auto-Rewrite (B8)
 
-Status: PLAN (round-1 lens fan-out folded; round-2 reviewer pending).
+Status: IMPLEMENTED (2026-11-20 - landed as 921513a9-chain + 443b122b; see docs/dev/clarity.md).
 
 ## SYNOPSIS
 

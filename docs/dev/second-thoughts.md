@@ -469,9 +469,13 @@ composition + wiring.
   `Chat.svelte` `scheduleVerdictBackfill` fires one delayed `getMessage`
   (~20s, past observed reviewer latency) for each completed terminal row
   (gated on `status==='complete'` in `onAssistantPersisted`) and merges
-  the verdict if the echo missed it; no-op otherwise. The DB row is
+  the payload if the echo missed it; no-op otherwise. The DB row is
   always correct, so a still-slower reviewer just needs a manual
-  refresh.
+  refresh. The apply gate is SHARED with the B8/B9 clarity chip (the
+  `rowCarriesDecisionPayload` predicate): either payload re-enters -
+  on a rewrite turn the chip rides the ORIGINAL row while the verdict
+  rides the rewrite row, so a verdict-only apply gate would silently
+  drop the chip. See `./clarity.md`.
 - **A doubt on an OLD assistant row has no button** - the refinement
   appends at the tail, so only `latestAssistantId` is refinable. Older
   rows keep their verdict for display but no action.

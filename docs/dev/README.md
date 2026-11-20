@@ -143,6 +143,11 @@ changing a contract that other features depend on.
   samskaras, and the strongest feed a prose summary that lives
   always-on in the system prompt; mints surface as a subtle
   bottom-right mood pill.
+- [Clarity](./clarity.md) — the settings-gated quality loop behind
+  the Clear writing toggle: the positive baseline block (chat + wiki
+  prompts), the composite post-message judge (clarity + smoothing
+  scores, with the samskara-built per-user rubric), and the
+  auto-rewrite posted as a second message below the original.
 - [Intuition](./intuition.md) — the subconscious layer. A
   perception agent + five drives + a synthesis agent that
   produces a `<think>`-tagged internal monologue, injected

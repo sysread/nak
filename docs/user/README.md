@@ -72,6 +72,10 @@ You can reach these pages two ways:
   re-reads each reply and shows a confidence verdict below it: what the
   dispositions mean, and why a flag is a glance-worthy hint, not a
   ruling.
+- [Clear writing](./clear-writing.md) — the quality pass behind the
+  optional Clear writing setting: every reply scored for clarity and
+  straight talk, with an honest rewrite posted below the original when
+  one falls short.
 - [Bias profile](./bias-profile.md) — the chart icon in the
   bottom-right pill column. Nak watches your past conversations
   for cognitive biases and quietly nudges its responses to

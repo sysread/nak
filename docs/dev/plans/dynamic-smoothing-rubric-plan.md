@@ -1,6 +1,6 @@
 # The dynamic smoothing rubric (B10) - the samskara-built per-user calibration
 
-Status: PLAN (refinement complete: 2 rounds, all findings folded verbatim - the round-2 cap reached with no remaining disagreement).
+Status: IMPLEMENTED (2026-11-20 - landed as f298ae4a + the QA row 83452d46; see docs/dev/clarity.md).
 
 ## SYNOPSIS
 

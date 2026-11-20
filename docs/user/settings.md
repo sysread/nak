@@ -73,8 +73,9 @@ Covered in detail on [Wiki](./wiki.md).
 Covered in detail on [Models & reasoning](./models.md). Holds the
 **About you** fields (name, location, timezone), the **Image
 generation** model picker (which Venice model draws your pictures when
-you ask the assistant for one), the **Emphasis markdown** scan-aid
-toggle, and **reply notifications** (an optional desktop/mobile ping
+you ask the assistant for one), the **Clear writing** quality pass
+(see [Clear writing](./clear-writing.md)), the **Emphasis markdown**
+scan-aid toggle, and **reply notifications** (an optional desktop/mobile ping
 when a reply lands while you're looking elsewhere). Chat models live
 on the **Model profiles** pane; the named system prompts have their
 own **Custom prompts** pane.
