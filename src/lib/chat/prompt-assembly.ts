@@ -31,11 +31,7 @@ import {
   coerceSecondThoughts,
 } from '../ui/second-thoughts';
 import { coerceClarity } from '../ui/clarity';
-
-/** The replay connective for a clarity-rewritten reply (see
- *  toVeniceMessage's clarity block). */
-const CLARITY_CONNECTIVE_THINK =
-  'The reply above was reworded for clarity; the next answer is the clearer restatement.';
+import { buildConnectiveThink } from '$shared/clarity';
 
 // --- appended verbatim from chat/loop.ts ---
 /** Placeholder string threads ship with from schema.sql + draft creation. */
@@ -741,13 +737,15 @@ export function toVeniceMessage(
     if (verdict?.acted && typeof out.content === 'string') {
       out.content = `${out.content}\n\n${buildRefinementThink(verdict.note)}`;
     }
-    // B8 clarity connective: a reply the clarity judge rewrote gets a
-    // <think> line so the model reads the two consecutive answers as a
-    // pair (the recorded consecutive-answers hazard). The connective
-    // rides replay only - the rows stay untouched.
+    // B8/B9 clarity connective: a reply the composite stage rewrote
+    // gets a <think> line so the model reads the two consecutive
+    // answers as a pair (the recorded consecutive-answers hazard).
+    // The line's copy assembles from the failed set (a smoothing-only
+    // rewrite was not "reworded for clarity"). The connective rides
+    // replay only - the rows stay untouched.
     const clarity = coerceClarity(m.clarity);
     if (clarity && typeof out.content === 'string') {
-      out.content = `${out.content}\n\n<think>${CLARITY_CONNECTIVE_THINK}</think>`;
+      out.content = `${out.content}\n\n<think>${buildConnectiveThink(clarity.failed)}</think>`;
     }
   }
   return out;

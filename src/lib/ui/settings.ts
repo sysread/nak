@@ -68,7 +68,7 @@ const TOGGLE_NOTICES = {
     off: 'Emphasis markdown disabled.',
   },
   clearWriting: {
-    on: 'Clear writing enabled. Replies that score poorly for clarity get a plainer rewrite below the original.',
+    on: 'Clear writing enabled. Replies that score poorly for clarity or for smoothing get a plainer or straighter rewrite below the original.',
     off: 'Clear writing disabled. Replies stop being scored; nothing is rewritten.',
   },
   wikiAutomatic: {

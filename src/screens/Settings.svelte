@@ -1964,9 +1964,10 @@
 
         <h3 class="pane-section">Clear writing</h3>
         <p class="subtle">
-          When on, Nak scores each reply's writing clarity with a
-          decision model and, when a reply scores poorly, posts a
-          clearer rewrite below the original - the original stays.
+          When on, Nak scores each reply's writing clarity and its
+          freedom from sycophantic smoothing with a decision model
+          and, when a reply scores poorly, posts a plainer or
+          straighter rewrite below the original - the original stays.
           Also asks the model (chat and wiki writers) to write to the
           same standard from the start. Off by default.
         </p>

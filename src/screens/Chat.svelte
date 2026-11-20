@@ -224,7 +224,7 @@
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
-  import { coerceClarity } from '$lib/ui/clarity';
+  import { coerceClarity, rowCarriesDecisionPayload } from '$lib/ui/clarity';
   import { buildMcpToolboxes } from '$lib/ui/mcp';
   import type { RetryIntent } from '$lib/ui/completion-status';
   import {
@@ -1857,15 +1857,20 @@
       verdictBackfillTimers.delete(timer);
       if (!app.supabase || activeThreadId !== threadId) return;
       // Already delivered by the realtime echo -> nothing to fetch.
-      // Either field counts: the second-thoughts verdict AND the B8
+      // Either field counts: the second-thoughts verdict AND the
       // clarity chip ride the same UPDATE-echo + backfill path.
       const local = messages.find((m) => m.id === messageId);
-      if (local?.second_thoughts != null || local?.clarity != null) return;
+      if (rowCarriesDecisionPayload(local)) return;
       void app.supabase
         .getMessage(messageId)
         .then((fresh) => {
           if (!fresh || activeThreadId !== threadId) return;
-          if (fresh.second_thoughts != null) appendMessage(fresh);
+          // The apply gate shares the skip guard's predicate (D10): a
+          // chip-only fresh row (the original on any rewrite turn -
+          // the second-thoughts verdict rides the REWRITE row) must
+          // re-enter, or a dropped echo buries the chip until an
+          // unrelated reconcile.
+          if (rowCarriesDecisionPayload(fresh)) appendMessage(fresh);
         })
         .catch(() => {
           // Best-effort backstop; a failed fetch just leaves the manual

@@ -1129,11 +1129,13 @@ $cron$;
 alter table public.messages
   add column if not exists second_thoughts jsonb;
 
--- The B8 clarity verdict on an assistant row whose reply the clarity
--- judge rewrote: {v:1, score, notice, rewrite_id}. Written by the
--- streaming stage before the rewrite streams; the browser renders the
--- notice between the two messages from this field (UPDATE-echo
--- delivered, reload-stable). NULL = never flagged.
+-- The B8/B9 composite verdict on an assistant row whose reply the
+-- post-message stage rewrote: {v:2, checks: {clarity, smoothing},
+-- failed, notice, rewrite_id} (a v1 row {v:1, score, notice,
+-- rewrite_id} maps forward on read - src/lib/ui/clarity.ts). Written
+-- by the streaming stage before the rewrite streams; the browser
+-- renders the notice between the two messages from this field
+-- (UPDATE-echo delivered, reload-stable). NULL = never flagged.
 alter table public.messages
   add column if not exists clarity jsonb;
 

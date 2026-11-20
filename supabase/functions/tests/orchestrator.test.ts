@@ -31,6 +31,11 @@ import type {
   ToolCallRequest,
 } from '../_shared/venice-stream.ts';
 import {
+  CLARITY_NOTICE,
+  SMOOTHING_NOTICE,
+  COMPOSITE_NOTICE,
+} from '../_shared/clarity.ts';
+import {
   getStreamingResponse,
   DEFERRED_TOOL_MESSAGE,
   MAX_ROUNDS,
@@ -795,6 +800,28 @@ const VERDICT_OK = {
   answers: {
     'primarily-text': { type: 'noul', noul: 0.95 },
     clarity: { type: 'score', score: 0.8, legend: {}, probabilities: {}, confidence: 0.8 },
+    smoothing: { type: 'score', score: 2.9, legend: {}, probabilities: {}, confidence: 0.8 },
+  },
+  usage: { input_tokens: 10, output_tokens: 0 },
+};
+// A smoothing-only failure: the clarity side reads clean, smoothing
+// trips the bar - the composite rewrite fires on smoothing alone.
+const VERDICT_SMOOTHING_FAIL = {
+  model: 'clef-api',
+  answers: {
+    'primarily-text': { type: 'noul', noul: 0.95 },
+    clarity: { type: 'score', score: 2.9, legend: {}, probabilities: {}, confidence: 0.8 },
+    smoothing: { type: 'score', score: 0.8, legend: {}, probabilities: {}, confidence: 0.8 },
+  },
+  usage: { input_tokens: 10, output_tokens: 0 },
+};
+// Both checks fail: the composite copy + both corrective blocks.
+const VERDICT_BOTH_FAIL = {
+  model: 'clef-api',
+  answers: {
+    'primarily-text': { type: 'noul', noul: 0.95 },
+    clarity: { type: 'score', score: 0.8, legend: {}, probabilities: {}, confidence: 0.8 },
+    smoothing: { type: 'score', score: 0.8, legend: {}, probabilities: {}, confidence: 0.8 },
   },
   usage: { input_tokens: 10, output_tokens: 0 },
 };
@@ -829,6 +856,7 @@ Deno.test('clarity ON + clean score: the judge runs, no rewrite', async () => {
       answers: {
         'primarily-text': { type: 'noul', noul: 0.95 },
         clarity: { type: 'score', score: 2.9, legend: {}, probabilities: {}, confidence: 0.8 },
+        smoothing: { type: 'score', score: 2.9, legend: {}, probabilities: {}, confidence: 0.8 },
       },
       usage: { input_tokens: 10, output_tokens: 0 },
     },
@@ -851,6 +879,34 @@ Deno.test('clarity ON + clean score: the judge runs, no rewrite', async () => {
   assertEquals(decisionCalls.length, 1);
   assertEquals(commitRpcs(env).length, 1);
   assertEquals(endEvent(env).persistedAssistantId, 'row-1');
+});
+
+Deno.test('the composite judge call carries all three question bodies (B9 D3)', async () => {
+  // B8's suite asserted only the call COUNT - a dropped or mangled
+  // question passed silently. This pins the payload: exactly the
+  // three ids, each with its wire type.
+  const decisionCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const restore = stubDecisionFetch(VERDICT_OK, decisionCalls);
+  const env = makeEnv({
+    rows: { profiles: [PROFILE_ON, PROFILE_ON] },
+    rounds: [
+      async function* () {
+        yield text(CLEAN_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+    ],
+  });
+  try {
+    await getStreamingResponse(env.opts);
+  } finally {
+    restore();
+  }
+  assertEquals(decisionCalls.length, 1);
+  const questions = decisionCalls[0].body.questions as Record<string, unknown>;
+  assertEquals(Object.keys(questions).sort(), ['clarity', 'primarily-text', 'smoothing']);
+  assertEquals((questions['primarily-text'] as { type: string }).type, 'noul');
+  assertEquals((questions.clarity as { type: string }).type, 'score');
+  assertEquals((questions.smoothing as { type: string }).type, 'score');
 });
 
 Deno.test('clarity ON + sloppy score: the rewrite streams, commits, and END names it', async () => {
@@ -891,7 +947,18 @@ Deno.test('clarity ON + sloppy score: the rewrite streams, commits, and END name
     .map((a) => a[0] as Record<string, unknown>)
     .filter((u) => u.clarity !== undefined);
   assertEquals(updates.length, 1);
-  assertEquals((updates[0].clarity as { rewrite_id: string }).rewrite_id, 'row-2');
+  const chip = updates[0].clarity as {
+    v: number;
+    checks: { clarity: number; smoothing: number };
+    failed: string[];
+    notice: string;
+    rewrite_id: string;
+  };
+  assertEquals(chip.v, 2);
+  assertEquals(chip.checks, { clarity: 0.8, smoothing: 2.9 });
+  assertEquals(chip.failed, ['clarity']);
+  assertEquals(chip.notice, CLARITY_NOTICE);
+  assertEquals(chip.rewrite_id, 'row-2');
   assertEquals(callsOf(env, 'messages', 'delete').length, 0);
 });
 
@@ -933,4 +1000,124 @@ Deno.test('clarity rewrite failure: the row is deleted, the chip cleared, END na
   assertEquals(chipClears.length, 1);
   // The turn still completes.
   assertEquals(endEvent(env).terminalKind, 'completed');
+});
+
+Deno.test('smoothing-only failure: the rewrite fires on smoothing alone (B9 D4/D7)', async () => {
+  const restore = stubDecisionFetch(VERDICT_SMOOTHING_FAIL);
+  let rewriteAsk = '';
+  const env = makeEnv({
+    rows: { profiles: [PROFILE_ON, PROFILE_ON] },
+    rounds: [
+      async function* () {
+        yield text(CLEAN_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+      // The rewrite round: capture the assembled ask (the last wire
+      // message) for the corrective-instruction assertions.
+      async function* (args: { signal: AbortSignal; body: Record<string, unknown> }) {
+        const msgs = args.body.messages as Array<{ role: string; content: string }>;
+        rewriteAsk = msgs[msgs.length - 1]?.content ?? '';
+        yield text(CLEAN_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+    ],
+  });
+  try {
+    await getStreamingResponse(env.opts);
+  } finally {
+    restore();
+  }
+  // The composite fired on smoothing only: the ask carries the
+  // smoothing corrective + smoothing evidence, and never cites the
+  // (clean) clarity score.
+  assertStringIncludes(rewriteAsk, 'smoothed things over');
+  assertStringIncludes(rewriteAsk, 'Smoothing score: 0.8 of 4');
+  assert(!rewriteAsk.includes('Clarity score'));
+  assert(!rewriteAsk.includes('scored poorly for clarity'));
+  // The chip names the smoothing failure with the smoothing notice.
+  const updates = callsOf(env, 'messages', 'update')
+    .map((a) => a[0] as Record<string, unknown>)
+    .filter((u) => u.clarity !== undefined);
+  const chip = updates[0].clarity as { failed: string[]; notice: string };
+  assertEquals(chip.failed, ['smoothing']);
+  assertEquals(chip.notice, SMOOTHING_NOTICE);
+  assertEquals(commitRpcs(env).length, 2);
+});
+
+Deno.test('both checks fail: the composite notice + both corrective blocks (B9 D6/D7)', async () => {
+  const restore = stubDecisionFetch(VERDICT_BOTH_FAIL);
+  let rewriteAsk = '';
+  const env = makeEnv({
+    rows: { profiles: [PROFILE_ON, PROFILE_ON] },
+    rounds: [
+      async function* () {
+        yield text(SLOPPY_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+      async function* (args: { signal: AbortSignal; body: Record<string, unknown> }) {
+        const msgs = args.body.messages as Array<{ role: string; content: string }>;
+        rewriteAsk = msgs[msgs.length - 1]?.content ?? '';
+        yield text(CLEAN_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+    ],
+  });
+  try {
+    await getStreamingResponse(env.opts);
+  } finally {
+    restore();
+  }
+  assertStringIncludes(rewriteAsk, 'scored poorly for clarity');
+  assertStringIncludes(rewriteAsk, 'smoothed things over');
+  assertStringIncludes(rewriteAsk, 'Clarity score: 0.8 of 4');
+  assertStringIncludes(rewriteAsk, 'Smoothing score: 0.8 of 4');
+  const updates = callsOf(env, 'messages', 'update')
+    .map((a) => a[0] as Record<string, unknown>)
+    .filter((u) => u.clarity !== undefined);
+  const chip = updates[0].clarity as { failed: string[]; notice: string };
+  assertEquals(chip.failed, ['clarity', 'smoothing']);
+  assertEquals(chip.notice, COMPOSITE_NOTICE);
+});
+
+Deno.test('a missing smoothing answer fails open per check: the rewrite degrades to B8 (B9 D4)', async () => {
+  // The drift posture: the smoothing answer never arrives (the beta
+  // wire's schema may omit it). The clarity check must still drive
+  // the rewrite; the chip records the smoothed check as null.
+  const restore = stubDecisionFetch({
+    model: 'clef-api',
+    answers: {
+      'primarily-text': { type: 'noul', noul: 0.95 },
+      clarity: { type: 'score', score: 0.8, legend: {}, probabilities: {}, confidence: 0.8 },
+    },
+    usage: { input_tokens: 10, output_tokens: 0 },
+  });
+  const env = makeEnv({
+    rows: { profiles: [PROFILE_ON, PROFILE_ON] },
+    rounds: [
+      async function* () {
+        yield text(SLOPPY_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+      async function* () {
+        yield text(CLEAN_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+    ],
+  });
+  try {
+    await getStreamingResponse(env.opts);
+  } finally {
+    restore();
+  }
+  assertEquals(commitRpcs(env).length, 2);
+  const updates = callsOf(env, 'messages', 'update')
+    .map((a) => a[0] as Record<string, unknown>)
+    .filter((u) => u.clarity !== undefined);
+  const chip = updates[0].clarity as {
+    checks: { clarity: number; smoothing: unknown };
+    failed: string[];
+  };
+  assertEquals(chip.checks.clarity, 0.8);
+  assertEquals(chip.checks.smoothing, null);
+  assertEquals(chip.failed, ['clarity']);
 });

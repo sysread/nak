@@ -94,13 +94,13 @@ import { curateOnTurnTail } from './agents/curation.ts';
 import { samskaraOnTurnTail } from './agents/samskara.ts';
 import { secondThoughtsOnTurnTail } from './agents/second_thoughts.ts';
 import {
-  CLARITY_NOTICE,
   FAULT_CATALOG,
   RUBRIC_LEVELS,
-  describeFindings,
+  SMOOTHING_RUBRIC_LEVELS,
   mechanicalScan,
-  REWRITE_SCORE_THRESHOLD,
-  buildClarityRewriteAsk,
+  buildCompositeNotice,
+  buildRewriteAsk,
+  deriveFailedChecks,
 } from '../_shared/clarity.ts';
 import { veniceDecision } from '../_shared/venice.ts';
 import { CLARITY_JUDGE_MODEL } from '../_shared/agent-models.ts';
@@ -1617,29 +1617,46 @@ export async function getStreamingResponse(
                     FAULT_CATALOG.map((f) => `${f.name} - ${f.test}`).join('; '),
                   criteria: RUBRIC_LEVELS,
                 },
+                smoothing: {
+                  type: 'score',
+                  instructions:
+                    'Score the SUBSTANCE of the RESPONSE (the question is ' +
+                    'context), not its tone: does it distort reality to ' +
+                    'comfort the user? Smoothing is validating an unsupported ' +
+                    'claim, softening a failure or a risk, agreeing without ' +
+                    'checking, or reassuring instead of informing. A blunt ' +
+                    'reality check - corrections delivered directly, ' +
+                    'agreement only when earned - scores 3. Two exemptions: ' +
+                    'the joking register (both parties clearly playing) is ' +
+                    'not smoothing, and surface-level validation (a ' +
+                    'compliment opener, a hedge word) is the separate ' +
+                    "clarity check's job - reserve low scores for " +
+                    'distortion of substance. The user is depending on ' +
+                    'accurate answers; agreement that feels good is not the ' +
+                    'goal.',
+                  criteria: SMOOTHING_RUBRIC_LEVELS,
+                },
               },
             },
             signal: AbortSignal.timeout(DECISION_CALL_TIMEOUT_MS),
           });
           const answers = answersOf(decisionRes);
           const textP = answers ? noulOf(answers, 'primarily-text') : null;
-          const clarityAnswer = answers
-            ? (answers.clarity as { score?: unknown } | undefined)
-            : undefined;
-          const score =
-            typeof clarityAnswer?.score === 'number' && Number.isFinite(clarityAnswer.score)
-              ? clarityAnswer.score
-              : null;
+          const scoreOf = (id: string): number | null => {
+            const a = answers
+              ? (answers[id] as { score?: unknown } | undefined)
+              : undefined;
+            return typeof a?.score === 'number' && Number.isFinite(a.score) ? a.score : null;
+          };
+          const scores = { clarity: scoreOf('clarity'), smoothing: scoreOf('smoothing') };
+          // The ONE failed-set derivation (B9 D4): fail-open per check -
+          // a null score means that check passed; the trigger consumes
+          // the derived set, never a second comparison.
+          const failed = deriveFailedChecks(scores);
           log.debug(
-            `${runId} clarity: text=${textP?.toFixed(2) ?? 'null'} score=${score?.toFixed(2) ?? 'null'} mechanicalFlags=${findings.length}`,
+            `${runId} checks: text=${textP?.toFixed(2) ?? 'null'} clarity=${scores.clarity?.toFixed(2) ?? 'null'} smoothing=${scores.smoothing?.toFixed(2) ?? 'null'} failed=[${failed.join(',')}] mechanicalFlags=${findings.length}`,
           );
-          if (
-            answers !== null &&
-            textP !== null &&
-            score !== null &&
-            textP >= 0.5 &&
-            score < REWRITE_SCORE_THRESHOLD
-          ) {
+          if (answers !== null && textP !== null && textP >= 0.5 && failed.length > 0) {
             // (b) the rewrite row, then the chip (it names the row), then the
             // stream. The original stays untouched - the rewrite is a NEW
             // message below it.
@@ -1662,9 +1679,10 @@ export async function getStreamingResponse(
               .from('messages')
               .update({
                 clarity: {
-                  v: 1,
-                  score,
-                  notice: CLARITY_NOTICE,
+                  v: 2,
+                  checks: scores,
+                  failed,
+                  notice: buildCompositeNotice(failed),
                   rewrite_id: rewriteRowId,
                 },
               })
@@ -1693,10 +1711,7 @@ export async function getStreamingResponse(
               { role: 'assistant', content: settled.content },
               {
                 role: 'user',
-                content: buildClarityRewriteAsk(
-                  settled.content,
-                  describeFindings(findings, score),
-                ),
+                content: buildRewriteAsk(failed, settled.content, findings, scores),
               },
             ];
             for await (const ev of (opts.complete ?? getStreamingCompletion)({
@@ -1752,7 +1767,7 @@ export async function getStreamingResponse(
             assistantRowId = rewriteRowId;
             persistedId = rewriteRowId;
             rewriteRowId = null;
-            log.info(`${runId} clarity: rewrote response (score ${score.toFixed(2)}) as message ${persistedId}`);
+            log.info(`${runId} checks: rewrote response (failed: ${failed.join('+')}) as message ${persistedId}`);
           }
         } catch (err) {
           log.info(

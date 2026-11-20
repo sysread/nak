@@ -187,6 +187,15 @@ typed), the chat call runs only when the verdict says it is needed.
   NOT from the original brainstorm - Jeff's own proposal
   (2026-11-20), the first entry whose justification is a standing
   standard rather than an existing failure.
+- **B9 - Sycophancy/narrative-smoothing judge (the composite
+  post-message check).** PLANNED - see
+  `docs/dev/plans/smoothing-judge-plan.md` (a third scored question
+  in B8's batched call, the rubric hard-coded from Jeff's custom
+  prompts' "reality check, not a sycophantic yes-man" contract, the
+  notice + rewrite assembled from the failed checks' set, the chip's
+  v2 shape with a v1 mapping). Not from the brainstorm either -
+  Jeff's proposal (2026-11-20), the second check plugging into B8's
+  machinery.
 
 **Not fits:** auto-title, summary, digest, samskara formation
 (generation); intuition perception (needs the 1M window; the 32k cap
