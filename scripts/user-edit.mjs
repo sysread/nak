@@ -7,6 +7,11 @@
 // legacy service-role key fetched over the Management API; neither is written
 // to disk.
 //
+// After a successful create/reset, prints a one-shot invite link
+// (#setup=<base64> fragment over the fork's Pages URL) that pre-fills the
+// app's Setup screen on the invitee's browser - the same link shape the
+// bootstrap wizard prints.
+//
 // Args (all optional; missing ones are prompted interactively):
 //   --email <addr>       skip the email prompt
 //   --password <pw>      skip the password prompt; visible to `ps` and shell
@@ -40,6 +45,7 @@ import {
   adminUpdateUserPassword,
 } from './lib/supabase.mjs';
 import { loadState } from './lib/state-file.mjs';
+import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
 
 let argEmail = null;
 let argPassword = null;
@@ -99,8 +105,13 @@ if (!projectRef) {
 const supabaseUrl = `https://${projectRef}.supabase.co`;
 info(`Project: ${style.bold(projectRef)}`);
 
-step(1, 'Resolve the admin key');
-// Prefer the modern secret key from the environment; fall back to fetching the
+step(1, 'Resolve the admin + client keys');
+// The key list serves two purposes: the service-role-class key for the GoTrue
+// admin calls below, and the publishable key for the invite link printed at
+// the end - so fetch it even when SUPABASE_SECRET_KEY skips the fallback.
+const keys = await getProjectApiKeys(projectRef);
+
+// Prefer the modern secret key from the environment; fall back to the
 // legacy service_role key via the Management API so existing setups keep
 // working. Either way this is a service-role-class secret (bypasses RLS) used
 // only for the GoTrue admin calls below - the app never sees it.
@@ -108,7 +119,6 @@ let adminKey = process.env.SUPABASE_SECRET_KEY?.trim();
 if (adminKey) {
   ok('Using SUPABASE_SECRET_KEY from the environment.');
 } else {
-  const keys = await getProjectApiKeys(projectRef);
   // Prefer the project's modern secret key (type 'secret'); fall back to the
   // legacy service_role key so this keeps working both before the new keys
   // exist and after the legacy ones are disabled.
@@ -124,6 +134,12 @@ if (adminKey) {
   adminKey = secretKey.api_key;
   ok(`Fetched the project's ${secretKey.type === 'secret' ? 'secret' : 'legacy service-role'} key.`);
 }
+
+// Publishable key for the invite link - same preference order the wizard
+// uses (modern 'publishable' type, legacy 'anon' fallback).
+const clientKey =
+  keys.find((k) => k.type === 'publishable') ||
+  keys.find((k) => k.name === 'anon' || k.tags?.includes('anon'));
 
 step(2, 'Collect credentials');
 const email = argEmail ?? (await ask('Email'));
@@ -183,5 +199,36 @@ try {
     warn(`Password reset failed: ${e.message}`);
     hint('Reset the password manually in Supabase -> Authentication -> Users.');
     process.exit(1);
+  }
+}
+
+step(4, 'Invite link');
+// The #setup=<base64> fragment pre-fills the app's Setup screen in the
+// invitee's browser (Setup.svelte decodes it, then strips it from the address
+// bar). Same shape the bootstrap wizard prints. It carries only the Supabase
+// URL and publishable key - neither is a secret.
+if (!clientKey) {
+  warn('No publishable key found; skipping the invite link.');
+  hint('The user can still configure manually on the Setup screen.');
+} else {
+  try {
+    const slug = await getRepoSlug();
+    const payload = {
+      supabaseUrl,
+      supabasePublishableKey: clientKey.api_key,
+    };
+    const b64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+    const link = `${pagesUrl(slug)}#setup=${b64}`;
+    ok(`Invite link for ${style.bold(email)}:`);
+    console.log(`\n  ${style.bold(style.cyan(link))}\n`);
+    hint(
+      'Send this link along with the email + password above. It pre-fills the\n' +
+        'Supabase config in their browser (the fragment never leaves the machine\n' +
+        'in an HTTP request, and the app clears it from the address bar); they\n' +
+        'only have to click "Save and continue" and sign in.'
+    );
+  } catch (err) {
+    warn(`Could not build a setup link: ${err.message}`);
+    hint('Is `origin` a GitHub remote? The user can still configure manually.');
   }
 }
