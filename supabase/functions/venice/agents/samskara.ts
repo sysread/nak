@@ -415,12 +415,91 @@ collapsing it. Do not enumerate or list. Do not mention the word
 Reply with the paragraph only - no headings, no JSON, no prose
 about your task.`;
 
+/**
+ * The B10 per-user smoothing-rubric prompt. Runs in the same regen
+ * pass as the compound summary (a second, independent model call
+ * over the same top-samskaras payload) and produces the
+ * user-specific calibration the composite stage's smoothing question
+ * appends to its instructions. The FLOOR RULE is the load-bearing
+ * constraint (the bless-the-disease guard): the dynamic rubric
+ * specializes and tightens the fleet standard - it never licenses
+ * softer behavior, because the fixed anchors always ride the judge
+ * regardless.
+ */
+const SMOOTHING_RUBRIC_PROMPT = `You will receive a list of samskaras - short predictive claims a
+previous AI assistant has formed about a user across many
+conversations. Each carries a \`prediction\`, an optional
+\`inner_voice\`, a \`valence\` in [-1, 1], a \`confidence\` in [0, 1],
+and a \`health\` in [0, 1]. Stronger samskaras (high health *
+confidence) are listed first.
+
+Write a short calibration block (2-4 sentences, under 600
+characters) telling a clarity judge what sycophantic smoothing and
+narrative comfort-rewriting look like FOR THIS USER specifically.
+Ground every tell in the claims: domains where the user's knowledge
+runs deep (validating a surface claim there would be smoothing),
+tendencies a too-helpful reply would pander to, topics where this
+user has historically been given comfort instead of facts. Name
+concrete behavior, not abstractions.
+
+The fleet's fixed smoothing standard is the MINIMUM and always
+applies: your block may only ADD or SHARPEN tells - it must not
+weaken, soften, or license exceptions to that standard, even where
+the claims suggest the user would welcome warmth.
+
+Write in the third person about the user. Reply with the block only
+- no headings, no JSON, no bullet points, no prose about your task.`;
+
 // --- Agent calls (one non-streaming completion per phase) ----------------
 
 interface AssimilationResult {
   situation: string;
   outcome: string;
   valence: number;
+}
+
+/** The B10 rubric block's shape guard: short prose, no structure.
+ *  Deliberately NOT the summary's guard - that one assumes the
+ *  summary's third-person voice and has no length cap; the rubric's
+ *  contract is the ~600-char cap + no headings/JSON/lists. */
+export function isCleanRubricBlock(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length > 600) return false;
+  if (/\{|\}|\bjson\b/i.test(trimmed)) return false;
+  if (/^\s*(?:\d+[.)]\s|-\s|#{1,6}\s)/m.test(trimmed)) return false;
+  return true;
+}
+
+/**
+ * The B10 per-user smoothing-rubric build: the same 2-attempt +
+ * loud-failure pattern as the summary build (a channel-leak response
+ * is a serving-backend fault; the second attempt lands somewhere
+ * honest roughly half the time; the null return is the fail-open to
+ * the fixed rubric).
+ */
+async function agentBuildSmoothingRubric(
+  apiKey: string,
+  samskaras: {
+    prediction: string;
+    inner_voice: string | null;
+    valence: number | null;
+    confidence: number;
+    health: number;
+  }[],
+  log: EdgeLogger,
+): Promise<string | null> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const raw = await callOnce(apiKey, SMOOTHING_RUBRIC_PROMPT, JSON.stringify({ samskaras }));
+    if (raw === null) return null;
+    const trimmed = raw.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
+    if (trimmed.length > 0 && isCleanRubricBlock(trimmed)) return trimmed;
+    log.warn('compound-regen: smoothing rubric failed shape guard (likely reasoning-channel leak)', {
+      attempt,
+      chars: trimmed.length,
+      head: trimmed.slice(0, 200),
+    });
+  }
+  return null;
 }
 
 /**
@@ -1883,9 +1962,19 @@ async function compoundRegenProbe(
   if (rows.length === 0) return false;
   log.info(`compound-regen: synthesizing summary from ${rows.length} sample row(s) (cap ${cap})`);
 
-  const summary = await agentSummarizeCompound(apiKey, rows, log);
+  // Both builds in parallel: the claim TTL is 180s and the second
+  // call doubles the worst-case wall time - parallelism halves it
+  // back. The four-case matrix (B10 D1): a rubric failure coalesces
+  // at the RPC (the stored rubric survives); a summary failure saves
+  // NOTHING (the freshness contract owns last_regen_at - saving
+  // would advance the staleness clock over old prose), so the built
+  // rubric is discarded and the sweep retries within the hour.
+  const [summary, rubric] = await Promise.all([
+    agentSummarizeCompound(apiKey, rows, log),
+    agentBuildSmoothingRubric(apiKey, rows, log),
+  ]);
   if (!summary) {
-    log.debug('compound-regen: agent returned null');
+    log.debug('compound-regen: agent returned null', { rubricChars: rubric?.length ?? 0 });
     return false;
   }
 
@@ -1895,12 +1984,17 @@ async function compoundRegenProbe(
       p_holder_id: holderId,
       p_summary: summary,
       p_samskara_count: samskaraCount,
+      p_smoothing_rubric: rubric,
       p_user_id: userId,
     },
   );
   if (saveErr) throw new Error(`compound-regen: save failed: ${saveErr.message}`);
   if (saved === true) {
-    log.info('compound-regen: saved summary', { samskaraCount, chars: summary.length });
+    log.info('compound-regen: saved summary', {
+      samskaraCount,
+      chars: summary.length,
+      rubricChars: rubric?.length ?? 0,
+    });
     return true;
   }
   log.debug('compound-regen: save rejected (claim expired?)');
@@ -2232,6 +2326,7 @@ export const __test = {
   RELATOR_PROMPT,
   MINTER_PROMPT,
   COMPOUND_SUMMARY_PROMPT,
+  SMOOTHING_RUBRIC_PROMPT,
   SAMSKARA_MODEL,
   TAIL_ASSIMILATE_CAP,
   SWEEP_ASSIMILATE_CAP,
@@ -2252,6 +2347,7 @@ export const __test = {
   subtractVector,
   doubtForAssimilation,
   isCleanSummaryParagraph,
+  isCleanRubricBlock,
   parseVector,
   stripJsonFence,
   insertMint,

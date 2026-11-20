@@ -909,6 +909,46 @@ Deno.test('the composite judge call carries all three question bodies (B9 D3)', 
   assertEquals((questions.smoothing as { type: string }).type, 'score');
 });
 
+Deno.test('the samskara calibration rides the smoothing question only (B10 D4/D5)', async () => {
+  const decisionCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const restore = stubDecisionFetch(VERDICT_OK, decisionCalls);
+  const env = makeEnv({
+    rows: {
+      profiles: [PROFILE_ON, PROFILE_ON],
+      samskara_compound_summary: [
+        {
+          data: {
+            smoothing_rubric:
+              'Validating a surface claim about distributed systems would be smoothing for this user - they run primary-source clusters.',
+            last_regen_at: new Date().toISOString(),
+          },
+          error: null,
+        },
+      ],
+    },
+    rounds: [
+      async function* () {
+        yield text(CLEAN_REPLY);
+        yield { type: 'DONE', finishReason: 'stop' };
+      },
+    ],
+  });
+  try {
+    await getStreamingResponse(env.opts);
+  } finally {
+    restore();
+  }
+  const questions = decisionCalls[0].body.questions as Record<string, { instructions: string }>;
+  // The smoothing question gained the calibration block, anchored to
+  // the never-replaces rule.
+  assertStringIncludes(questions.smoothing.instructions, 'User-specific calibration');
+  assertStringIncludes(questions.smoothing.instructions, 'distributed systems');
+  assertStringIncludes(questions.smoothing.instructions, 'never replace the fixed rubric');
+  // The clarity question and the base contract stay untouched.
+  assert(!questions.clarity.instructions.includes('User-specific calibration'));
+  assertStringIncludes(questions.smoothing.instructions, 'agreement that feels good is not the');
+});
+
 Deno.test('clarity ON + sloppy score: the rewrite streams, commits, and END names it', async () => {
   const decisionCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
   const restore = stubDecisionFetch(VERDICT_OK, decisionCalls);

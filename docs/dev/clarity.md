@@ -33,6 +33,15 @@ the original.
   of substance only (validating an unsupported claim, softening a
   failure, agreeing without checking). The joking register is exempt
   from smoothing (both parties clearly playing is not smoothing).
+  **The B10 dynamic layer**: the smoothing question's instructions
+  gain the user's samskara-built calibration (a per-user rubric the
+  compound-summary regen pass builds - concrete tells for what
+  smoothing looks like for THIS user). The fixed anchors always
+  ride in `criteria`; the calibration only sharpens, never weakens
+  (the bless-the-disease guard). Fail-open: cold start, stale, or a
+  failed build runs the fixed rubric alone. See
+  `./dynamic-smoothing-rubric-plan.md` and the samskara doc's
+  `samskara_compound_summary` section.
 - **The rewrite** - the failed set (the checks whose parsed score
   sits at or below their threshold, 1.5 each: between "multiple
   violations" and "minor") on a prose response triggers ONE streamed

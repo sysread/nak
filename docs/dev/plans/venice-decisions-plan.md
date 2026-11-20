@@ -188,7 +188,7 @@ typed), the chat call runs only when the verdict says it is needed.
   (2026-11-20), the first entry whose justification is a standing
   standard rather than an existing failure.
 - **B9 - Sycophancy/narrative-smoothing judge (the composite
-  post-message check).** PLANNED - see
+  post-message check).** IMPLEMENTED - see
   `docs/dev/plans/smoothing-judge-plan.md` (a third scored question
   in B8's batched call, the rubric hard-coded from Jeff's custom
   prompts' "reality check, not a sycophantic yes-man" contract, the
@@ -196,6 +196,13 @@ typed), the chat call runs only when the verdict says it is needed.
   v2 shape with a v1 mapping). Not from the brainstorm either -
   Jeff's proposal (2026-11-20), the second check plugging into B8's
   machinery.
+- **B10 - The dynamic smoothing rubric.** PLANNED - see
+  `docs/dev/plans/dynamic-smoothing-rubric-plan.md` (the samskara
+  compound-summary regen pass builds a per-user smoothing rubric
+  alongside the summary; the composite stage appends it to the
+  smoothing question as calibration that can only sharpen the fixed
+  fleet rubric, never weaken it). Jeff's follow-on to B9 - the
+  dynamic layer he'd deferred in the D1 ruling.
 
 **Not fits:** auto-title, summary, digest, samskara formation
 (generation); intuition perception (needs the 1M window; the 32k cap

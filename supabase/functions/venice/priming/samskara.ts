@@ -89,6 +89,53 @@ export async function getCompoundSummary(
   return row.summary;
 }
 
+/**
+ * The B10 per-user smoothing rubric read: the sibling of
+ * getCompoundSummary (same row, same swallow-to-null contract, same
+ * stale ceiling) consumed ONLY by the composite stage's smoothing
+ * question as judge-time calibration - never a system prompt (the
+ * priming-hazard rule). Null = cold start / stale / failed build;
+ * the fixed fleet rubric runs alone.
+ */
+export async function getSmoothingRubric(
+  admin: SupabaseClient,
+  userId: string,
+  log: EdgeLogger,
+): Promise<string | null> {
+  let row: {
+    smoothing_rubric: string | null;
+    last_regen_at: string | null;
+  } | null;
+  try {
+    const { data, error } = await admin
+      .from('samskara_compound_summary')
+      .select('smoothing_rubric, last_regen_at')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    row = (data ?? null) as typeof row;
+  } catch (err) {
+    log.debug('smoothing rubric read failed', err);
+    return null;
+  }
+  if (!row || !row.smoothing_rubric || row.smoothing_rubric.length === 0) {
+    log.debug('smoothing rubric: empty (cold start)');
+    return null;
+  }
+  if (row.last_regen_at) {
+    const ageMs = Date.now() - new Date(row.last_regen_at).getTime();
+    if (ageMs > STALE_CEILING_HOURS * 60 * 60 * 1000) {
+      log.debug('smoothing rubric: stale, ignoring', {
+        ageHours: Math.round(ageMs / 3_600_000),
+        ceilingHours: STALE_CEILING_HOURS,
+      });
+      return null;
+    }
+  }
+  log.debug('smoothing rubric: loaded', { chars: row.smoothing_rubric.length });
+  return row.smoothing_rubric;
+}
+
 /** Row shape returned by the `samskara_fire_top_k` RPC (snake_case wire shape). */
 interface FireRow {
   id: string;

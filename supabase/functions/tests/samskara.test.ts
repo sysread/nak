@@ -16,6 +16,7 @@ const {
   RELATOR_PROMPT,
   MINTER_PROMPT,
   COMPOUND_SUMMARY_PROMPT,
+  SMOOTHING_RUBRIC_PROMPT,
   SAMSKARA_MODEL,
   TAIL_ASSIMILATE_CAP,
   SWEEP_ASSIMILATE_CAP,
@@ -36,6 +37,7 @@ const {
   subtractVector,
   doubtForAssimilation,
   isCleanSummaryParagraph,
+  isCleanRubricBlock,
   insertMint,
   parseVector,
   stripJsonFence,
@@ -159,6 +161,36 @@ Deno.test('compound summary prompt asks for candor without hostility', () => {
   assert(COMPOUND_SUMMARY_PROMPT.includes('Do not invent\nfriction'));
   assert(COMPOUND_SUMMARY_PROMPT.includes('do not lead with it'));
   assert(COMPOUND_SUMMARY_PROMPT.includes('clear-eyed, not wary'));
+});
+
+Deno.test('the smoothing-rubric prompt carries the floor rule (specialize, never weaken)', () => {
+  // The bless-the-disease guard: a per-user rubric built from the
+  // user's own patterns could license softer behavior if it could
+  // weaken the fleet standard. The prompt must name the fixed
+  // standard as the MINIMUM and forbid weakening it.
+  assert(SMOOTHING_RUBRIC_PROMPT.includes('MINIMUM'));
+  assert(SMOOTHING_RUBRIC_PROMPT.includes('only ADD or SHARPEN'));
+  assert(SMOOTHING_RUBRIC_PROMPT.includes('must not\nweaken, soften, or license exceptions'));
+  // The grounding rule: tells come from the claims, not invention.
+  assert(SMOOTHING_RUBRIC_PROMPT.includes('Ground every tell in the claims'));
+});
+
+Deno.test('rubric shape guard: short prose only - cap, no structure', () => {
+  const clean =
+    'This user reads primary sources and distrusts summaries; validating a ' +
+    'surface-level claim about distributed systems would be smoothing for them.';
+  assert(isCleanRubricBlock(clean));
+  assert(isCleanRubricBlock('  A short clean block.  '));
+  // The 600-char cap.
+  assert(!isCleanRubricBlock('x'.repeat(601)));
+  // Headings, lists, JSON braces, and the json word are structure leaks.
+  assert(!isCleanRubricBlock('## Calibration\nThis user wants facts.'));
+  assert(!isCleanRubricBlock('- tell one\n- tell two'));
+  assert(!isCleanRubricBlock('1. First tell'));
+  assert(!isCleanRubricBlock('{"tell": "x"}'));
+  assert(!isCleanRubricBlock('The user prefers json output.'));
+  // Empty never validates.
+  assert(!isCleanRubricBlock('   '));
 });
 
 Deno.test('summary shape guard accepts a clean single third-person paragraph', () => {

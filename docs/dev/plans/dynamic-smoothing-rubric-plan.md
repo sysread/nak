@@ -171,7 +171,7 @@ start) or a failed build runs the fixed rubric alone - fail-open.
    pin, in the schema/RPC test surface); the body assertion (the
    calibration rides the smoothing question ONLY - not clarity,
    not the system prompt).
-6. **Docs + QA**: `samskara.md` gains the second output; 
+6. **Docs + QA**: `samskara.md` gains the second output;
    `clarity.md` the dynamic layer; the QA doc the arms.
 7. **Gate, refine, QA, land.** The standard loop.
 

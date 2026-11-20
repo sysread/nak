@@ -8441,11 +8441,24 @@ end $$;
 create table if not exists public.samskara_compound_summary (
   user_id uuid primary key references auth.users(id) on delete cascade,
   summary text,
+  -- The B10 per-user smoothing rubric: built by the same regen pass
+  -- (a second model call over the same top-samskaras payload) and
+  -- appended to the composite stage's smoothing question as
+  -- user-specific calibration. Null = never built (pre-B10 rows,
+  -- cold start) or the build failed and the coalesce kept an older
+  -- value. Specializes the fleet rubric; never replaces it.
+  smoothing_rubric text,
   samskara_count_at_regen int not null default 0,
   last_regen_at timestamptz not null default now(),
   regen_claim_holder text,
   regen_claim_expires timestamptz
 );
+
+-- The idempotent ALTER for databases where the table already exists
+-- (schema.sql re-applies start-to-finish; the CREATE above is a no-op
+-- there - the PR #524 failure class).
+alter table public.samskara_compound_summary
+  add column if not exists smoothing_rubric text;
 
 alter table public.samskara_compound_summary enable row level security;
 
@@ -10760,10 +10773,14 @@ end $$;
 drop function if exists public.samskara_save_compound_summary_if_claimed(
   text, text, int
 );
+drop function if exists public.samskara_save_compound_summary_if_claimed(
+  text, text, int, uuid
+);
 create or replace function public.samskara_save_compound_summary_if_claimed(
   p_holder_id text,
   p_summary text,
   p_samskara_count int,
+  p_smoothing_rubric text default null,
   p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
@@ -10773,6 +10790,13 @@ declare
 begin
   update public.samskara_compound_summary
      set summary = p_summary,
+         -- The B10 wipe guard: a null rubric (the build failed while
+         -- the summary succeeded) keeps the stored rubric - one bad
+         -- build must not silence the dynamic layer until the next
+         -- regen trigger. The summary itself is unconditional: a
+         -- null summary means the probe saved nothing at all (the
+         -- freshness contract owns last_regen_at).
+         smoothing_rubric = coalesce(p_smoothing_rubric, smoothing_rubric),
          samskara_count_at_regen = p_samskara_count,
          last_regen_at = now(),
          regen_claim_holder = null,

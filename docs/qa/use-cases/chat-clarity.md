@@ -48,6 +48,18 @@ the rewrite with zero sequencing code.
    appear (the D10 apply-gate fix's end-to-end proof).
 8. (B9) Trigger one wiki-family turn with the setting on: the block
    embeds and the agent behaves.
+9. (B10) Calibration arm: force a summary regen for the dev profile
+   (backdate `last_regen_at`, run the sweep tick - the
+   samskara-formation precondition pattern); assert the stored row's
+   rubric names tells consistent with the fixed standard; a turn
+   with the toggle on shows `smoothingRubricChars>0` in the checks
+   debug line.
+10. (B10) Cold-start arm: a user with no summary row runs a turn;
+    `smoothingRubricChars=0`; the judge behaves as B9 shipped.
+11. (B10) Wipe-guard arm (SQL-level): with a good rubric stored,
+    call `samskara_save_compound_summary_if_claimed` with
+    `p_smoothing_rubric = null`; the stored rubric survives (the
+    coalesce).
 
 ## Expected
 
@@ -72,6 +84,11 @@ the rewrite with zero sequencing code.
   never buries a chip).
 - (8) The wiki turn behaves as before; no clarity artifacts in its
   output.
+- (9) The rubric row lands with grounded tells; the judge's call
+  carries the calibration (`smoothingRubricChars>0`).
+- (10) The cold-start turn is indistinguishable from B9 (the fixed
+  rubric alone).
+- (11) The coalesce keeps the stored rubric.
 
 ## Cleanup
 

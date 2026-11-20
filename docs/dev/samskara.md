@@ -569,10 +569,22 @@ Cached prose, one row per user. The always-on block that rides
 at the top of every system prompt.
 
 - `user_id uuid primary key`, `summary text`,
+  `smoothing_rubric text`,
   `samskara_count_at_regen int`, `last_regen_at timestamptz`,
   `regen_claim_holder text`, `regen_claim_expires timestamptz`.
 - Per-row claim so multiple devices coordinate regeneration
   instead of duplicating the fast-model call.
+- **The B10 second output**: the same regen pass builds a per-user
+  smoothing rubric (a second, independent model call over the same
+  top-samskaras payload, run in parallel) - the calibration the
+  composite stage's smoothing question appends at judge time (see
+  `./clarity.md`). The rubric can only SPECIALIZE the fleet
+  standard (the fixed anchors always ride); it never replaces it,
+  and it never rides a system prompt (the priming-hazard rule -
+  detection-side material only). Failure semantics: a failed rubric
+  build coalesces at the save RPC (null keeps the stored rubric); a
+  failed SUMMARY build saves nothing at all (the freshness contract
+  owns `last_regen_at`), deferring the built rubric one regen pass.
 
 ## Contracts
 
