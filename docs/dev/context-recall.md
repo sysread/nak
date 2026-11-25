@@ -147,7 +147,7 @@ of the dead mid-turn title trigger):
 - **`mood`** - the user's valence band or confidence column changed
   since the last write.
 - **`stale`** - either staleness fuse tripped: `STALE_FUSE_ROUNDS`
-  (8 user-rounds) without a refresh, OR `STALE_FUSE_MS` (1 hour)
+  (12 user-rounds) without a refresh, OR `STALE_FUSE_MS` (1 hour)
   wall-clock since the cached payload was written. The wall-clock arm
   catches a conversation resumed after a pause, where the round
   counter barely advanced. See intuition.md for the full rationale -

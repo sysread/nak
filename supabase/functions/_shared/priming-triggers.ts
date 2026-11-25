@@ -31,8 +31,11 @@ export type IntuitionTrigger = 'title' | 'mood' | 'stale' | 'cold' | 'pivot';
  *  conversation that drifts under the mood threshold still gets a fresh
  *  read eventually. Server-only - the round fuse feeds the scheduling
  *  decision, which lives here; the browser keeps only the wall-clock
- *  bound (STALE_FUSE_MS) for its injection guard. */
-export const STALE_FUSE_ROUNDS = 8;
+ *  bound (STALE_FUSE_MS) for its injection guard. 8 initially, retuned
+ *  to 12 after reports that refreshes fired too often; the same fuse
+ *  gates the context-recall pipeline and (through its gather) the
+ *  follow-ups ask cadence, so both stretch with this dial. */
+export const STALE_FUSE_ROUNDS = 12;
 
 /** Wall-clock companion to STALE_FUSE_ROUNDS (one hour). The round fuse
  *  only counts user turns, so a conversation resumed hours later with a

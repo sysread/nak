@@ -241,7 +241,9 @@ Two hazards this split creates, both guarded:
 - **Due asks surface only at refresh boundaries.** The gather runs
   when a context-recall trigger fires: `cold` (a thread with no
   cached payload - i.e. a NEW thread), a mood shift, or the stale
-  fuse (8 user-rounds / 1h). Between boundaries the cached note is
+  fuse (12 user-rounds / 1h - the fuse stretched from 8 when the
+  refresh dials were retuned; the ask cadence stretched with it).
+  Between boundaries the cached note is
   re-injected as-is. Two consequences: (a) a loop that becomes due
   mid-thread will not be asked about until the next boundary in
   that thread - the reliable moment for the ask is the next

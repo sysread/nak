@@ -182,7 +182,11 @@ export async function claritySettingOn(
 // scale's calibration; the live distribution re-accumulates from
 // real turns.
 export const REWRITE_SCORE_THRESHOLD = 1.5;
-export const SMOOTHING_REWRITE_THRESHOLD = 1.5;
+// The smoothing bar sits lower than clarity's: the smoothing judge was
+// reported firing rewrites too often at 1.5. Structural retune (1.5 was
+// never distribution-calibrated either) - watch the chip scores and
+// walk this constant if the 1.3 band misfires.
+export const SMOOTHING_REWRITE_THRESHOLD = 1.3;
 
 // The checks the composite stage runs, in canonical order.
 export const CLARITY_CHECKS = ['clarity', 'smoothing'] as const;

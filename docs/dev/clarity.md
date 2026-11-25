@@ -43,8 +43,11 @@ the original.
   `./dynamic-smoothing-rubric-plan.md` and the samskara doc's
   `samskara_compound_summary` section.
 - **The rewrite** - the failed set (the checks whose parsed score
-  sits at or below their threshold, 1.5 each: between "multiple
-  violations" and "minor") on a prose response triggers ONE streamed
+  sits at or below their threshold: 1.5 for clarity, 1.3 for
+  smoothing - both between "multiple violations" and "minor";
+  smoothing is lower because its rewrite is the more disruptive
+  and it was firing too often) on a prose response triggers ONE
+  streamed
   rewrite: a NEW assistant message below the original, assembled from
   exactly the failed checks' corrective instructions (clarity: the
   same facts plainer; smoothing: the facts as they are, corrections

@@ -245,24 +245,23 @@ describe('AGENT_MODELS (background agents)', () => {
     }
   });
   it('groups roles by model id as expected', () => {
-    // glm-5-3-flash backs every slot except intuition: it covers each
-    // slot's binding constraint at once (1M window for the thread
-    // readers, private serving for the memory-bearing prompts, low
-    // cost and latency for the critical-path sub-calls). The id can
-    // reason and its serving default effort is high, so every call
+    // glm-5-3-flash backs every slot except the intuition pair: it
+    // covers each slot's binding constraint at once (1M window for the
+    // thread readers, private serving for the memory-bearing prompts,
+    // low cost and latency for the critical-path sub-calls). The id
+    // can reason and its serving default effort is high, so every call
     // site pins the thinking pass explicitly - see the AGENT_MODELS
     // docblock in src/lib/models/index.ts for the per-slot discipline
     // and the known-good fallback ids if a surface regresses.
-    // intuition is the first exception: a dense non-reasoning id
-    // (mistral) for the drive + synthesis stages, whose inputs are
-    // short. intuitionPerception is the second: deepseek-v4-flash-0731-
-    // fast (1M window) for the perception stage, which reads the
-    // entire untrimmed transcript.
+    // Both intuition slots ride the same dense non-reasoning id
+    // (mistral): the pipeline is awaited on the pre-turn critical
+    // path, the pulse is a gut read, and the perception transcript is
+    // head-trimmed server-side so the 256k window holds. The retained
+    // intuitionPerception slot exists so the perception read can be
+    // repointed to a bigger-window id independently.
     for (const [role, modelId] of Object.entries(AGENT_MODELS) as Array<[AgentRole, string]>) {
-      if (role === 'intuition') {
+      if (role === 'intuition' || role === 'intuitionPerception') {
         expect(modelId).toBe('mistral-small-3-2-24b-instruct');
-      } else if (role === 'intuitionPerception') {
-        expect(modelId).toBe('deepseek-v4-flash-0731-fast');
       } else {
         expect(modelId).toBe('z-ai-glm-5-3-flash');
       }

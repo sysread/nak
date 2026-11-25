@@ -76,11 +76,13 @@ Deno.test('both rubrics have four ordered levels', () => {
   assertEquals(SMOOTHING_RUBRIC_LEVELS.length, 4);
 });
 
-Deno.test('both thresholds sit between multiple-violations and minor (0-indexed)', () => {
+Deno.test('each threshold sits between multiple-violations and minor (0-indexed)', () => {
   // Live-verified wire: the score questions are 0-indexed (0 = worst
-  // level, 3 = clean).
+  // level, 3 = clean). Clarity keeps the shared 1.5 bar; smoothing is
+  // retuned lower (1.3) because the judge was firing rewrites too
+  // often - the structural band (between levels 1 and 2) still holds.
   assertEquals(REWRITE_SCORE_THRESHOLD, 1.5);
-  assertEquals(SMOOTHING_REWRITE_THRESHOLD, 1.5);
+  assertEquals(SMOOTHING_REWRITE_THRESHOLD, 1.3);
 });
 
 Deno.test('mechanical scan: detects the mechanical tells', () => {
@@ -112,6 +114,10 @@ Deno.test('deriveFailedChecks: the composite trigger table (B9 D4)', () => {
   assertEquals(deriveFailedChecks({ clarity: 2.9, smoothing: 0.8 }), ['smoothing']);
   assertEquals(deriveFailedChecks({ clarity: 0.8, smoothing: 0.8 }), ['clarity', 'smoothing']);
   assertEquals(deriveFailedChecks({ clarity: 2.9, smoothing: 2.9 }), []);
+  // The smoothing band: 1.3 is the retuned bar, so a borderline 1.4
+  // stays (no rewrite) and 1.2 fires.
+  assertEquals(deriveFailedChecks({ clarity: 2.9, smoothing: 1.4 }), []);
+  assertEquals(deriveFailedChecks({ clarity: 2.9, smoothing: 1.2 }), ['smoothing']);
   // The drift arms: a null degrades, never widens.
   assertEquals(deriveFailedChecks({ clarity: 0.8, smoothing: null }), ['clarity']);
   assertEquals(deriveFailedChecks({ clarity: null, smoothing: 0.8 }), ['smoothing']);

@@ -222,24 +222,6 @@ export const MODELS = {
     supportsVision: true,
     supportsResponseFormat: true,
   },
-  'deepseek-v4-flash-0731-fast': {
-    id: 'deepseek-v4-flash-0731-fast',
-    // DeepSeek V4 Flash 0731 on Venice's fast serving path. 1M context
-    // window, reasoning-capable (default effort HIGH - callers must pin
-    // the thinking pass). Registered for the intuition perception stage,
-    // which reads the entire untrimmed thread transcript and needs the
-    // full window a long thread can fill. The rest of the intuition
-    // pipeline (drives + synthesis) rides the smaller mistral slot.
-    // Same model family as deepseek-v4-flash, which leaked
-    // `<｜begin▁of▁sentence｜>` at the head of replies - the flag stays
-    // on as a precaution, though the streaming guard it arms does not
-    // run on the non-streaming calls the intuition pipeline makes.
-    contextWindow: 1_000_000,
-    supportsReasoning: true,
-    supportsVision: false,
-    supportsResponseFormat: true,
-    leaksSpecialTokens: true,
-  },
   'mistral-small-3-2-24b-instruct': {
     id: 'mistral-small-3-2-24b-instruct',
     // Dense 24B non-reasoning instruct, privately served by Venice.
@@ -247,9 +229,11 @@ export const MODELS = {
     // pointing here): the pulse is a gut read, not a reasoned take, so
     // a non-reasoning model is the right shape - same rationale that
     // moved the second-thoughts reviewer off a reasoning id. Also the
-    // cheapest private per-token id on the list, and 256k of context
-    // covers the perception stage's full-transcript read for any
-    // realistic thread.
+    // cheapest private per-token id on the list, and the whole
+    // intuition pipeline rides it: perception over the transcript
+    // (head-trimmed server-side as a window safety valve), drive
+    // reactions, synthesis. Awaiting the pre-turn critical path makes
+    // latency its only constraint.
     contextWindow: 256_000,
     supportsReasoning: false,
     supportsVision: false,
@@ -552,26 +536,20 @@ export type AgentRole =
  *     site.
  *
  * intuition is the first exception: it points at
- * mistral-small-3-2-24b-instruct. It is awaited on the pre-turn
- * critical path, so latency is its only constraint, and the pulse is a
- * gut read, not a reasoned take - a dense non-reasoning id skips the
- * thinking-pass discipline entirely (the intuition pipeline's
+ * mistral-small-3-2-24b-instruct. The whole intuition pipeline rides
+ * it - perception (stage 1, over the transcript), drive reactions
+ * (stage 2), synthesis (stage 3) - because it is awaited on the
+ * pre-turn critical path, so latency is its only constraint, and the
+ * pulse is a gut read, not a reasoned take: a dense non-reasoning id
+ * skips the thinking-pass discipline entirely (the pipeline's
  * disable_thinking flag is accepted but moot on it) and is the
- * cheapest private id per token. The mistral id backs the drive
- * reactions (stage 2) and synthesis (stage 3), whose inputs are the
- * short perception text plus five short reactions - well under
- * mistral's 256k window.
- *
- * intuitionPerception is the second exception: it points at
- * deepseek-v4-flash-0731-fast (1M window, fast serving path,
- * reasoning-capable so the thinking pin is load-bearing again). Stage
- * 1 of the intuition pipeline - perception - reads the ENTIRE
- * untrimmed thread transcript, and a long thread on the 1M-window chat
- * model can fill a context mistral cannot hold. The split keeps the
- * cheap non-reasoning id on the small-input stages and reserves the
- * big-window id for the one stage that needs it. If perception
- * regresses on deepseek, mistral-small is the fallback (accepting the
- * 256k ceiling on very long threads).
+ * cheapest private id per token. The transcript read is head-trimmed
+ * server-side (PERCEPTION_TRANSCRIPT_MAX_CHARS in
+ * venice/priming/intuition.ts) so a monster thread cannot overflow
+ * the 256k window. If the dense id regresses on the perception read,
+ * deepseek-v4-flash-0731-fast (1M window) is the recorded fallback
+ * direction - re-add its registry entry (commit 31ae4063 records the
+ * original split rationale).
  *
  * The retired grocerySection slot rode a decision model, not a chat
  * ModelSpec: the grocery classifier moved to the beta Decisions
@@ -614,7 +592,7 @@ export const AGENT_MODELS = {
   webSearch:          'z-ai-glm-5-3-flash',
   researchDocs:       'z-ai-glm-5-3-flash',
   intuition:          'mistral-small-3-2-24b-instruct',
-  intuitionPerception:'deepseek-v4-flash-0731-fast',
+  intuitionPerception:'mistral-small-3-2-24b-instruct',
   recall:             'z-ai-glm-5-3-flash',
   conversationRecall: 'z-ai-glm-5-3-flash',
   wikiRecall:         'z-ai-glm-5-3-flash',

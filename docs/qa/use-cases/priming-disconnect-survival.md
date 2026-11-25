@@ -7,8 +7,11 @@ Turn-entry priming runs server-side, as the opening stage of
 `runServerPriming`), under the same `EdgeRuntime.waitUntil` that keeps
 the streaming half alive across a disconnect. This case proves the
 durability claim end to end: a turn whose tab closes WHILE priming is
-still running (the slowest part - intuition is ~6 LLM calls) comes back
-to a fully-primed, finished answer, not an unprimed or dropped one. It
+still running (intuition is 3 LLM calls; each pipeline is also raced
+against a 5s deadline - `PRIME_PIPELINE_TIMEOUT_MS` - and a timed-out
+pipeline lands late through its own waitUntil-registered persist)
+comes back to a fully-primed, finished answer, not an unprimed or
+dropped one. It
 also exercises feedback parity - the spinner, the Intuition / Recall
 modals + pills, and the per-source log-drawer entries are now driven by
 the `PrimingEvent`s the function publishes, not by local callbacks
@@ -72,6 +75,13 @@ The per-pipeline retrieval correctness lives in each feature's own case
   soft). The turn did NOT ship unprimed and did NOT drop. This is the
   core regression: before the relocation, closing the tab during priming
   could ship an unprimed turn or no turn.
+- **Deadline interaction**: if a pipeline is slow enough to trip
+  `PRIME_PIPELINE_TIMEOUT_MS` (a `priming timeout` line under its
+  source), the turn's wire history carries the cached or fallback
+  intuition block instead - the REAL payload then arrives via the
+  late persist and appears on the thread row + the next turn. Either
+  way the thread row must carry a payload after the late persist
+  settles (give it a minute).
 - **Parity**: nothing about the spinner / modal / pill / log surfaces
   should look different from before the relocation - only their trigger
   moved from local callbacks to the stream channel.

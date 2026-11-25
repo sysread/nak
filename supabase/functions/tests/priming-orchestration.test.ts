@@ -26,7 +26,7 @@ import {
   type FiredSamskara,
   type FireResult,
 } from '../venice/priming/samskara-format.ts';
-import { STALE_FUSE_MS } from '../_shared/priming-triggers.ts';
+import { STALE_FUSE_MS, STALE_FUSE_ROUNDS } from '../_shared/priming-triggers.ts';
 
 interface Msg {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -370,5 +370,203 @@ Deno.test('a stale cached payload that did not refresh is suppressed from the sp
     !history.some((m) => (m.content ?? '').includes(INTUITION_THINK_MARKER)),
     'stale intuition payload must not be spliced',
   );
+  // The fallback pulse is eligibility-gated: no model id means the
+  // pipeline never committed, so even a stale cache + no refresh may
+  // not splice the generic monologue onto a disabled feature.
+  assert(
+    !history.some((m) => (m.content ?? '').includes('i need to focus')),
+    'no fallback pulse with intuition disabled',
+  );
   assertEquals(history.length, 3);
+});
+
+// --- The pregame deadline + fallback pulse -----------------------------------
+
+const FALLBACK_LINE = 'i need to focus on clear writing';
+
+// A deferred the test resolves manually - simulates a pipeline still
+// running (or hung on Venice) past the injected deadline.
+function deferredIntuition() {
+  let resolve!: (v: IntuitionPayload) => void;
+  const promise = new Promise<IntuitionPayload | null>((r) => {
+    resolve = (v) => r(v);
+  });
+  return { promise, resolve };
+}
+
+Deno.test('deadline race: a hung intuition pipeline splices the fallback pulse and persists nothing', async () => {
+  const history = baseHistory();
+  const events: Record<string, unknown>[] = [];
+  const updates: Record<string, unknown>[] = [];
+  const hung = deferredIntuition();
+  await runServerPriming({
+    adminClient: makeAdmin({ intuition_payload: null, context_recall_payload: null }, updates),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history,
+    publisher: makePublisher(events),
+    priming: { intuitionModelId: 'fast', intuitionMood: { band: 1, column: 'confident' } },
+    runId: 'test',
+    pipelineTimeoutMs: 20,
+    deps: makeDeps({ runIntuitionPipeline: () => hung.promise }),
+  });
+
+  // The fallback pulse is the intuition think row: same marker, generic
+  // synthesis, spliced at the usual position.
+  const intuitionRow = history.find((m) => (m.content ?? '').includes(INTUITION_THINK_MARKER));
+  assert(intuitionRow, 'fallback pulse spliced');
+  assert(intuitionRow.content!.includes(FALLBACK_LINE), 'generic synthesis, not a hung payload');
+  // This-turn-only: the pulse never persists and never publishes.
+  assertEquals(updates.filter((u) => 'intuition_payload' in u).length, 0);
+  assertEquals(count(events, 'intuition_payload'), 0);
+  // The liveness pair still brackets the committed pipeline (the late
+  // end event fires when the detached work settles, after BEGIN).
+  assertEquals(count(events, 'priming_start', 'intuition'), 1);
+});
+
+Deno.test('deadline race: recall keeps its own deadline - a hung recall does not mask a fast intuition', async () => {
+  const history = baseHistory();
+  const events: Record<string, unknown>[] = [];
+  const updates: Record<string, unknown>[] = [];
+  await runServerPriming({
+    adminClient: makeAdmin({ intuition_payload: null, context_recall_payload: null }, updates),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history,
+    publisher: makePublisher(events),
+    priming: { intuitionModelId: 'fast', intuitionMood: { band: 1, column: 'confident' }, contextRecallEnabled: true },
+    runId: 'test',
+    pipelineTimeoutMs: 20,
+    deps: makeDeps({
+      runIntuitionPipeline: () => Promise.resolve(intuitionPayload()),
+      runContextRecallPipeline: () => new Promise(() => {}),
+    }),
+  });
+
+  // The intuition payload won its own race: persisted + published + the
+  // real synthesis spliced, while recall is still hung.
+  assert(updates.some((u) => 'intuition_payload' in u), 'intuition persisted');
+  assertEquals(count(events, 'intuition_payload'), 1);
+  const intuitionRow = history.find((m) => (m.content ?? '').includes(INTUITION_THINK_MARKER));
+  assert(intuitionRow?.content!.includes('SYNTH'), 'real intuition think spliced, not the pulse');
+  assert(
+    !history.some((m) => (m.content ?? '').includes(FALLBACK_LINE)),
+    'no fallback pulse when the pipeline delivered',
+  );
+});
+
+Deno.test('deadline race: the late payload lands via waitUntil with the round guard', async () => {
+  const events: Record<string, unknown>[] = [];
+  const updates: Record<string, unknown>[] = [];
+  const hung = deferredIntuition();
+  await runServerPriming({
+    adminClient: makeAdmin({ intuition_payload: null, context_recall_payload: null }, updates),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history: baseHistory(),
+    publisher: makePublisher(events),
+    priming: { intuitionModelId: 'fast', intuitionMood: { band: 1, column: 'confident' } },
+    runId: 'test',
+    pipelineTimeoutMs: 20,
+    deps: makeDeps({ runIntuitionPipeline: () => hung.promise }),
+  });
+  assertEquals(count(events, 'intuition_payload'), 0, 'nothing published at deadline time');
+
+  // The pipeline settles after the turn moved on: the late continuation
+  // persists + publishes it for the NEXT turn.
+  hung.resolve(intuitionPayload({ computed_at_round: 2 }));
+  await new Promise((r) => setTimeout(r, 10));
+  assert(updates.some((u) => 'intuition_payload' in u), 'late persist landed');
+  assertEquals(count(events, 'intuition_payload'), 1);
+
+  // The round guard: a payload OLDER than the stored cache is dropped.
+  const guardedUpdates: Record<string, unknown>[] = [];
+  const guardedEvents: Record<string, unknown>[] = [];
+  const newerHung = deferredIntuition();
+  await runServerPriming({
+    adminClient: makeAdmin(
+      { intuition_payload: intuitionPayload({ computed_at_round: 5 }), context_recall_payload: null },
+      guardedUpdates,
+    ),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history: baseHistory(),
+    publisher: makePublisher(guardedEvents),
+    priming: { intuitionModelId: 'fast', intuitionMood: { band: 1, column: 'confident' } },
+    runId: 'test',
+    pipelineTimeoutMs: 20,
+    deps: makeDeps({ runIntuitionPipeline: () => newerHung.promise }),
+  });
+  newerHung.resolve(intuitionPayload({ computed_at_round: 2 }));
+  await new Promise((r) => setTimeout(r, 10));
+  assertEquals(
+    guardedUpdates.filter((u) => 'intuition_payload' in u).length,
+    0,
+    'a late payload older than the stored cache must not regress it',
+  );
+  assertEquals(count(guardedEvents, 'intuition_payload'), 0);
+});
+
+Deno.test('deadline race: a timed-out pipeline over a fresh cache splices the cache, never the pulse', async () => {
+  // The veto splice shape: the composed trigger fired (mood-shift here;
+  // a gate veto composes to the same splice-time state - fresh null,
+  // wall-fresh cache), so the cache branch of the injection guard wins
+  // and the pulse must not join it.
+  const cacheRound = 1;
+  const currentRound = 1 + STALE_FUSE_ROUNDS;
+  const history: Msg[] = [
+    { role: 'system', content: 'BASELINE' },
+    ...Array.from({ length: currentRound }, (): Msg => ({ role: 'user', content: 'turn' })),
+    { role: 'system', content: 'METADATA' },
+  ];
+  const cached = intuitionPayload({
+    synthesis: 'CACHED SYNTH',
+    computed_at_round: cacheRound,
+    computed_at_at: Date.now(),
+  });
+  const events: Record<string, unknown>[] = [];
+  const hung = deferredIntuition();
+  await runServerPriming({
+    adminClient: makeAdmin({ intuition_payload: cached, context_recall_payload: null }, []),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history,
+    publisher: makePublisher(events),
+    priming: { intuitionModelId: 'fast', intuitionMood: { band: 1, column: 'confident' } },
+    runId: 'test',
+    pipelineTimeoutMs: 20,
+    deps: makeDeps({ runIntuitionPipeline: () => hung.promise }),
+  });
+
+  const intuitionRows = history.filter((m) => (m.content ?? '').includes(INTUITION_THINK_MARKER));
+  assertEquals(intuitionRows.length, 1, 'exactly one intuition think row');
+  assert(intuitionRows[0].content!.includes('CACHED SYNTH'), 'the fresh cache injected');
+  assert(
+    !intuitionRows[0].content!.includes(FALLBACK_LINE),
+    'no double-splice: the pulse must not join a fresh cache',
+  );
+});
+
+Deno.test('deadline race: a pipeline that wins its race persists exactly once', async () => {
+  const updates: Record<string, unknown>[] = [];
+  await runServerPriming({
+    adminClient: makeAdmin({ intuition_payload: null, context_recall_payload: null }, updates),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history: baseHistory(),
+    publisher: makePublisher([]),
+    priming: { intuitionModelId: 'fast', intuitionMood: { band: 1, column: 'confident' }, contextRecallEnabled: true },
+    runId: 'test',
+    pipelineTimeoutMs: 5000,
+    deps: makeDeps(),
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  assertEquals(updates.filter((u) => 'intuition_payload' in u).length, 1);
+  assertEquals(updates.filter((u) => 'context_recall_payload' in u).length, 1);
 });

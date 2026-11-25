@@ -6,11 +6,11 @@
 // pivot subject completely while the mood band holds and the round
 // count stays under the fuse - the next turn rides a stale synthesis -
 // and a slow same-topic conversation pays the full refresh fan-out
-// every 8 rounds even when the cache still informs perfectly. This
-// module asks a decision model (clef-api, private tier - the user's
-// own words are in the state) ONE noul question about the turn:
-// does the user's message pivot the topic or raise something the
-// cached payloads cannot inform?
+// every fuse interval even when the cache still informs perfectly.
+// This module asks a decision model (clef-api, private tier - the
+// user's own words are in the state) ONE noul question about the
+// turn: does the user's message pivot the topic or raise something
+// the cached payloads cannot inform?
 //
 // The gate COMPOSES with the deterministic evaluator, it never
 // replaces it (plan docs/dev/plans/priming-pivot-gate-plan.md D1):
@@ -41,21 +41,24 @@ import { veniceDecision } from '../../_shared/venice.ts';
 import { answersOf, DECISION_CALL_TIMEOUT_MS, noulOf } from '../agents/_decision_state.ts';
 
 /** The gate's deadline, anchored to its own start. Same value as the
- *  samskara race's SAMSKARA_PRIMING_TIMEOUT_MS (priming.ts:68) and
+ *  samskara race's SAMSKARA_PRIMING_TIMEOUT_MS (priming.ts) and
  *  started at the same instant: the trigger evaluation waits for
  *  both, so the stage's wait is max of the two mins - never past the
  *  ceiling today's path already allows. Change the two together. */
 export const PRIME_GATE_TIMEOUT_MS = 1500;
 
 /** The noul probability at or above which the gate fires a refresh.
- *  The Decisions guide: probabilities vary between requests, so this
- *  was calibrated against real transcripts before landing (see the
- *  plan's D7) - it is the only knob. */
-export const GATE_FIRE_THRESHOLD = 0.7;
+ *  Initial judgment 0.7, retuned to 0.85 after reports that the gate
+ *  fired refreshes too often (the plan's D7 calibration step never
+ *  produced a recorded artifact, so this is structural judgment, not
+ *  a calibrated value - the noul log lines are where the correction
+ *  comes from). It is the only knob. */
+export const GATE_FIRE_THRESHOLD = 0.85;
 
 /** Caps so the state digest stays a digest: low thousands of tokens,
  *  far under clef-api's 32k, and never the raw transcript (the
- *  perception pipeline owns the 1M-window transcript read). */
+ *  perception pipeline owns the full-transcript read, head-trimmed to
+ *  its own window safety valve). */
 const USER_TEXT_MAX_CHARS = 4000;
 const SYNTHESIS_HEAD_CHARS = 600;
 const NOTE_HEAD_CHARS = 400;

@@ -69,6 +69,27 @@ import { runContextRecallPipeline } from './priming/context-recall.ts';
 // to the first token.
 const SAMSKARA_PRIMING_TIMEOUT_MS = 1500;
 
+// Hard cap on the wait for the intuition and context-recall pipelines
+// (each raced separately). The samskara/gate races above are cheaper
+// and separately bounded; this is the deadline that keeps the whole
+// pregame window bounded (~1.5s + 5s + DB roundtrips worst case). A
+// timed-out pipeline keeps running DETACHED and persists its payload
+// for the next turn (see the late-persist registration in
+// runThinkChain); this turn falls back to its cached payload if fresh,
+// else to the generic pulse below. Injectable per-call so tests do not
+// burn real clock.
+export const PRIME_PIPELINE_TIMEOUT_MS = 5000;
+
+// The fallback pulse's synthesis line - the phrasing shape the
+// pipeline's own synthesis always produces ("i need to ..."). Used
+// when the pipeline cannot deliver inside the deadline (or fails) and
+// no fresh cache exists: the turn still gets an intuition think block,
+// but a content-free one that cannot steer the model wrong. Never
+// persisted, never published as a payload event (see the splice-time
+// guards below).
+const FALLBACK_SYNTHESIS =
+  'i need to focus on clear writing and what i know about the user.';
+
 // Minimal structural shape of a wire message the priming step mutates.
 // Matches getStreamingResponse's local VeniceMessage without importing
 // its private interface.
@@ -435,6 +456,17 @@ export interface ServerPrimingOpts {
   publisher: BroadcastPublisher;
   priming?: PrimingInputs;
   signal?: AbortSignal;
+  /**
+   * Registers a promise with the edge runtime's waitUntil so the
+   * DETACHED late-persist continuations (a pipeline that outlived the
+   * pipeline deadline) survive even when the turn completes normally
+   * while they are still running. The /stream handler passes the same
+   * wrapper it gives the orchestrator. Omitted in tests - the default
+   * keeps a reference and swallows rejection, matching local dev.
+   */
+  edgeWaitUntil?: (promise: Promise<unknown>) => void;
+  /** Test injection for PRIME_PIPELINE_TIMEOUT_MS. */
+  pipelineTimeoutMs?: number;
   /** The orchestrator's per-turn correlator, for log lines. */
   runId: string;
   /** Test-only pipeline overrides. Omitted in production. */
@@ -456,6 +488,16 @@ export interface ServerPrimingOpts {
 export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
   const { adminClient, userId, threadId, apiKey, history, publisher, signal } =
     opts;
+  // The waitUntil registrar. Omitted (tests / local dev): keep a
+  // reference so a rejection isn't lost, mirroring index.ts's local
+  // fallback branch.
+  const waitUntil =
+    opts.edgeWaitUntil ??
+    ((promise: Promise<unknown>) => {
+      promise.catch(() => {
+        /* rejections surface through the logger flush */
+      });
+    });
   // Refinement turns (second-thoughts "Let me ..." button) carry their
   // own `<think>` doubt and are not a new user round, so they opt out of
   // the standard stage entirely - running it would double-fire samskara
@@ -493,6 +535,8 @@ export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
         publisher,
         priming: opts.priming ?? {},
         signal,
+        waitUntil,
+        pipelineTimeoutMs: opts.pipelineTimeoutMs ?? PRIME_PIPELINE_TIMEOUT_MS,
         samskaraLog,
         intuitionLog,
         recallLog,
@@ -606,6 +650,11 @@ interface ThinkChainOpts {
   publisher: BroadcastPublisher;
   priming: PrimingInputs;
   signal?: AbortSignal;
+  /** Registers detached late-persist continuations (see
+   *  ServerPrimingOpts.edgeWaitUntil). */
+  waitUntil: (promise: Promise<unknown>) => void;
+  /** The intuition/recall deadline (test-injectable). */
+  pipelineTimeoutMs: number;
   samskaraLog: EdgeLogger;
   intuitionLog: EdgeLogger;
   recallLog: EdgeLogger;
@@ -622,6 +671,8 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
     publisher,
     priming,
     signal,
+    waitUntil,
+    pipelineTimeoutMs,
     samskaraLog,
     intuitionLog,
     recallLog,
@@ -792,59 +843,98 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
   // switch and its COMPOSED trigger (deterministic verdict composed
   // with the pivot gate, above). The onWillRun-equivalent liveness
   // publish fires only when a pipeline commits to running, so a
-  // no-trigger turn never flashes a spinner. Run in parallel: the
-  // wall-clock cost is max(intuition, recall), not additive.
+  // no-trigger turn never flashes a spinner. Each is raced against
+  // the pipeline deadline SEPARATELY, so a slow recall cannot mask an
+  // intuition payload that finished in time (and vice versa); the
+  // stage's wall-clock stays bounded by the one deadline.
+  const intuitionWork = (async (): Promise<IntuitionPayload | null> => {
+    if (!intuitionModelId || !intuitionFinalTrigger) return null;
+    void publisher.publish({ type: 'priming_start', op: 'intuition' });
+    try {
+      return await deps.runIntuitionPipeline({
+        admin: adminClient,
+        userId,
+        apiKey,
+        threadId,
+        modelId: intuitionModelId,
+        perceptionModelId: intuitionPerceptionModelId,
+        history,
+        round: currentUserRound,
+        mood,
+        nowMs,
+        trigger: intuitionFinalTrigger,
+        signal,
+        log: intuitionLog,
+      });
+    } catch (err) {
+      intuitionLog.debug('intuition pipeline failed', err);
+      return null;
+    } finally {
+      void publisher.publish({ type: 'priming_end', op: 'intuition' });
+    }
+  })();
+  const recallWork = (async (): Promise<ContextRecallPayload | null> => {
+    if (!contextRecallEnabled || !recallFinalTrigger) return null;
+    void publisher.publish({ type: 'priming_start', op: 'recall' });
+    try {
+      return await deps.runContextRecallPipeline({
+        admin: adminClient,
+        userId,
+        apiKey,
+        threadId,
+        history,
+        round: currentUserRound,
+        mood,
+        nowMs,
+        trigger: recallFinalTrigger,
+        signal,
+        log: recallLog,
+      });
+    } catch (err) {
+      recallLog.debug('context-recall pipeline failed', err);
+      return null;
+    } finally {
+      void publisher.publish({ type: 'priming_end', op: 'recall' });
+    }
+  })();
+
   const [freshIntuition, freshRecall] = await Promise.all([
-    (async (): Promise<IntuitionPayload | null> => {
-      if (!intuitionModelId || !intuitionFinalTrigger) return null;
-      void publisher.publish({ type: 'priming_start', op: 'intuition' });
-      try {
-        return await deps.runIntuitionPipeline({
-          admin: adminClient,
+    racePipeline(
+      intuitionWork,
+      pipelineTimeoutMs,
+      waitUntil,
+      intuitionLog,
+      'intuition',
+      (payload) =>
+        persistLatePayload({
+          adminClient,
           userId,
-          apiKey,
           threadId,
-          modelId: intuitionModelId,
-          perceptionModelId: intuitionPerceptionModelId,
-          history,
-          round: currentUserRound,
-          mood,
-          nowMs,
-          trigger: intuitionFinalTrigger,
-          signal,
-          log: intuitionLog,
-        });
-      } catch (err) {
-        intuitionLog.debug('intuition pipeline failed', err);
-        return null;
-      } finally {
-        void publisher.publish({ type: 'priming_end', op: 'intuition' });
-      }
-    })(),
-    (async (): Promise<ContextRecallPayload | null> => {
-      if (!contextRecallEnabled || !recallFinalTrigger) return null;
-      void publisher.publish({ type: 'priming_start', op: 'recall' });
-      try {
-        return await deps.runContextRecallPipeline({
-          admin: adminClient,
+          column: 'intuition_payload',
+          eventName: 'intuition_payload',
+          payload,
+          readLog: intuitionLog,
+          publisher,
+        }),
+    ),
+    racePipeline(
+      recallWork,
+      pipelineTimeoutMs,
+      waitUntil,
+      recallLog,
+      'context-recall',
+      (payload) =>
+        persistLatePayload({
+          adminClient,
           userId,
-          apiKey,
           threadId,
-          history,
-          round: currentUserRound,
-          mood,
-          nowMs,
-          trigger: recallFinalTrigger,
-          signal,
-          log: recallLog,
-        });
-      } catch (err) {
-        recallLog.debug('context-recall pipeline failed', err);
-        return null;
-      } finally {
-        void publisher.publish({ type: 'priming_end', op: 'recall' });
-      }
-    })(),
+          column: 'context_recall_payload',
+          eventName: 'context_recall_payload',
+          payload,
+          readLog: recallLog,
+          publisher,
+        }),
+    ),
   ]);
 
   // Persist the fresh payloads before publishing their refresh events -
@@ -889,13 +979,137 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
       content: `<think>\n${SAMSKARA_FIRE_THINK_MARKER}\n${samskaraThinks.fire}\n</think>`,
     });
   }
+  // Intuition splice, three-way: a fresh payload or a fresh-enough
+  // cache injects; otherwise the FALLBACK PULSE injects when the
+  // pipeline actually committed to running this turn (same condition
+  // the intuitionWork IIFE gates on) - the model still sees its own
+  // intuition <think> block, but a content-free one that cannot steer.
+  // The else-if branch is keyed to the SAME injection guard the cache
+  // branch reads, not to the trigger verdict: the pivot gate can veto
+  // a round-fuse 'stale' while the cache is still wall-fresh, and
+  // keying on 'stale' there would double-splice (cached think + pulse).
   if (intuitionCache && isPayloadFreshForInjection(intuitionCache, nowMs)) {
     thinks.push(buildIntuitionThinkMessage(intuitionCache, currentUserRound));
+  } else if (intuitionModelId && intuitionFinalTrigger) {
+    thinks.push(
+      buildIntuitionThinkMessage(
+        fallbackIntuitionPayload(currentUserRound, nowMs, intuitionFinalTrigger),
+        currentUserRound,
+      ),
+    );
   }
   if (thinks.length > 0) {
     const insertAt = Math.max(0, history.length - 1);
     history.splice(insertAt, 0, ...thinks);
   }
+}
+
+// Race one pipeline against the pregame deadline. When the pipeline
+// wins, its payload resolves normally and the caller persists inline.
+// When the deadline wins, null resolves NOW and the pipeline keeps
+// running detached: its late payload (if any) lands through onLate -
+// a round-guarded cache write + payload event + logger flush,
+// registered under the orchestrator's waitUntil so a turn that
+// completes normally while the pipeline is still retrying cannot take
+// the isolate down mid-persist. An aborted turn kills the pipeline's
+// fetches with the shared signal (nothing to persist); a genuine
+// failure resolves null inside the pipeline itself (same).
+async function racePipeline<T extends IntuitionPayload | ContextRecallPayload>(
+  work: Promise<T | null>,
+  timeoutMs: number,
+  waitUntil: (promise: Promise<unknown>) => void,
+  log: EdgeLogger,
+  label: string,
+  onLate: (payload: T) => Promise<void>,
+): Promise<T | null> {
+  let workSettled = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const tracked = work.then((payload) => {
+    workSettled = true;
+    return payload;
+  });
+  const deadline = new Promise<null>((resolve) => {
+    timeoutHandle = setTimeout(() => resolve(null), timeoutMs);
+  });
+  const result = await Promise.race([tracked, deadline]);
+  if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  if (workSettled) return result;
+  log.info(
+    `priming timeout: ${label} pipeline still running; ` +
+      `proceeding with cache or the fallback pulse`,
+  );
+  waitUntil(
+    tracked.then((payload) => {
+      if (payload !== null) return onLate(payload);
+    }),
+  );
+  return null;
+}
+
+// The late-persist landing for a pipeline that beat its deadline's
+// replacement: round-guarded write, then the payload event, then the
+// logger flush (drawer delivery needs an explicit flush, and the
+// orchestrator's flush block has already run by the time this lands).
+// The guard re-reads the stored round so turn N's detached pipeline
+// cannot regress turn N+1's fresher cache; the read-then-write window
+// that remains is milliseconds wide and self-heals on the next
+// refresh.
+async function persistLatePayload<T extends IntuitionPayload | ContextRecallPayload>(opts: {
+  adminClient: SupabaseClient;
+  userId: string;
+  threadId: string;
+  column: 'intuition_payload' | 'context_recall_payload';
+  eventName: 'intuition_payload' | 'context_recall_payload';
+  payload: T;
+  readLog: EdgeLogger;
+  publisher: BroadcastPublisher;
+}): Promise<void> {
+  const { adminClient, userId, threadId, column, eventName, payload, readLog, publisher } =
+    opts;
+  try {
+    const current = await readThreadCaches(adminClient, userId, threadId, readLog);
+    const storedRound =
+      column === 'intuition_payload'
+        ? current.intuition?.computed_at_round ?? -1
+        : current.contextRecall?.computed_at_round ?? -1;
+    if (storedRound >= payload.computed_at_round) {
+      readLog.info(`late ${eventName} skipped (newer cache present)`);
+      await readLog.flush();
+      return;
+    }
+    await persistThreadCache(adminClient, userId, threadId, column, payload, readLog);
+    void publisher.publish({ type: eventName, payload });
+    await readLog.flush();
+  } catch (err) {
+    readLog.debug(`late ${eventName} persist failed`, err);
+    await readLog.flush().catch(() => {});
+  }
+}
+
+// The fallback pulse payload: a content-free intuition read for turns
+// whose pipeline could not deliver inside the deadline. The phrasing
+// matches the synthesis model's own register (FALLBACK_SYNTHESIS); the
+// perception filler reuses the ambiguous marker the pipeline itself
+// normalizes to. computed_at_round pins to the CURRENT round so the
+// think-block renderer does not append its "formed a few exchanges
+// ago" age note to a this-turn pulse. Never persisted (see the
+// splice-time guards).
+function fallbackIntuitionPayload(
+  round: number,
+  nowMs: number,
+  trigger: IntuitionTrigger,
+): IntuitionPayload {
+  return {
+    v: 1,
+    perception: 'Classification: ambiguous',
+    drives: {},
+    synthesis: FALLBACK_SYNTHESIS,
+    computed_at_round: round,
+    computed_at_band: null,
+    computed_at_column: null,
+    computed_at_at: nowMs,
+    trigger,
+  };
 }
 
 // Extract the plain text of the latest user message, flattening a

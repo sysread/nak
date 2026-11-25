@@ -333,6 +333,13 @@ export interface OrchestratorOpts {
    * network. Default: the real getStreamingCompletion.
    */
   complete?: typeof getStreamingCompletion;
+  /**
+   * Registers detached promises (the priming stage's late-persist
+   * continuations) with the edge runtime's waitUntil. The /stream
+   * handler passes its wrapper; omitted in tests - the default keeps
+   * a reference and swallows rejection.
+   */
+  edgeWaitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /**
@@ -629,6 +636,7 @@ export async function getStreamingResponse(
       publisher,
       priming: opts.priming,
       signal: ctl.signal,
+      edgeWaitUntil: opts.edgeWaitUntil,
       runId,
     });
 

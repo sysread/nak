@@ -53,12 +53,12 @@ Nak refreshes the intuition only when one of these is true:
   band (cheerful → uneasy, etc.) or flips its confidence column
   (confident → tentative or vice versa), the next turn refreshes
   before responding.
-- **Staleness fuse.** After about eight user rounds without a refresh,
-  the next turn refreshes anyway so a slow conversation doesn't
-  drift on a stale read.
+- **Staleness fuse.** After about a dozen user rounds without a
+  refresh, the next turn refreshes anyway so a slow conversation
+  doesn't drift on a stale read.
 
 If none of those triggers fires, the cached intuition is reused as-is
-and the next response runs without the seven extra calls. That's how
+and the next response runs without the three extra calls. That's how
 the layer stays cheap on chitchat and short factual turns.
 
 The first turn on a new thread always runs the pipeline once before
@@ -66,7 +66,9 @@ the response begins - that's the cold-start fire, and it's what
 makes the brain icon appear by the time the first reply lands. You
 will notice a slightly longer pause before the response starts
 streaming on that very first turn; subsequent turns reuse the cached
-read until something shifts.
+read until something shifts. If the read can't finish within a few
+seconds, the turn starts anyway - the finished read quietly applies
+to the next turn instead.
 
 While the pipeline runs, the in-progress assistant bubble shows a
 small checklist with a spinner next to **Predicting**, so the pause

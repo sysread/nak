@@ -281,9 +281,9 @@ export interface ChatLoopOptions {
   /**
    * Concrete Venice model id used by the intuition pipeline's drive
    * reactions (stage 2) and synthesis (stage 3). The perception stage
-   * (stage 1) uses `intuitionPerceptionModelId` instead, because it
-   * reads the entire transcript and needs a larger context window.
-   * Caller resolves both via agentModel. Omitted / undefined disables
+   * (stage 1) uses `intuitionPerceptionModelId` instead, a separate
+   * field so the two stages can be repointed independently. Caller
+   * resolves both via agentModel. Omitted / undefined disables
    * the intuition feature entirely on this turn - older callers (older
    * test fixtures) keep working without knowing the field exists. The
    * cache is left untouched when this is absent, so a turn without an
@@ -292,12 +292,13 @@ export interface ChatLoopOptions {
   intuitionModelId?: string;
   /**
    * Venice model id for the intuition PERCEPTION stage only - the one
-   * stage that reads the entire untrimmed thread transcript. Routed to
-   * a 1M-window id (deepseek-v4-flash-0731-fast) so a long thread does
-   * not overflow context. The drive reactions and synthesis stages
-   * ride `intuitionModelId` (mistral, 256k) because their inputs are
-   * short. Falls back to `intuitionModelId` when absent, preserving
-   * backward compat for callers that predate the split.
+   * stage that reads the thread transcript. Rides the same dense 256k
+   * id as `intuitionModelId`; the transcript is head-trimmed
+   * server-side (PERCEPTION_TRANSCRIPT_MAX_CHARS in
+   * venice/priming/intuition.ts) so a monster thread cannot overflow
+   * the window. Kept as a separate field so the perception stage can
+   * be repointed to a bigger-window id without touching the
+   * small-input stages. Falls back to `intuitionModelId` when absent.
    */
   intuitionPerceptionModelId?: string;
   /**

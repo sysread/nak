@@ -162,14 +162,24 @@ Every injector is best-effort and MUST NOT block or fail a turn:
   `SAMSKARA_PRIMING_TIMEOUT_MS`; on timeout both resolve null and are
   skipped (the underlying fire keeps running so its cohort log still
   lands). A slow Venice never adds visible latency to the first token.
+- Intuition and context recall are each raced against
+  `PRIME_PIPELINE_TIMEOUT_MS` (5s) per pipeline; the loser keeps
+  running DETACHED and lands its payload for the next turn (a
+  waitUntil-registered, round-guarded late persist). A timed-out
+  intuition degrades one rung further: fresh cache if wall-fresh,
+  else the content-free fallback pulse (see intuition.md) - the
+  think chain's shape stays stable for the model either way. Recall
+  degrades to cached-if-fresh, else nothing.
 - `runIntuitionPipeline` / `runContextRecallPipeline` swallow their own
   errors (the orchestrator wraps each in try/catch returning null) ->
-  the block is skipped.
+  the block is skipped (intuition: or the fallback pulse, per the
+  eligibility gate).
 - `applyBiasPriming` swallows errors -> the appendix is omitted (and
   its snapshot + clear writes are detached and swallowed too).
 - Cold-start threads produce null for every `<think>` block and the
   conditional splice skips them entirely; a fresh thread's first turn
-  ships with no priming chain at all.
+  ships with no priming chain at all (or with the fallback pulse when
+  intuition is enabled and its pipeline outruns the deadline).
 
 The invariant: a priming failure degrades to "less context this turn,"
 never to a broken or delayed turn.

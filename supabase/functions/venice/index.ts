@@ -1163,6 +1163,7 @@ async function handleStreamFresh(
     bodyTemplate: body.body as Record<string, unknown>,
     adminClient: ctx.admin,
     priming: body.priming,
+    edgeWaitUntil,
   });
   edgeWaitUntil(promise);
 

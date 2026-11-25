@@ -1,10 +1,12 @@
 # Intuition
 
 A subconscious layer that runs alongside the main conversation: a
-perception agent reads the transcript, five drive agents react in
-parallel, and a synthesis agent collapses the reactions into a
-single first-person internal monologue that gets injected ahead of
-the next completion as `<think>`-tagged content.
+perception call reads the transcript, one drive call produces all
+five reactions as a single JSON object, and a synthesis call
+collapses the reactions into a single first-person internal monologue
+that gets injected ahead of the next completion as `<think>`-tagged
+content. Three sequential non-streaming model calls total, all on
+the same dense non-reasoning id (`mistral-small-3-2-24b-instruct`).
 
 > **Where it runs:** the pipeline runs server-side, as the priming
 > stage of `getStreamingResponse`
@@ -21,7 +23,7 @@ Adapted from fnord's
 [`lib/ai/agent/intuition.ex`](https://github.com/sysread/fnord/blob/main/lib/ai/agent/intuition.ex);
 nak retunes the drives for a personal-assistant register (vs.
 fnord's coding focus) and adds caching + trigger-based scheduling
-so the seven model calls don't run every turn.
+so the three model calls don't run every turn.
 
 ## Role in the app
 
@@ -80,6 +82,20 @@ cache; the cost is ~3 fast-model roundtrips of latency on turn
 1, paid in exchange for the feature reliably landing on every
 thread by the first response.
 
+**The pregame deadline.** The pipeline (like context recall) is
+raced against `PRIME_PIPELINE_TIMEOUT_MS` (5s) per pipeline - if it
+cannot deliver inside that window, the turn proceeds instead of
+waiting: the turn injects the fresh cache when one is wall-clock
+fresh, else a content-free **fallback pulse** (blank drives,
+synthesis "i need to focus on clear writing and what i know about
+the user." - the register the synthesis model itself produces).
+The pulse is this-turn-only: never persisted, never published. The
+detached pipeline keeps running and lands its real payload for the
+NEXT turn through a waitUntil-registered, round-guarded late
+persist (a turn N late write never regresses turn N+1's fresher
+cache). The `priming timeout` line in the drawer (source:
+intuition / context-recall) marks when the bound fired.
+
 ## Files
 
 - `supabase/functions/venice/priming/intuition-prompts.ts` - the
@@ -109,9 +125,11 @@ thread by the first response.
   `countUserRounds` (the round-id counter). Read by the realtime
   decoder and the diagnostics modal.
 - `supabase/functions/venice/priming/intuition.ts` -
-  `runIntuitionPipeline`, the pipeline body. The feature gate (no
-  model id = off) and the per-thread orchestration live in
-  `runServerPriming`; this module runs the seven-call pipeline and
+  `runIntuitionPipeline`, the pipeline body, plus the exported
+  `buildTranscript` (role stripping + the
+  `PERCEPTION_TRANSCRIPT_MAX_CHARS` window valve). The feature gate
+  (no model id = off) and the per-thread orchestration live in
+  `runServerPriming`; this module runs the three-call pipeline and
   returns a fresh payload. Each stage hits Venice's non-streaming
   completion endpoint and reads the single text response, the same
   pattern the samskara and summary agents use. Per-drive failures
@@ -301,9 +319,11 @@ demand.
   one-shot completion endpoint (`veniceComplete`) and reads the
   single text response.
   The user visually sees the latency as a longer pause before
-  the conscious response starts streaming - 7 calls on the fast
-  tier collapse to ~3 sequential roundtrips because the 5
-  drives run in parallel.
+  the conscious response starts streaming - 3 sequential
+  roundtrips. The pregame deadline (5s per pipeline, see the
+  "The pregame deadline" note above) bounds the pause; a
+  timed-out run degrades to the cached payload or the fallback
+  pulse and lands its real read next turn.
 - **Refresh failures leave the prior cache in place.**
   Perception or synthesis failure returns null from the
   pipeline; we deliberately do NOT clear the cache on

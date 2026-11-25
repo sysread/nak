@@ -1,20 +1,23 @@
 // The intuition turn-entry priming pipeline - the canonical
 // implementation, run inside the venice edge function (extracted from the
-// browser during the priming relocation). Three stages:
+// browser during the priming relocation). Three stages, all on the same
+// dense non-reasoning model (mistral-small-3-2-24b-instruct):
 //
-//   1. Perception - one call on the perception model (deepseek, 1M
-//      window). Reads the transcript, classifies the prompt, and
-//      produces an objective-observer summary.
-//   2. Drive reactions - one structured-JSON call on the drive/synthesis
-//      model (mistral). Produces all five drive reactions in a single
-//      JSON object with one key per drive. Formerly five parallel calls;
-//      collapsed to one to cut the drive stage from max(5 latencies) to
-//      1. The context-pollution trade (later keys conditioned on earlier
-//      ones within the same generation) is mitigated by prompt-level
-//      independence instruction; see DRIVES_COLLAPSED_PROMPT.
-//   3. Synthesis - one call on the drive/synthesis model. Aggregates
-//      the drive reactions into a single internal monologue that primes
-//      the conscious agent's response.
+//   1. Perception - one call over the transcript (head-trimmed to
+//      PERCEPTION_TRANSCRIPT_MAX_CHARS as a window safety valve; the
+//      tail is kept because recent turns carry the signal). Reads the
+//      conversation, classifies the prompt, and produces an
+//      objective-observer summary.
+//   2. Drive reactions - one structured-JSON call. Produces all five
+//      drive reactions in a single JSON object with one key per drive.
+//      Formerly five parallel calls; collapsed to one to cut the drive
+//      stage from max(5 latencies) to 1. The context-pollution trade
+//      (later keys conditioned on earlier ones within the same
+//      generation) is mitigated by prompt-level independence
+//      instruction; see DRIVES_COLLAPSED_PROMPT.
+//   3. Synthesis - one call. Aggregates the drive reactions into a
+//      single internal monologue that primes the conscious agent's
+//      response.
 //
 // Total calls: 3 (1 + 1 + 1). The pipeline is non-streaming - each
 // stage hits Venice's one-shot completion endpoint and reads the single
@@ -62,15 +65,22 @@ const MAX_TOKENS = 2048;
  * Drive a single non-streaming Venice completion: a system + user pair,
  * the body text trimmed, reasoning content ignored.
  *
- * disable_thinking stays on the body for whichever id the caller
- * passes. This function is used only for the perception stage, which
- * rides deepseek-v4-flash-0731-fast (reasoning-capable, high default
- * effort - the flag is load-bearing, pinning the thinking pass off so
- * it does not eat the MAX_TOKENS answer budget or add latency on the
- * pre-turn critical path). The drive and synthesis stages call
- * veniceComplete directly. retryRateLimit is on because this is a server-side background
- * call with no browser rate-limit loop behind it - a single "model
- * overloaded" 429 would otherwise fail the sub-call.
+ * disable_thinking rides on every call. The dense mistral id cannot
+ * reason, so the flag is accepted-but-moot there - it stays on the body
+ * so a future repoint to a reasoning-capable id cannot silently start
+ * paying for a thinking pass on the pre-turn critical path.
+ *
+ * Retry semantics: the base transient-5xx schedule [500, 1500, 4000]
+ * (complete.ts) applies unconditionally to every call;
+ * retryRateLimit additionally adds 429s to the retryable set, with the
+ * Retry-After wait floored at the schedule base and capped at 5s. The
+ * flag is on because this is a server-side background call with no
+ * browser rate-limit loop behind it - a single "model overloaded" 429
+ * would otherwise fail the sub-call outright. The pregame's own 5s
+ * deadline bounds what any of this can add to the user-visible wait;
+ * the retrying call's durable value is that the DETACHED late-persist
+ * path (see priming.ts) survives overload instead of dying on the
+ * first 429.
  */
 async function callOnce(
   apiKey: string,
@@ -99,12 +109,24 @@ async function callOnce(
 }
 
 /**
+ * Window safety valve for the perception stage's transcript read. The
+ * 256k-token mistral window accepts roughly a million chars, so this
+ * cap sits well under it with headroom for the prompt + output; on any
+ * realistic thread the trim never fires, and a monster thread degrades
+ * to losing its OLDEST context instead of failing the stage with a
+ * 400. The tail is the part kept - recent turns carry the strongest
+ * signal for a gut read.
+ */
+export const PERCEPTION_TRANSCRIPT_MAX_CHARS = 900_000;
+
+/**
  * Build the perception input - the conversation transcript the
  * objective-observer reads. System and tool messages are stripped
  * (framing and internal plumbing, not conversation); user/assistant
- * turns render as a plain "<role> said: <content>" sequence.
+ * turns render as a plain "<role> said: <content>" sequence, trimmed
+ * from the head to the window safety valve above.
  */
-function buildTranscript(
+export function buildTranscript(
   history: ReadonlyArray<{ role: string; content?: string | null }>,
 ): string {
   const lines: string[] = [];
@@ -114,7 +136,10 @@ function buildTranscript(
     if (text.length === 0) continue;
     lines.push(`${m.role} said: ${text}`);
   }
-  return lines.join('\n\n');
+  const joined = lines.join('\n\n');
+  return joined.length > PERCEPTION_TRANSCRIPT_MAX_CHARS
+    ? joined.slice(joined.length - PERCEPTION_TRANSCRIPT_MAX_CHARS)
+    : joined;
 }
 
 /**
@@ -144,10 +169,11 @@ export async function runIntuitionPipeline(opts: {
   threadId: string;
   modelId: string;
   /**
-   * Model id for the perception stage only. The perception call reads
-   * the entire untrimmed transcript and may need a larger context
-   * window than the drive/synthesis calls (whose inputs are short).
-   * Falls back to `modelId` when absent.
+   * Model id for the perception stage only - the one stage that reads
+   * the transcript. Same dense id as `modelId` today; kept separate so
+   * the perception read can be repointed to a bigger-window id without
+   * touching the small-input stages. Falls back to `modelId` when
+   * absent.
    */
   perceptionModelId?: string;
   history: Array<{ role: string; content?: string | null }>;

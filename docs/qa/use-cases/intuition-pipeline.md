@@ -12,7 +12,7 @@ feature works end to end:
   unconditionally, then a same-round debounce, then a mood-shift
   check (valence band index OR confidence column changed), then the
   staleness fuse. The fuse has two arms, either of which fires
-  `'stale'`: `STALE_FUSE_ROUNDS` (8) user-rounds, OR `STALE_FUSE_MS`
+  `'stale'`: `STALE_FUSE_ROUNDS` (12) user-rounds, OR `STALE_FUSE_MS`
   (1h) wall-clock since `computed_at_at` (the resume-after-a-pause
   case the round counter misses). Pre-round is the only live trigger;
   the `'title'` member of `IntuitionTrigger` is legacy-only (the
@@ -37,12 +37,15 @@ feature works end to end:
   message is never persisted to `messages` - it is rebuilt from the
   cache every turn.
 
-The seven-model-call pipeline itself (perception + 5 drives +
+The three-model-call pipeline itself (perception + drives +
 synthesis) runs SERVER-side, as the priming stage of
 `getStreamingResponse` (`runIntuitionPipeline` in
 `supabase/functions/venice/priming/intuition.ts`), so a live pipeline
 run needs Venice credentials and is the **[hosted]** tail below. The
-samskara cases are the closest siblings
+pipeline is also raced against `PRIME_PIPELINE_TIMEOUT_MS` (5s) per
+turn: a run that cannot finish inside the window degrades to the
+fresh cache or the content-free fallback pulse, and lands its real
+payload next turn. The samskara cases are the closest siblings
 ([samskara-formation](./samskara-formation.md),
 [samskara-decay](./samskara-decay.md)): a subconscious layer
 exercised deterministically by forging its cache via SQL.
